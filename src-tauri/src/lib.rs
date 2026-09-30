@@ -23,6 +23,21 @@ struct OwnedRuntime {
 
 impl Drop for OwnedRuntime {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if Path::new(&self.binary)
+            .extension()
+            .is_some_and(|extension| {
+                let extension = extension.to_string_lossy();
+                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+            })
+            && self.child.try_wait().ok().flatten().is_none()
+        {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -33,7 +48,7 @@ struct RuntimeManager(Mutex<Option<OwnedRuntime>>);
 
 fn candidate_paths() -> Vec<PathBuf> {
     let names: &[&str] = if cfg!(windows) {
-        &["opencode.exe"]
+        &["opencode.exe", "opencode.cmd", "opencode.bat"]
     } else {
         &["opencode"]
     };
@@ -53,6 +68,9 @@ fn candidate_paths() -> Vec<PathBuf> {
     }
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         directories.push(PathBuf::from(local).join("Programs/opencode"));
+    }
+    if let Some(roaming) = std::env::var_os("APPDATA") {
+        directories.push(PathBuf::from(roaming).join("npm"));
     }
     directories.extend([
         PathBuf::from("/opt/homebrew/bin"),
@@ -128,15 +146,18 @@ fn resolve_binary(binary_path: Option<String>) -> Result<OsString, String> {
 fn start_runtime(
     manager: State<'_, RuntimeManager>,
     binary_path: Option<String>,
+    restart: bool,
 ) -> Result<RuntimeInfo, String> {
     let mut runtime = manager.0.lock().map_err(|error| error.to_string())?;
     let binary = resolve_binary(binary_path)?;
     if let Some(existing) = runtime.as_mut() {
-        if existing.binary == binary && existing.child.try_wait().ok().flatten().is_none() {
+        if !restart
+            && existing.binary == binary
+            && existing.child.try_wait().ok().flatten().is_none()
+        {
             return Ok(existing.info.clone());
         }
     }
-    *runtime = None;
 
     let mut child = Command::new(&binary)
         .args([
@@ -211,18 +232,12 @@ fn start_runtime(
     Ok(info)
 }
 
-#[tauri::command]
-fn stop_runtime(manager: State<'_, RuntimeManager>) -> Result<(), String> {
-    *manager.0.lock().map_err(|error| error.to_string())? = None;
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(RuntimeManager::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![start_runtime, stop_runtime])
+        .invoke_handler(tauri::generate_handler![start_runtime])
         .run(tauri::generate_context!())
         .expect("failed to run SAI Harness");
 }

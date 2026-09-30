@@ -16,6 +16,7 @@
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
   let directory = $state(localStorage.getItem('sai-directory') ?? '');
   let binaryPath = $state(localStorage.getItem('sai-opencode-bin') ?? '');
+  let appliedBinaryPath = binaryPath;
   let activeBinary = $state('');
   let runtimeSettingsOpen = $state(false);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
@@ -82,7 +83,27 @@
     await recoverRuntime();
   }
 
-  async function recoverRuntime(restart = false) {
+  async function activateRuntime(info: RuntimeInfo) {
+    const nextClient = connect(info);
+    const server = await nextClient.server.info({ signal: AbortSignal.timeout(5000) });
+    if (!server.version.startsWith('2.'))
+      throw new Error('OpenCode v2 is required. Choose a compatible binary in settings.');
+    if (disposed) return;
+    eventController?.abort();
+    client = nextClient;
+    activeBinary = info.binaryPath;
+    runtimeState = 'connected';
+    runtimeError = '';
+    hasConnected = true;
+    await resync().catch((cause) => {
+      error = describe(cause);
+    });
+    eventController = new AbortController();
+    connecting = false;
+    void watchEvents(nextClient, eventController.signal);
+  }
+
+  async function recoverRuntime() {
     if (connecting || disposed) return;
     connecting = true;
     eventController?.abort();
@@ -90,25 +111,11 @@
     runtimeState = 'starting';
     runtimeError = '';
     try {
-      if (restart) await invoke('stop_runtime');
       const info = await invoke<RuntimeInfo>('start_runtime', {
-        binaryPath: binaryPath.trim() || null,
+        binaryPath: appliedBinaryPath || null,
+        restart: false,
       });
-      const nextClient = connect(info);
-      const server = await nextClient.server.info({ signal: AbortSignal.timeout(5000) });
-      if (!server.version.startsWith('2.'))
-        throw new Error('OpenCode v2 is required. Choose a compatible binary and retry.');
-      if (disposed) return;
-      client = nextClient;
-      activeBinary = info.binaryPath;
-      runtimeState = 'connected';
-      hasConnected = true;
-      await resync().catch((cause) => {
-        error = describe(cause);
-      });
-      eventController = new AbortController();
-      connecting = false;
-      void watchEvents(nextClient, eventController.signal);
+      await activateRuntime(info);
     } catch (cause) {
       if (disposed) return;
       client = null;
@@ -122,8 +129,26 @@
   }
 
   async function retryRuntime() {
-    localStorage.setItem('sai-opencode-bin', binaryPath.trim());
-    await recoverRuntime(true);
+    if (connecting || disposed) return;
+    connecting = true;
+    clearTimeout(recoveryTimer);
+    const candidate = binaryPath.trim();
+    try {
+      const info = await invoke<RuntimeInfo>('start_runtime', {
+        binaryPath: candidate || null,
+        restart: true,
+      });
+      await activateRuntime(info);
+      appliedBinaryPath = candidate;
+      localStorage.setItem('sai-opencode-bin', candidate);
+    } catch (cause) {
+      runtimeError = describe(cause);
+      runtimeSettingsOpen = true;
+      if (runtimeState !== 'connected' && hasConnected)
+        recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
+    } finally {
+      connecting = false;
+    }
   }
 
   async function checkRuntime() {
