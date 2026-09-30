@@ -6,6 +6,7 @@ export type { SessionInfo, SessionMessageInfo } from '@opencode/client';
 export interface RuntimeInfo {
   url: string;
   password: string;
+  binaryPath: string;
 }
 
 export function connect(info: RuntimeInfo): OpenCodeClient {

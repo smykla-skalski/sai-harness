@@ -16,6 +16,8 @@
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
   let directory = $state(localStorage.getItem('sai-directory') ?? '');
   let binaryPath = $state(localStorage.getItem('sai-opencode-bin') ?? '');
+  let activeBinary = $state('');
+  let runtimeSettingsOpen = $state(false);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
   let runtimeError = $state('');
   let agentReady = $state(false);
@@ -98,6 +100,7 @@
         throw new Error('OpenCode v2 is required. Choose a compatible binary and retry.');
       if (disposed) return;
       client = nextClient;
+      activeBinary = info.binaryPath;
       runtimeState = 'connected';
       hasConnected = true;
       await resync().catch((cause) => {
@@ -111,6 +114,7 @@
       client = null;
       runtimeState = 'error';
       runtimeError = describe(cause);
+      runtimeSettingsOpen = true;
       if (hasConnected) recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
     } finally {
       connecting = false;
@@ -408,6 +412,23 @@
         ><span class="slash">/</span><strong>{currentSession?.title ?? 'New plan'}</strong>
       </div>
       <div class="topbar-actions">
+        <details class="runtime-settings" bind:open={runtimeSettingsOpen}>
+          <summary>OpenCode settings</summary>
+          <div class="runtime-settings-panel">
+            {#if runtimeError}<p class="runtime-diagnostic" role="alert">{runtimeError}</p>{/if}
+            {#if activeBinary}<p class="runtime-binary" title={activeBinary}>
+                Detected: {activeBinary}
+              </p>{/if}
+            <label for="opencode-bin">Binary path</label>
+            <input
+              id="opencode-bin"
+              type="text"
+              bind:value={binaryPath}
+              placeholder="Automatic detection"
+            />
+            <Button size="sm" onclick={retryRuntime}>Save and reconnect</Button>
+          </div>
+        </details>
         <Badge tone={agentReady ? 'success' : 'neutral'}
           >{agentReady ? 'Architect' : 'No agent'}</Badge
         ><Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
@@ -459,17 +480,7 @@
           <div bind:this={chatEnd}></div>
         </div>
         <div class="composer-wrap">
-          {#if runtimeError}<div class="notice error" role="alert">
-              <p>{runtimeError}</p>
-              <label for="opencode-bin">OpenCode binary path (optional)</label>
-              <input
-                id="opencode-bin"
-                type="text"
-                bind:value={binaryPath}
-                placeholder="/absolute/path/to/opencode"
-              />
-              <Button size="sm" onclick={retryRuntime}>Retry OpenCode</Button>
-            </div>{/if}{#if error}<p class="notice error" role="alert">{error}</p>{/if}
+          {#if error}<p class="notice error" role="alert">{error}</p>{/if}
           {#if pendingPermissions}<p class="notice" role="status">
               {pendingPermissions} permission request{pendingPermissions === 1 ? '' : 's'} waiting in
               OpenCode
