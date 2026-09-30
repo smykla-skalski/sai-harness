@@ -529,6 +529,77 @@ button:disabled {
   color: var(--sui-danger);
   background: var(--sui-danger-subtle);
 }
+.prompt-panel {
+  max-height: min(48vh, 480px);
+  overflow-y: auto;
+  margin-bottom: 12px;
+  padding-right: 6px;
+}
+.prompt-panel h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.prompt-card {
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 8px;
+  background: var(--sui-surface);
+  font-size: 12px;
+}
+.prompt-card h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.prompt-card ul {
+  margin: 8px 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+.prompt-card > label,
+.prompt-field,
+.prompt-field > small {
+  display: block;
+  margin: 8px 0;
+}
+.prompt-card textarea,
+.prompt-card select,
+.prompt-card input:not([type='checkbox']) {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 7px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 6px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+}
+.prompt-option {
+  display: block;
+  margin: 4px 0;
+}
+.prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 10px 0;
+}
+.prompt-actions button {
+  padding: 6px 9px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 6px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+}
+.prompt-warning {
+  margin: 8px 0;
+  color: var(--sui-muted);
+}
+.prompt-warning code {
+  display: block;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 1050px) {
   .sidebar {
     width: 195px;

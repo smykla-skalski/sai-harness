@@ -4,8 +4,10 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
   import { isSessionNotFoundError } from '@opencode/client';
+  import type { FormInfo, PermissionRequest } from '@opencode/client';
   import { Badge, Button } from '@smykla-skalski/sui';
   import PlanPanel from './PlanPanel.svelte';
+  import PromptPanel from './PromptPanel.svelte';
   import {
     connect,
     type OpenCodeClient,
@@ -55,7 +57,8 @@
   let connecting = $state(false);
   let disposed = false;
   let hasConnected = false;
-  let pendingPermissions = $state(0);
+  let pendingPermissions = $state<PermissionRequest[]>([]);
+  let pendingForms = $state<FormInfo[]>([]);
   let selection = 0;
   let sessionRefresh = 0;
 
@@ -219,14 +222,8 @@
     } else if (initial) {
       await refreshSession(initial);
     }
-    const [permissions, active] = await Promise.all([
-      client.permission.request.list({ location: { directory: path } }),
-      client.session.active(),
-    ]);
+    const active = await client.session.active();
     if (path !== directory) return;
-    pendingPermissions = permissions.data.filter(
-      (request) => request.sessionID === sessionID,
-    ).length;
     running = !!sessionID && active[sessionID]?.type === 'running';
   }
 
@@ -252,7 +249,8 @@
     sessionPageHistory = [];
     messages = [];
     running = false;
-    pendingPermissions = 0;
+    pendingPermissions = [];
+    pendingForms = [];
     snapshot = { plan: null, questions: null };
     if (!(await refreshSetup(path)) || current !== selection) return;
     if (!agentReady) return;
@@ -430,7 +428,8 @@
     messages = [];
     snapshot = { plan: null, questions: null };
     running = false;
-    pendingPermissions = 0;
+    pendingPermissions = [];
+    pendingForms = [];
     localStorage.removeItem(`sai-session:${directory}`);
   }
 
@@ -440,7 +439,8 @@
     selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
     messages = [];
     running = activeSessionIDs.includes(id);
-    pendingPermissions = 0;
+    pendingPermissions = [];
+    pendingForms = [];
     snapshot = { plan: null, questions: null };
     error = '';
     localStorage.setItem(`sai-session:${directory}`, id);
@@ -546,15 +546,17 @@
   async function refreshSession(id = sessionID, current = selection) {
     if (!client || !id || !directory) return;
     try {
-      const [history, plan, permissions] = await Promise.all([
+      const [history, plan, permissions, forms] = await Promise.all([
         client.message.list({ sessionID: id, limit: 100, order: 'asc' }),
         getPlan(client, directory, id),
         client.permission.list({ sessionID: id }),
+        client.session.form.list({ sessionID: id }),
       ]);
       if (current !== selection || id !== sessionID) return;
       messages = history.data;
       snapshot = plan;
-      pendingPermissions = permissions.length;
+      pendingPermissions = permissions;
+      pendingForms = forms;
       await tick();
       chatEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
     } catch (cause) {
@@ -608,7 +610,13 @@
             running = false;
           scheduleRefresh();
         }
-        if (event.type === 'permission.asked' || event.type === 'permission.replied')
+        if (
+          event.type === 'permission.asked' ||
+          event.type === 'permission.replied' ||
+          event.type === 'form.created' ||
+          event.type === 'form.replied' ||
+          event.type === 'form.cancelled'
+        )
           scheduleRefresh();
       }
     } catch {
@@ -901,10 +909,13 @@
         </div>
         <div class="composer-wrap">
           {#if error}<p class="notice error" role="alert">{error}</p>{/if}
-          {#if pendingPermissions}<p class="notice" role="status">
-              {pendingPermissions} permission request{pendingPermissions === 1 ? '' : 's'} waiting in
-              OpenCode
-            </p>{/if}
+          <PromptPanel
+            {pendingPermissions}
+            {pendingForms}
+            client={connecting ? null : client}
+            {sessionID}
+            onchanged={() => refreshSession()}
+          />
           <div class="composer">
             <textarea
               bind:value={draft}
