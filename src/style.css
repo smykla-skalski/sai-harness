@@ -362,6 +362,23 @@ button:disabled {
   color: var(--sui-danger);
   background: var(--sui-danger-subtle);
 }
+.notice.error p {
+  margin: 0 0 8px;
+}
+.notice.error label {
+  display: block;
+  margin-bottom: 5px;
+}
+.notice.error input {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--sui-border);
+  border-radius: 6px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+}
 @media (max-width: 1050px) {
   .sidebar {
     width: 195px;

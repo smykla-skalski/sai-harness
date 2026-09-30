@@ -15,6 +15,7 @@
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
   let directory = $state(localStorage.getItem('sai-directory') ?? '');
+  let binaryPath = $state(localStorage.getItem('sai-opencode-bin') ?? '');
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
   let runtimeError = $state('');
   let agentReady = $state(false);
@@ -30,13 +31,26 @@
   let client = $state<OpenCodeClient | null>(null);
   let eventController: AbortController | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  let healthTimer: ReturnType<typeof setInterval> | undefined;
+  let connecting = false;
+  let disposed = false;
+  let hasConnected = false;
+  let pendingPermissions = $state(0);
   let selection = 0;
 
   let currentSession = $derived(sessions.find((session) => session.id === sessionID));
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
   );
-  let canSend = $derived(!!client && !!directory && agentReady && !!draft.trim() && !sending);
+  let canSend = $derived(
+    runtimeState === 'connected' &&
+      !!client &&
+      !!directory &&
+      agentReady &&
+      !!draft.trim() &&
+      !sending,
+  );
 
   function setTheme(value: boolean) {
     dark = value;
@@ -47,9 +61,13 @@
   onMount(() => {
     setTheme(dark);
     void initialize();
+    healthTimer = setInterval(() => void checkRuntime(), 5000);
     return () => {
+      disposed = true;
       eventController?.abort();
       clearTimeout(refreshTimer);
+      clearTimeout(recoveryTimer);
+      clearInterval(healthTimer);
     };
   });
 
@@ -59,17 +77,87 @@
       runtimeError = 'Open the desktop app with mise run dev to start OpenCode.';
       return;
     }
+    await recoverRuntime();
+  }
+
+  async function recoverRuntime(restart = false) {
+    if (connecting || disposed) return;
+    connecting = true;
+    eventController?.abort();
+    clearTimeout(recoveryTimer);
+    runtimeState = 'starting';
+    runtimeError = '';
     try {
-      client = connect(await invoke<RuntimeInfo>('start_runtime'));
-      await client.server.info();
+      if (restart) await invoke('stop_runtime');
+      const info = await invoke<RuntimeInfo>('start_runtime', {
+        binaryPath: binaryPath.trim() || null,
+      });
+      const nextClient = connect(info);
+      const server = await nextClient.server.info({ signal: AbortSignal.timeout(5000) });
+      if (!server.version.startsWith('2.'))
+        throw new Error('OpenCode v2 is required. Choose a compatible binary and retry.');
+      if (disposed) return;
+      client = nextClient;
       runtimeState = 'connected';
+      hasConnected = true;
+      await resync().catch((cause) => {
+        error = describe(cause);
+      });
       eventController = new AbortController();
-      void watchEvents(eventController.signal);
-      if (directory) await loadProject(directory);
+      connecting = false;
+      void watchEvents(nextClient, eventController.signal);
     } catch (cause) {
+      if (disposed) return;
+      client = null;
       runtimeState = 'error';
       runtimeError = describe(cause);
+      if (hasConnected) recoveryTimer = setTimeout(() => void recoverRuntime(true), 5000);
+    } finally {
+      connecting = false;
     }
+  }
+
+  async function retryRuntime() {
+    localStorage.setItem('sai-opencode-bin', binaryPath.trim());
+    await recoverRuntime(true);
+  }
+
+  async function checkRuntime() {
+    if (connecting || runtimeState !== 'connected' || !client) return;
+    try {
+      await client.server.info({ signal: AbortSignal.timeout(3000) });
+    } catch {
+      await recoverRuntime(true);
+    }
+  }
+
+  async function resync() {
+    if (!client || !directory) return;
+    const path = directory;
+    const agents = await client.agent.list({ location: { directory: path } });
+    if (path !== directory) return;
+    agentReady = agents.data.some((agent) => agent.id === 'architect');
+    await refreshSessions();
+    if (sessionID && !sessions.some((session) => session.id === sessionID)) {
+      sessionID = null;
+    }
+    const saved = localStorage.getItem(`sai-session:${path}`);
+    const initial =
+      sessionID ?? sessions.find((session) => session.id === saved)?.id ?? sessions[0]?.id;
+    if (initial && initial !== sessionID) {
+      await selectSession(initial);
+    } else if (initial) {
+      await refreshSession(initial);
+    }
+    const [permissions, active] = await Promise.all([
+      client.permission.request.list({ location: { directory: path } }),
+      client.session.active(),
+    ]);
+    if (path !== directory) return;
+    pendingPermissions = permissions.data.filter(
+      (request) => request.sessionID === sessionID,
+    ).length;
+    running = !!sessionID && active[sessionID]?.type === 'running';
   }
 
   async function chooseProject() {
@@ -86,6 +174,7 @@
     sessionID = null;
     messages = [];
     running = false;
+    pendingPermissions = 0;
     snapshot = { plan: null, questions: null };
     agentReady = false;
     try {
@@ -123,6 +212,7 @@
     sessionID = id;
     messages = [];
     running = false;
+    pendingPermissions = 0;
     snapshot = { plan: null, questions: null };
     error = '';
     localStorage.setItem(`sai-session:${directory}`, id);
@@ -134,6 +224,7 @@
     sessionID = null;
     messages = [];
     running = false;
+    pendingPermissions = 0;
     snapshot = { plan: null, questions: null };
     draft = '';
     error = '';
@@ -143,13 +234,15 @@
   async function refreshSession(id = sessionID, current = selection) {
     if (!client || !id || !directory) return;
     try {
-      const [history, plan] = await Promise.all([
+      const [history, plan, permissions] = await Promise.all([
         client.message.list({ sessionID: id, limit: 100, order: 'asc' }),
         getPlan(client, directory, id),
+        client.permission.list({ sessionID: id }),
       ]);
       if (current !== selection || id !== sessionID) return;
       messages = history.data;
       snapshot = plan;
+      pendingPermissions = permissions.length;
       await tick();
       chatEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
     } catch (cause) {
@@ -162,17 +255,14 @@
     refreshTimer = setTimeout(() => void refreshSession(), 120);
   }
 
-  async function watchEvents(signal: AbortSignal) {
-    if (!client) return;
+  async function watchEvents(source: OpenCodeClient, signal: AbortSignal) {
     try {
-      for await (const event of client.event.subscribe({ signal })) {
+      for await (const event of source.event.subscribe({ signal })) {
         if (signal.aborted) return;
         if (event.type === 'server.connected') {
-          if (directory)
-            void refreshSessions().catch((cause) => {
-              error = describe(cause);
-            });
-          scheduleRefresh();
+          void resync().catch((cause) => {
+            error = describe(cause);
+          });
         }
         if (event.type === 'session.created' || event.type === 'session.renamed')
           void refreshSessions().catch((cause) => {
@@ -195,11 +285,13 @@
             running = false;
           scheduleRefresh();
         }
+        if (event.type === 'permission.asked' || event.type === 'permission.replied')
+          scheduleRefresh();
       }
-    } catch (cause) {
-      if (!signal.aborted) error = `Live updates disconnected: ${describe(cause)}`;
+    } catch {
+      // A new subscription reloads missed state after the live stream fails.
     }
-    if (!signal.aborted) setTimeout(() => void watchEvents(signal), 1500);
+    if (!signal.aborted) await recoverRuntime();
   }
 
   async function send() {
@@ -364,9 +456,21 @@
           <div bind:this={chatEnd}></div>
         </div>
         <div class="composer-wrap">
-          {#if runtimeError}<p class="notice error" role="alert">
-              {runtimeError}
-            </p>{/if}{#if error}<p class="notice error" role="alert">{error}</p>{/if}
+          {#if runtimeError}<div class="notice error" role="alert">
+              <p>{runtimeError}</p>
+              <label for="opencode-bin">OpenCode binary path (optional)</label>
+              <input
+                id="opencode-bin"
+                type="text"
+                bind:value={binaryPath}
+                placeholder="/absolute/path/to/opencode"
+              />
+              <Button size="sm" onclick={retryRuntime}>Retry OpenCode</Button>
+            </div>{/if}{#if error}<p class="notice error" role="alert">{error}</p>{/if}
+          {#if pendingPermissions}<p class="notice" role="status">
+              {pendingPermissions} permission request{pendingPermissions === 1 ? '' : 's'} waiting in
+              OpenCode
+            </p>{/if}
           <div class="composer">
             <textarea
               bind:value={draft}
