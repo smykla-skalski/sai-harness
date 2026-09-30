@@ -8,7 +8,7 @@
   --sui-shadow: none;
   --shell-sidebar: #eef2f0;
   --shell-divider: #e3e8e6;
-  --shell-muted: #66756f;
+  --shell-muted: #607069;
   --shell-selected: #e7f5f2;
   --shell-selected-ink: #0f625b;
 }
@@ -35,6 +35,10 @@ button {
 }
 button:disabled {
   cursor: not-allowed;
+}
+:where(button, input, textarea, select, summary, a):focus-visible {
+  outline: 3px solid var(--sui-primary);
+  outline-offset: 2px;
 }
 .app-shell {
   display: flex;
@@ -307,6 +311,9 @@ button:disabled {
   flex: 0 0 62px;
   padding: 0 22px;
   border-bottom: 1px solid var(--shell-divider);
+}
+.mobile-switcher {
+  display: none;
 }
 .breadcrumb {
   display: flex;
@@ -759,44 +766,94 @@ button:disabled {
     grid-template-columns: minmax(300px, 1fr) minmax(320px, 380px);
   }
 }
-@media (max-width: 800px) {
+@media (max-width: 850px) {
+  .app-shell {
+    display: block;
+    position: relative;
+  }
+  .main-area {
+    height: 100%;
+  }
   .sidebar {
-    width: 58px;
-    flex-basis: 58px;
-    padding-left: 6px;
-    padding-right: 6px;
-  }
-  .brand {
-    justify-content: center;
-    padding-left: 0;
-    padding-right: 0;
-  }
-  .brand span:last-child,
-  .project-switcher,
-  .session-heading,
-  .sidebar nav,
-  .sidebar-footer {
     display: none;
+    position: absolute;
+    top: 80px;
+    bottom: 0;
+    z-index: 2;
+    width: 100%;
+    padding: 18px 12px;
+    border-right: 0;
+  }
+  .app-shell[data-mobile-view='sessions'] .sidebar {
+    display: flex;
+  }
+  .sidebar nav {
+    min-height: 0;
+  }
+  .topbar {
+    height: 80px;
+    flex: 0 0 80px;
+    flex-wrap: wrap;
+    align-content: center;
+    gap: 4px 12px;
+  }
+  .breadcrumb {
+    flex: 1;
+    overflow: hidden;
+  }
+  .mobile-switcher {
+    display: flex;
+    gap: 4px;
+    order: 3;
+    width: 100%;
+  }
+  .mobile-switcher button {
+    flex: 1;
+    padding: 3px 6px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--sui-muted);
+    background: transparent;
+    font: inherit;
+    font-size: 12px;
+  }
+  .mobile-switcher button[aria-pressed='true'] {
+    color: var(--shell-selected-ink);
+    background: var(--shell-selected);
+    font-weight: 700;
   }
   .workspace {
-    grid-template-columns: minmax(0, 1fr);
-    overflow: auto;
+    display: block;
+    overflow: hidden;
   }
-  .chat-area {
-    min-height: 65vh;
+  .workspace .chat-area,
+  .workspace .side-area {
+    display: none;
+    height: 100%;
   }
-  .workspace > :last-child:not(.chat-area) {
-    min-height: 500px;
-    border-top: 1px solid var(--shell-divider);
-    border-left: 0;
+  .app-shell[data-mobile-view='chat'] .chat-area,
+  .app-shell[data-mobile-view='details'] .side-area {
+    display: flex;
+  }
+  .app-shell[data-mobile-view='sessions'] .workspace {
+    visibility: hidden;
   }
 }
 @media (max-width: 520px) {
-  .sidebar {
-    display: none;
-  }
   .topbar {
     padding: 0 14px;
+  }
+  .breadcrumb {
+    display: none;
+  }
+  .topbar-actions {
+    gap: 4px;
+    flex: 0 0 100%;
+    max-width: 100%;
+    min-height: 32px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    font-size: 10px;
   }
   .conversation {
     padding: 20px;

@@ -24,6 +24,14 @@
   let feedback = $state<Record<string, string>>({});
   let busyID = $state<string | null>(null);
   let error = $state('');
+  let status = $state('');
+
+  $effect(() => {
+    void sessionID;
+    busyID = null;
+    status = '';
+    error = '';
+  });
 
   $effect(() => {
     for (const form of pendingForms) {
@@ -141,6 +149,7 @@
     const selected = sessionID;
     busyID = request.id;
     error = '';
+    status = 'Sending permission decision…';
     try {
       await source.permission.get({ sessionID: selected, requestID: request.id });
       if (sessionID !== selected) return;
@@ -152,11 +161,18 @@
           ? { message: feedback[request.id].trim() }
           : {}),
       });
+      if (sessionID === selected)
+        status = decision === 'reject' ? 'Permission rejected.' : 'Permission allowed.';
     } catch (cause) {
-      if (!isPermissionNotFoundError(cause)) error = describe(cause);
+      if (sessionID === selected) {
+        status = '';
+        if (!isPermissionNotFoundError(cause)) error = describe(cause);
+      }
     } finally {
-      busyID = null;
-      await onchanged();
+      if (sessionID === selected) {
+        busyID = null;
+        await onchanged();
+      }
     }
   }
 
@@ -166,6 +182,7 @@
     const selected = sessionID;
     busyID = form.id;
     error = '';
+    status = action === 'reply' ? 'Submitting form…' : 'Cancelling form…';
     try {
       const submitted = action === 'reply' ? answer(form) : null;
       const current = await source.session.form.get({ sessionID: selected, formID: form.id });
@@ -177,11 +194,19 @@
           answer: submitted,
         });
       else await source.session.form.cancel({ sessionID: selected, formID: form.id });
+      if (sessionID === selected)
+        status = action === 'reply' ? 'Form submitted.' : 'Form cancelled.';
     } catch (cause) {
-      if (!isFormNotFoundError(cause) && !isFormAlreadySettledError(cause)) error = describe(cause);
+      if (sessionID === selected) {
+        status = '';
+        if (!isFormNotFoundError(cause) && !isFormAlreadySettledError(cause))
+          error = describe(cause);
+      }
     } finally {
-      busyID = null;
-      await onchanged();
+      if (sessionID === selected) {
+        busyID = null;
+        await onchanged();
+      }
     }
   }
 
@@ -190,10 +215,11 @@
   }
 </script>
 
-{#if pendingPermissions.length || pendingForms.length}
+{#if pendingPermissions.length || pendingForms.length || status || error}
   <section class="prompt-panel" aria-label="Pending agent requests">
-    <h2>Agent requests</h2>
+    {#if pendingPermissions.length || pendingForms.length}<h2>Agent requests</h2>{/if}
     {#if error}<p class="notice error" role="alert">{error}</p>{/if}
+    {#if status}<p class="notice" role="status">{status}</p>{/if}
     {#each pendingPermissions as request (request.id)}
       <article class="prompt-card">
         <h3>Allow {request.action}?</h3>

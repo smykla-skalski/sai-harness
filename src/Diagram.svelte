@@ -37,14 +37,14 @@
 
 <div class="diagram" aria-label={title}>
   {#if imageUrl}
-    <img src={imageUrl} alt={title} />
+    <img src={imageUrl} alt={`${title}. Text version follows.`} />
   {:else if error}
     <p>{error}</p>
   {:else}
     <p>Rendering diagram…</p>
   {/if}
   <details class="diagram-source" open={!!error}>
-    <summary>View diagram source</summary>
+    <summary>Read {title} as text</summary>
     <pre>{source}</pre>
   </details>
 </div>

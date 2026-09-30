@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Badge, Button } from '@smykla-skalski/sui';
+  import { tick } from 'svelte';
   import Diagram from './Diagram.svelte';
   import {
     answerQuestions,
@@ -41,6 +42,8 @@
   let confirming = $state(false);
   let pending = $state(false);
   let error = $state('');
+  let reviewStatus = $state('');
+  let panelElement: HTMLElement;
   let currentPlan = '';
   let currentQuestions = '';
   let currentScope = '';
@@ -112,6 +115,7 @@
       editing = {};
       reviewErrors = {};
       confirming = false;
+      reviewStatus = '';
       if (key) loadPlanDraft(key);
     }
   });
@@ -235,6 +239,10 @@
     }
     if (note.length > 4000) errors.note = 'Keep general feedback within 4,000 characters.';
     reviewErrors = errors;
+    if (Object.keys(errors).length)
+      void tick().then(() =>
+        panelElement.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(),
+      );
     return Object.keys(errors).length === 0;
   }
 
@@ -303,7 +311,12 @@
       }
     }
     questionErrors = errors;
-    if (Object.keys(errors).length) return;
+    if (Object.keys(errors).length) {
+      void tick().then(() =>
+        document.getElementById(`question-${Object.keys(errors)[0]}`)?.focus(),
+      );
+      return;
+    }
     pending = true;
     answerStatus = 'sending';
     error = '';
@@ -346,15 +359,19 @@
     const submittedNote = note.trim() || undefined;
     pending = true;
     error = '';
+    reviewStatus = 'Sending review…';
     try {
       const latest = await getPlan(client, path, submitted.sessionID);
       if (currentPlan !== key) return;
       if (latest.plan?.version !== submitted.version || latest.plan.state !== 'review') {
+        reviewStatus = '';
         error = `Plan v${submitted.version} changed. Your review draft is saved; check the latest version.`;
         await onchanged().catch(() => {});
         return;
       }
       await reviewPlan(client, path, submitted, action, draft, submittedNote);
+      if (currentPlan === key)
+        reviewStatus = action === 'execute' ? 'Execution approved.' : 'Changes requested.';
       localStorage.removeItem(planDraftKey(key));
       if (currentPlan === key) {
         decisions = {};
@@ -368,6 +385,7 @@
           error = `Review sent, but refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`;
       }
     } catch (cause) {
+      if (currentPlan === key) reviewStatus = '';
       const message = cause instanceof Error ? cause.message : String(cause);
       if (currentPlan === key) error = message;
       if (message.includes('plan is at v') || message.includes('not awaiting review'))
@@ -378,7 +396,7 @@
   }
 </script>
 
-<aside class="plan-panel" aria-label="Plan review">
+<aside class="plan-panel" aria-label="Plan review" bind:this={panelElement}>
   <div class="panel-heading">
     <div>
       <p class="eyebrow">PLAN WORKSPACE</p>
@@ -400,6 +418,7 @@
   </div>
 
   {#if error}<p class="panel-error" role="alert">{error}</p>{/if}
+  {#if reviewStatus}<p class="question-state" role="status">{reviewStatus}</p>{/if}
   {#if answerStatus === 'sending' && questions}<p class="question-state" role="status">
       Sending answers…
     </p>{/if}
@@ -427,13 +446,17 @@
         Answer every question before sending. Recommendations are suggestions until you select them.
       </p>
       {#each questions.questions as question, index (question.id)}
-        <section class="question-block">
-          <h4><span>{index + 1}.</span> {question.question}</h4>
+        <section class="question-block" role="group" aria-labelledby={`question-${question.id}`}>
+          <h4 id={`question-${question.id}`} tabindex="-1">
+            <span>{index + 1}.</span>
+            {question.question}
+          </h4>
           {#if question.recommended?.length}<p class="question-recommendation">
               Recommended: {recommendation(question)}
             </p>{/if}
           {#if question.kind === 'text'}
             <textarea
+              aria-labelledby={`question-${question.id}`}
               rows="3"
               placeholder="Your answer"
               value={answers[question.id]?.[0] ?? ''}
@@ -658,24 +681,32 @@
             {#if step.status !== 'done' && step.status !== 'skipped'}<div class="decision-buttons">
                 <Button
                   size="sm"
+                  aria-label={`Approve ${step.title}`}
+                  aria-pressed={decisions[step.id]?.verdict === 'approve'}
                   variant={decisions[step.id]?.verdict === 'approve' ? 'primary' : 'secondary'}
                   disabled={pending}
                   onclick={() => setDecision(step.id, 'approve')}>Approve</Button
                 >
                 <Button
                   size="sm"
+                  aria-label={`Revise ${step.title}`}
+                  aria-pressed={decisions[step.id]?.verdict === 'revise'}
                   variant={decisions[step.id]?.verdict === 'revise' ? 'primary' : 'secondary'}
                   disabled={pending}
                   onclick={() => setDecision(step.id, 'revise')}>Revise</Button
                 >
                 <Button
                   size="sm"
+                  aria-label={`Reject ${step.title}`}
+                  aria-pressed={decisions[step.id]?.verdict === 'reject'}
                   variant={decisions[step.id]?.verdict === 'reject' ? 'danger' : 'secondary'}
                   disabled={pending}
                   onclick={() => setDecision(step.id, 'reject')}>Reject</Button
                 >
                 <Button
                   size="sm"
+                  aria-label={`Edit ${step.title}`}
+                  aria-pressed={!!editing[step.id]}
                   variant={editing[step.id] ? 'primary' : 'secondary'}
                   disabled={pending}
                   onclick={() => {
@@ -727,6 +758,7 @@
       {/each}
       {#if plan.state === 'review'}<textarea
           class="review-note"
+          aria-label="General plan feedback"
           rows="2"
           placeholder="General feedback for the architect (optional)"
           maxlength="4000"

@@ -76,15 +76,146 @@
   let historyLoading = $state(false);
   let historyError = $state('');
   let selectedFilePath = $state<string | null>(null);
-  let sideTab = $state<'plan' | 'changes' | 'history'>('plan');
+  type SideTab = 'plan' | 'changes' | 'history';
+  let sideTab = $state<SideTab>('plan');
   let diffRefresh = 0;
   let historyRefresh = 0;
   let draft = $state('');
+  let mobileView = $state<'sessions' | 'chat' | 'details'>('chat');
+  const viewStates = new SvelteMap<
+    string,
+    {
+      draft: string;
+      scrollTop: number;
+      follow: boolean;
+      messageCount: number;
+      anchorID: string | null;
+      anchorOffset: number;
+      sideTab: SideTab;
+      selectedFilePath: string | null;
+      sideScroll: Partial<Record<SideTab, number[]>>;
+    }
+  >();
   let sending = $state(false);
   let switching = $state(false);
   let running = $state(false);
   let error = $state('');
   let chatScroll: HTMLDivElement;
+  let sidebarElement: HTMLElement;
+  let chatArea: HTMLElement;
+  let detailsArea = $state<HTMLElement>();
+
+  async function showMobileView(view: 'sessions' | 'chat' | 'details') {
+    saveViewState();
+    mobileView = view;
+    await tick();
+    if (window.matchMedia('(max-width: 850px)').matches)
+      (view === 'sessions' ? sidebarElement : view === 'details' ? detailsArea : chatArea)?.focus();
+  }
+
+  async function switchSideTab(tab: SideTab) {
+    saveViewState();
+    sideTab = tab;
+    await tick();
+    restoreSideScroll(viewStates.get(viewKey())?.sideScroll[activeSideTab as SideTab]);
+  }
+
+  function restoreSideScroll(positions?: number[]) {
+    const scrollable = detailsArea?.querySelectorAll<HTMLElement>(
+      '.side-view:not(.inactive) :is(.panel-scroll, .diff-files, .patch-scroll, .history-list)',
+    );
+    scrollable?.forEach((element, index) => (element.scrollTop = positions?.[index] ?? 0));
+  }
+
+  function viewKey(path = directory, id = sessionID) {
+    return `${path}\0${id ?? 'new'}`;
+  }
+
+  function saveViewState() {
+    if (!directory) return;
+    const previous = viewStates.get(viewKey());
+    const narrow = window.matchMedia('(max-width: 850px)').matches;
+    const chatVisible = !narrow || mobileView === 'chat';
+    const detailsVisible = !narrow || mobileView === 'details';
+    const anchor = chatVisible
+      ? [...(chatScroll?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])].find(
+          (element) =>
+            element.getBoundingClientRect().bottom > chatScroll.getBoundingClientRect().top,
+        )
+      : null;
+    const scrollable = detailsArea?.querySelectorAll<HTMLElement>(
+      '.side-view:not(.inactive) :is(.panel-scroll, .diff-files, .patch-scroll, .history-list)',
+    );
+    viewStates.set(viewKey(), {
+      draft,
+      scrollTop: chatVisible ? (chatScroll?.scrollTop ?? 0) : (previous?.scrollTop ?? 0),
+      follow: chatVisible ? followChat : (previous?.follow ?? true),
+      messageCount: chatVisible ? messages.length : (previous?.messageCount ?? 0),
+      anchorID: chatVisible ? (anchor?.dataset.messageId ?? null) : (previous?.anchorID ?? null),
+      anchorOffset:
+        chatVisible && anchor && chatScroll
+          ? anchor.getBoundingClientRect().top - chatScroll.getBoundingClientRect().top
+          : (previous?.anchorOffset ?? 0),
+      sideTab,
+      selectedFilePath,
+      sideScroll: detailsVisible
+        ? {
+            ...previous?.sideScroll,
+            [activeSideTab]: [...(scrollable ?? [])].map((element) => element.scrollTop),
+          }
+        : (previous?.sideScroll ?? {}),
+    });
+  }
+
+  async function restoreViewState() {
+    const saved = viewStates.get(viewKey());
+    draft = saved?.draft ?? '';
+    if (saved && client && sessionID) {
+      const id = sessionID;
+      const current = selection;
+      await restoreOlderMessages(client, id, current, saved.messageCount, saved.anchorID);
+      if (current !== selection || id !== sessionID) return;
+    }
+    await tick();
+    if (saved && chatScroll) {
+      cancelAnimationFrame(followFrame);
+      followChat = saved.follow;
+      const anchor = saved.anchorID
+        ? [...chatScroll.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+            (element) => element.dataset.messageId === saved.anchorID,
+          )
+        : null;
+      chatScroll.scrollTop = saved.follow
+        ? chatScroll.scrollHeight
+        : anchor
+          ? chatScroll.scrollTop +
+            anchor.getBoundingClientRect().top -
+            chatScroll.getBoundingClientRect().top -
+            saved.anchorOffset
+          : saved.scrollTop;
+    }
+    if (saved && detailsArea) restoreSideScroll(saved.sideScroll[activeSideTab as SideTab]);
+  }
+
+  async function restoreOlderMessages(
+    source: OpenCodeClient,
+    id: string,
+    current: number,
+    count: number,
+    anchorID: string | null,
+  ): Promise<void> {
+    if (
+      (anchorID ? messages.some((message) => message.id === anchorID) : messages.length >= count) ||
+      !olderMessageCursor
+    )
+      return;
+    const cursor = olderMessageCursor;
+    const page = await source.message.list({ sessionID: id, limit: 50, cursor });
+    if (current !== selection || id !== sessionID) return;
+    messages = mergeMessages(messages, page.data);
+    olderMessageCursor = page.cursor.next === cursor ? null : (page.cursor.next ?? null);
+    await restoreOlderMessages(source, id, current, count, anchorID);
+  }
   let client = $state<OpenCodeClient | null>(null);
   let eventController: AbortController | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -291,6 +422,7 @@
 
   async function loadProject(path: string) {
     if (!client) return;
+    saveViewState();
     error = '';
     const current = ++selection;
     ++sessionRefresh;
@@ -302,6 +434,8 @@
     attachedFiles = [];
     setupOpen = true;
     sessionID = null;
+    mobileView = 'chat';
+    newSessionMode = null;
     selectedSession = null;
     sessions = [];
     activeSessionIDs = [];
@@ -310,6 +444,7 @@
     nextSessionCursor = null;
     sessionPageHistory = [];
     resetTimeline();
+    draft = '';
     running = false;
     pendingPermissions = [];
     pendingForms = [];
@@ -324,6 +459,7 @@
     ++historyRefresh;
     historyLoading = false;
     if (!(await refreshSetup(path)) || current !== selection) return;
+    draft = viewStates.get(viewKey())?.draft ?? '';
     if (!workReady && !planReady) return;
     try {
       await refreshSessions();
@@ -501,7 +637,9 @@
   }
 
   function clearSelectedSession() {
+    saveViewState();
     sessionID = null;
+    mobileView = 'chat';
     selectedSession = null;
     resetTimeline();
     snapshot = { plan: null, questions: null };
@@ -513,6 +651,8 @@
   }
 
   async function selectSession(id: string) {
+    if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
+      saveViewState();
     const current = ++selection;
     sessionID = id;
     selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
@@ -520,6 +660,7 @@
     newSessionMode = null;
     attachedFiles = [];
     resetTimeline();
+    followChat = viewStates.get(viewKey())?.follow ?? true;
     running = activeSessionIDs.includes(id);
     pendingPermissions = [];
     pendingForms = [];
@@ -533,10 +674,16 @@
     historyError = '';
     ++historyRefresh;
     historyLoading = false;
-    sideTab = 'plan';
+    sideTab = viewStates.get(viewKey())?.sideTab ?? 'plan';
+    selectedFilePath = viewStates.get(viewKey())?.selectedFilePath ?? null;
+    mobileView = 'chat';
     error = '';
     localStorage.setItem(`sai-session:${directory}`, id);
     await refreshSession(id, current);
+    if (current === selection) {
+      await restoreViewState();
+      if (window.matchMedia('(max-width: 850px)').matches) chatArea?.focus();
+    }
   }
 
   function syncSessionChoice(session: SessionInfo) {
@@ -546,6 +693,7 @@
 
   function newWork() {
     if (!workReady || switching || sending) return;
+    saveViewState();
     ++selection;
     sessionID = null;
     selectedSession = null;
@@ -568,7 +716,8 @@
     pendingForms = [];
     attachedFiles = [];
     running = false;
-    draft = '';
+    draft = viewStates.get(viewKey())?.draft ?? '';
+    mobileView = 'chat';
     error = '';
   }
 
@@ -950,11 +1099,20 @@
   }
 
   function selectDiffPath(path: string) {
+    saveViewState();
     sideTab = 'changes';
+    mobileView = 'details';
+    void focusDiffDetails();
     const key = repoPath(path, directory);
     selectedFilePath =
       (key ? diffs.find((file) => repoPath(file.file, directory) === key)?.file : undefined) ??
       path;
+  }
+
+  async function focusDiffDetails() {
+    await tick();
+    restoreSideScroll(viewStates.get(viewKey())?.sideScroll.changes);
+    if (window.matchMedia('(max-width: 850px)').matches) detailsArea?.focus();
   }
 
   async function refreshSession(id = sessionID, current = selection) {
@@ -1128,6 +1286,7 @@
     const text = draft.trim();
     const files = [...attachedFiles];
     draft = '';
+    viewStates.delete(viewKey());
     attachedFiles = [];
     sending = true;
     error = '';
@@ -1221,8 +1380,8 @@
 </script>
 
 <svelte:head><title>SAI Harness · Plan workspace</title></svelte:head>
-<div class="app-shell">
-  <aside class="sidebar" aria-label="Sessions">
+<div class="app-shell" data-mobile-view={mobileView}>
+  <aside class="sidebar" aria-label="Sessions" tabindex="-1" bind:this={sidebarElement}>
     <div class="brand"><span class="brand-mark">S.</span><span>SAI Harness</span></div>
     <div class="project-switcher">
       <span class="label">PROJECT</span><button
@@ -1280,6 +1439,7 @@
               >
             </div>{:else}<button
               class="session-item"
+              aria-current={session.id === sessionID ? 'page' : undefined}
               onclick={() => selectSession(session.id)}
               title={session.title ?? 'Untitled session'}
               ><span class="session-symbol">◇</span><span class="session-details"
@@ -1312,14 +1472,26 @@
         >
         <button disabled={!nextSessionCursor || sessionLoading} onclick={nextPage}>Next</button>
       </div>{/if}
-    <div class="sidebar-footer">
-      <span class:connected={runtimeState === 'connected'} class="status-dot"></span><span
-        >OpenCode {runtimeState}</span
-      >
+    <div class="sidebar-footer" role="status">
+      <span class:connected={runtimeState === 'connected'} class="status-dot" aria-hidden="true"
+      ></span><span>OpenCode {runtimeState}</span>
     </div>
   </aside>
   <div class="main-area">
     <header class="topbar">
+      <nav class="mobile-switcher" aria-label="Workspace panels">
+        <button aria-pressed={mobileView === 'sessions'} onclick={() => showMobileView('sessions')}
+          >Sessions</button
+        >
+        <button aria-pressed={mobileView === 'chat'} onclick={() => showMobileView('chat')}
+          >Chat</button
+        >
+        <button
+          aria-pressed={mobileView === 'details'}
+          disabled={!sessionID}
+          onclick={() => showMobileView('details')}>Details</button
+        >
+      </nav>
       <div class="breadcrumb">
         <button
           class="breadcrumb-project"
@@ -1352,8 +1524,10 @@
             <Button size="sm" onclick={retryRuntime}>Save and reconnect</Button>
           </div>
         </details>
-        <Badge tone={workReady ? 'success' : 'neutral'}
-          >{workReady ? 'Ready' : 'Setup needed'}</Badge
+        <span role="status"
+          ><Badge tone={workReady ? 'success' : 'neutral'}
+            >{running ? 'Running' : workReady ? 'Ready' : 'Setup needed'}</Badge
+          ></span
         ><Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
           >{dark ? 'Light' : 'Dark'} theme</Button
         >
@@ -1408,7 +1582,7 @@
           </div>{/if}
       </section>{/if}
     <div class:single={!sessionID} class="workspace">
-      <main class="chat-area" aria-label="Session conversation">
+      <main class="chat-area" aria-label="Session conversation" tabindex="-1" bind:this={chatArea}>
         <div
           class="conversation"
           bind:this={chatScroll}
@@ -1435,7 +1609,10 @@
                 >{/if}
             </div>{/if}
           {#each chatMessages as message (message.id)}
-            {#if message.type === 'user'}<article class="message user-message">
+            {#if message.type === 'user'}<article
+                class="message user-message"
+                data-message-id={message.id}
+              >
                 <div class="avatar user-avatar">You</div>
                 <div class="message-body">
                   <div class="message-author">You</div>
@@ -1448,7 +1625,10 @@
                     </div>{/if}
                 </div>
               </article>
-            {:else if message.type === 'assistant'}<article class="message assistant-message">
+            {:else if message.type === 'assistant'}<article
+                class="message assistant-message"
+                data-message-id={message.id}
+              >
                 <div class="avatar agent-avatar">S.</div>
                 <div class="message-body">
                   <div class="message-author">{message.agent}</div>
@@ -1542,6 +1722,7 @@
                   >{/each}
               </div>{/if}
             <textarea
+              aria-label="Message"
               bind:value={draft}
               onkeydown={keydown}
               rows="3"
@@ -1560,20 +1741,25 @@
           </div>
         </div>
       </main>
-      {#if sessionID}<section class="side-area" aria-label="Session details">
+      {#if sessionID}<section
+          class="side-area"
+          aria-label="Session details"
+          tabindex="-1"
+          bind:this={detailsArea}
+        >
           <nav class="side-tabs" aria-label="Session detail tabs">
             {#if showPlanPanel}<button
                 class:active={activeSideTab === 'plan'}
                 aria-current={activeSideTab === 'plan' ? 'page' : undefined}
-                onclick={() => (sideTab = 'plan')}>Plan</button
+                onclick={() => switchSideTab('plan')}>Plan</button
               >{/if}<button
               class:active={activeSideTab === 'changes'}
               aria-current={activeSideTab === 'changes' ? 'page' : undefined}
-              onclick={() => (sideTab = 'changes')}>Changes ({diffs.length})</button
+              onclick={() => switchSideTab('changes')}>Changes ({diffs.length})</button
             ><button
               class:active={activeSideTab === 'history'}
               aria-current={activeSideTab === 'history' ? 'page' : undefined}
-              onclick={() => (sideTab = 'history')}>History</button
+              onclick={() => switchSideTab('history')}>History</button
             >
           </nav>
           <div class="side-panel-body">
