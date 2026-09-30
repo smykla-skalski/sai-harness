@@ -115,6 +115,7 @@
       currentQuestions = '';
       currentBatch = null;
       questionErrors = {};
+      error = '';
       try {
         lastOutcome = JSON.parse(localStorage.getItem(`sai-questions-outcome:${scope}`) ?? 'null');
         staleDraft = JSON.parse(localStorage.getItem(`sai-questions-stale:${scope}`) ?? 'null');
@@ -132,6 +133,7 @@
       currentBatch = batch;
       answers = batch ? loadAnswers(scope, batch.id) : {};
       questionErrors = {};
+      error = '';
       answerStatus = 'editing';
     }
   });
@@ -178,7 +180,14 @@
   }
 
   async function sendAnswers() {
-    if (!client || !questions || questions.sessionID !== sessionID || pending) return;
+    if (
+      !client ||
+      !questions ||
+      questions.sessionID !== sessionID ||
+      pending ||
+      answerStatus !== 'editing'
+    )
+      return;
     const batch = questions;
     const scope = currentScope;
     const draft = structuredClone(answers);
@@ -206,11 +215,12 @@
     pending = true;
     answerStatus = 'sending';
     error = '';
+    let accepted = false;
     try {
       await answerQuestions(client, directory, batch.sessionID, batch.id, validated);
+      accepted = true;
       saveOutcome(scope, batch, draft, 'answered');
       if (scope === currentScope && questions?.id === batch.id) answerStatus = 'answered';
-      await onchanged();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       if (scope === currentScope && questions?.id === batch.id) error = message;
@@ -220,6 +230,14 @@
         await onchanged().catch(() => {});
       } else if (scope === currentScope && questions?.id === batch.id) answerStatus = 'editing';
     } finally {
+      if (accepted) {
+        try {
+          await onchanged();
+        } catch (cause) {
+          if (scope === currentScope)
+            error = `Answers sent, but refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+        }
+      }
       pending = false;
     }
   }
@@ -261,7 +279,10 @@
   {#if answerStatus === 'sending' && questions}<p class="question-state" role="status">
       Sending answers…
     </p>{/if}
-  {#if lastOutcome}<p class="question-state" role="status">
+  {#if lastOutcome && (!questions || lastOutcome.id === questions.id || lastOutcome.status === 'superseded')}<p
+      class="question-state"
+      role="status"
+    >
       {lastOutcome.status === 'answered'
         ? 'Answers sent.'
         : 'A question batch was superseded. Your draft was kept.'}
@@ -293,7 +314,7 @@
               placeholder="Your answer"
               value={answers[question.id]?.[0] ?? ''}
               aria-invalid={!!questionErrors[question.id]}
-              disabled={pending}
+              disabled={pending || answerStatus !== 'editing'}
               oninput={(event) => setText(question.id, event.currentTarget.value)}></textarea>
           {:else}
             {#each questionOptions(question) as option (option.value)}
@@ -302,7 +323,7 @@
                   type={question.kind === 'multi' ? 'checkbox' : 'radio'}
                   name={question.id}
                   checked={(answers[question.id] ?? []).includes(option.value)}
-                  disabled={pending}
+                  disabled={pending || answerStatus !== 'editing'}
                   onchange={() => setAnswer(question.id, option.value, question.kind === 'multi')}
                 />
                 <span
@@ -321,7 +342,11 @@
       {/each}
     </div>
     <div class="panel-actions">
-      <Button onclick={sendAnswers} disabled={pending} loading={pending}>Send answers</Button>
+      <Button
+        onclick={sendAnswers}
+        disabled={pending || answerStatus !== 'editing'}
+        loading={pending}>Send answers</Button
+      >
     </div>
   {:else if plan}
     <div class="panel-scroll">
