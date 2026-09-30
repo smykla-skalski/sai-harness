@@ -4,6 +4,7 @@
   import {
     answerQuestions,
     reviewPlan,
+    snapshotAnswers,
     type PlanDecision,
     type PlanQuestion,
     type PlanQuestions,
@@ -190,7 +191,7 @@
       return;
     const batch = questions;
     const scope = currentScope;
-    const draft = structuredClone(answers);
+    const draft = snapshotAnswers(answers);
     const validated: Record<string, string[]> = {};
     const errors: Record<string, string> = {};
     for (const question of batch.questions) {

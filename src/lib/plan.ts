@@ -69,6 +69,10 @@ export interface PlanDecision {
   comment?: string;
 }
 
+export function snapshotAnswers(answers: Record<string, string[]>): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(answers).map(([id, values]) => [id, [...values]]));
+}
+
 async function call(
   client: OpenCodeClient,
   directory: string,
