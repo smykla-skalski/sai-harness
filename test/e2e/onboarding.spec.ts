@@ -43,8 +43,10 @@ describe('repository setup', () => {
         'opencode plugin add @smykla-skalski/opencode-plugin-plan-review@latest',
       ),
     );
-    await expect($('.topbar-actions')).toHaveText(expect.stringContaining('Setup needed'));
-    await expect($('.composer textarea')).toBeDisabled();
+    await expect($('[aria-label="New plan"]')).toBeDisabled();
+    if ((await $('.topbar-actions').getText()).includes('Setup needed'))
+      await expect($('.composer textarea')).toBeDisabled();
+    else await expect($('.composer textarea')).toBeEnabled();
   });
 
   it('shows an actionable error for a saved invalid path', async () => {

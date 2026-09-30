@@ -6,6 +6,7 @@
   import { ask } from '@tauri-apps/plugin-dialog';
   import { isSessionNotFoundError } from '@opencode/client';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
+  import type { ModelRef } from '@opencode/client';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
   import PlanPanel from './PlanPanel.svelte';
@@ -19,6 +20,7 @@
   } from './lib/opencode';
   import { getPlan, type PlanSnapshot } from './lib/plan';
   import { mergeMessages, nearBottom } from './lib/timeline';
+  import { fileUri } from './lib/attachments';
   import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
@@ -29,7 +31,12 @@
   let runtimeSettingsOpen = $state(false);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
   let runtimeError = $state('');
-  let agentReady = $state(false);
+  let workReady = $state(false);
+  let planReady = $state(false);
+  let selectedAgentID = $state('');
+  let selectedModelKey = $state('');
+  let newSessionMode = $state<'work' | null>(null);
+  let attachedFiles = $state<string[]>([]);
   let setup = $state<SetupReport | null>(null);
   let setupError = $state('');
   let setupLoading = $state(false);
@@ -61,6 +68,7 @@
   let snapshot = $state<PlanSnapshot>({ plan: null, questions: null });
   let draft = $state('');
   let sending = $state(false);
+  let switching = $state(false);
   let running = $state(false);
   let error = $state('');
   let chatScroll: HTMLDivElement;
@@ -100,10 +108,19 @@
       !connecting &&
       !!client &&
       !!directory &&
-      agentReady &&
-      !!draft.trim() &&
-      !sending,
+      (workReady || (currentSession?.agent === 'architect' && planReady)) &&
+      (!!draft.trim() || attachedFiles.length > 0) &&
+      !sending &&
+      !switching,
   );
+  let inputReady = $derived(workReady || (currentSession?.agent === 'architect' && planReady));
+
+  function modelKey(model: ModelRef) {
+    return `${model.providerID}:${model.id}`;
+  }
+
+  let chosenModel = $derived(setup?.models.find((model) => modelKey(model) === selectedModelKey));
+  let showPlanPanel = $derived(!!snapshot.plan || !!snapshot.questions);
 
   function setupRows(report: SetupReport): [string, SetupCheck][] {
     return [
@@ -112,6 +129,7 @@
       ['Architect agent', report.architect],
       ['Plan RPC', report.rpc],
       ['Provider and model', report.model],
+      ['Architect model', report.planModel],
     ];
   }
 
@@ -229,7 +247,7 @@
     const current = selection;
     await refreshSetup(directory);
     if (current !== selection) return;
-    if (!agentReady) return;
+    if (!workReady && !planReady) return;
     const path = directory;
     await refreshSessions();
     if (current !== selection || path !== directory) return;
@@ -259,7 +277,12 @@
     error = '';
     const current = ++selection;
     ++sessionRefresh;
-    agentReady = false;
+    workReady = false;
+    planReady = false;
+    setup = null;
+    selectedAgentID = '';
+    selectedModelKey = '';
+    attachedFiles = [];
     setupOpen = true;
     sessionID = null;
     selectedSession = null;
@@ -275,7 +298,7 @@
     pendingForms = [];
     snapshot = { plan: null, questions: null };
     if (!(await refreshSetup(path)) || current !== selection) return;
-    if (!agentReady) return;
+    if (!workReady && !planReady) return;
     try {
       await refreshSessions();
       if (current !== selection) return;
@@ -300,14 +323,21 @@
       directory = report.repository;
       localStorage.setItem('sai-directory', report.repository);
       setup = report;
-      agentReady = report.ready;
-      setupOpen = !report.ready;
+      workReady = report.workReady;
+      planReady = report.planReady;
+      if (!selectedAgentID || !report.agents.some((agent) => agent.id === selectedAgentID))
+        selectedAgentID =
+          report.agents.find((agent) => agent.id !== 'architect')?.id ?? report.agents[0]?.id ?? '';
+      if (!selectedModelKey || !report.models.some((model) => modelKey(model) === selectedModelKey))
+        selectedModelKey = report.defaultModel ? modelKey(report.defaultModel) : '';
+      setupOpen = !report.workReady;
       return true;
     } catch (cause) {
       if (current !== selection) return false;
       setupError = describe(cause);
       setupOpen = true;
-      agentReady = false;
+      workReady = false;
+      planReady = false;
       return false;
     } finally {
       if (current === selection) setupLoading = false;
@@ -362,11 +392,7 @@
           ...(search ? { search } : {}),
           ...(pageCursor ? { cursor: pageCursor } : {}),
         });
-        matches.push(
-          ...result.data.filter(
-            (session) => session.agent === 'architect' || session.metadata?.saiHarness === true,
-          ),
-        );
+        matches.push(...result.data);
         const following = result.cursor.next ?? null;
         if (
           matches.length >= 25 ||
@@ -398,13 +424,17 @@
       activeSessionIDs = Object.keys(active);
       running = !!sessionID && activeSessionIDs.includes(sessionID);
       const selected = sessions.find((session) => session.id === sessionID);
-      if (selected) selectedSession = selected;
-      else if (sessionID) {
+      if (selected) {
+        selectedSession = selected;
+        syncSessionChoice(selected);
+      } else if (sessionID) {
         const requestedID = sessionID;
         try {
           const info = await client.session.get({ sessionID: requestedID });
-          if (path === directory && current === sessionRefresh && requestedID === sessionID)
+          if (path === directory && current === sessionRefresh && requestedID === sessionID) {
             selectedSession = info;
+            syncSessionChoice(info);
+          }
         } catch (cause) {
           if (
             path === directory &&
@@ -434,8 +464,8 @@
         info.parentID
       )
         return false;
-      if (info.agent !== 'architect' && info.metadata?.saiHarness !== true) return false;
       selectedSession = info;
+      syncSessionChoice(info);
       await selectSession(id);
       return true;
     } catch (cause) {
@@ -449,6 +479,7 @@
     selectedSession = null;
     resetTimeline();
     snapshot = { plan: null, questions: null };
+    attachedFiles = [];
     running = false;
     pendingPermissions = [];
     pendingForms = [];
@@ -459,6 +490,9 @@
     const current = ++selection;
     sessionID = id;
     selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
+    if (selectedSession?.id === id) syncSessionChoice(selectedSession);
+    newSessionMode = null;
+    attachedFiles = [];
     resetTimeline();
     running = activeSessionIDs.includes(id);
     pendingPermissions = [];
@@ -469,8 +503,32 @@
     await refreshSession(id, current);
   }
 
+  function syncSessionChoice(session: SessionInfo) {
+    if (session.agent) selectedAgentID = session.agent;
+    if (session.model) selectedModelKey = modelKey(session.model);
+  }
+
+  function newWork() {
+    if (!workReady || switching || sending) return;
+    ++selection;
+    sessionID = null;
+    selectedSession = null;
+    newSessionMode = 'work';
+    selectedAgentID =
+      setup?.agents.find((agent) => agent.id !== 'architect')?.id ?? selectedAgentID;
+    if (setup?.defaultModel) selectedModelKey = modelKey(setup.defaultModel);
+    resetTimeline();
+    snapshot = { plan: null, questions: null };
+    pendingPermissions = [];
+    pendingForms = [];
+    attachedFiles = [];
+    running = false;
+    draft = '';
+    error = '';
+  }
+
   async function newPlan() {
-    if (!client || !directory || !agentReady) return;
+    if (!client || !directory || !planReady || switching || sending) return;
     const path = directory;
     const current = selection;
     try {
@@ -491,6 +549,71 @@
     } catch (cause) {
       error = describe(cause);
     }
+  }
+
+  async function chooseAgent(id: string) {
+    if (switching) return;
+    const previous = selectedAgentID;
+    selectedAgentID = id;
+    if (!client || !sessionID) return;
+    const current = sessionID;
+    switching = true;
+    try {
+      await client.session.switchAgent({ sessionID: current, agent: id });
+      const info = await client.session.get({ sessionID: current });
+      if (current === sessionID) {
+        selectedSession = info;
+        syncSessionChoice(info);
+      }
+      await refreshSessions();
+    } catch (cause) {
+      if (current === sessionID) selectedAgentID = previous;
+      error = describe(cause);
+    } finally {
+      switching = false;
+    }
+  }
+
+  async function chooseModel(key: string) {
+    if (switching) return;
+    const previous = selectedModelKey;
+    selectedModelKey = key;
+    if (!client || !sessionID) return;
+    const model = setup?.models.find((item) => modelKey(item) === key);
+    if (!model) return;
+    const current = sessionID;
+    switching = true;
+    try {
+      await client.session.switchModel({
+        sessionID: current,
+        model: { id: model.id, providerID: model.providerID },
+      });
+      const info = await client.session.get({ sessionID: current });
+      if (current === sessionID) {
+        selectedSession = info;
+        syncSessionChoice(info);
+      }
+      await refreshSessions();
+    } catch (cause) {
+      if (current === sessionID) selectedModelKey = previous;
+      error = describe(cause);
+    } finally {
+      switching = false;
+    }
+  }
+
+  async function attachFiles() {
+    const current = selection;
+    const originalSessionID = sessionID;
+    const path = directory;
+    const e2ePath =
+      import.meta.env.MODE === 'e2e' ? sessionStorage.getItem('sai-e2e-attachment-path') : null;
+    if (e2ePath) sessionStorage.removeItem('sai-e2e-attachment-path');
+    const selected =
+      e2ePath ?? (await open({ multiple: true, directory: false, title: 'Attach files' }));
+    if (current !== selection || originalSessionID !== sessionID || path !== directory) return;
+    const paths = typeof selected === 'string' ? [selected] : (selected ?? []);
+    attachedFiles = [...new Set([...attachedFiles, ...paths])];
   }
 
   function changeSearch() {
@@ -729,7 +852,9 @@
     const path = directory;
     const [history, plan] = await Promise.allSettled([
       refreshTimeline(id, current),
-      getPlan(source, path, id),
+      setup?.rpc.state === 'ready'
+        ? getPlan(source, path, id)
+        : Promise.resolve({ plan: null, questions: null } as PlanSnapshot),
       refreshPrompts(id, current),
     ]);
     if (current !== selection || id !== sessionID) return;
@@ -745,7 +870,9 @@
     const path = directory;
     const current = selection;
     const [plan] = await Promise.allSettled([
-      getPlan(source, path, id),
+      setup?.rpc.state === 'ready'
+        ? getPlan(source, path, id)
+        : Promise.resolve({ plan: null, questions: null } as PlanSnapshot),
       refreshPrompts(id, current),
     ]);
     if (current !== selection || id !== sessionID) return;
@@ -881,37 +1008,62 @@
 
   async function send() {
     if (!client || !canSend) return;
+    let current = selection;
+    const path = directory;
     const text = draft.trim();
+    const files = [...attachedFiles];
     draft = '';
+    attachedFiles = [];
     sending = true;
     error = '';
     try {
       let id = sessionID;
       if (!id) {
         const session = await client.session.create({
-          agent: 'architect',
-          location: { directory },
+          agent: selectedAgentID || undefined,
+          model: chosenModel
+            ? { id: chosenModel.id, providerID: chosenModel.providerID }
+            : undefined,
+          location: { directory: path },
           metadata: { saiHarness: true },
-          title: text.length > 60 ? `${text.slice(0, 57)}…` : text,
+          title: text ? (text.length > 60 ? `${text.slice(0, 57)}…` : text) : 'New work',
         });
         id = session.id;
-        await refreshSessions();
-        selectedSession = session;
-        await selectSession(id);
-      } else if (currentSession?.title === 'New plan') {
+        if (current === selection && path === directory) {
+          await refreshSessions();
+          if (current === selection && path === directory) {
+            selectedSession = session;
+            await selectSession(id);
+            if (sessionID === id && path === directory) current = selection;
+          }
+        }
+      } else if (
+        text &&
+        (currentSession?.title === 'New plan' || currentSession?.title === 'New work')
+      ) {
         await client.session.update({
           sessionID: id,
           title: text.length > 60 ? `${text.slice(0, 57)}…` : text,
         });
-        await refreshSessions();
+        if (current === selection && path === directory) await refreshSessions();
       }
-      running = true;
-      await client.session.prompt({ sessionID: id, text });
-      await refreshSession(id);
+      if (current === selection && path === directory) running = true;
+      await client.session.prompt({
+        sessionID: id,
+        text,
+        files: files.map((filePath) => ({
+          uri: fileUri(filePath),
+          name: filePath.split(/[\\/]/).at(-1),
+        })),
+      });
+      if (current === selection && path === directory) await refreshSession(id);
     } catch (cause) {
-      draft = text;
-      running = false;
-      error = describe(cause);
+      if (current === selection && path === directory) {
+        draft = text;
+        attachedFiles = files;
+        running = false;
+        error = describe(cause);
+      }
     } finally {
       sending = false;
     }
@@ -925,7 +1077,7 @@
       if (id === sessionID) running = false;
       await refreshTimeline(id, selection);
     } catch (cause) {
-      error = `Could not stop the architect: ${describe(cause)}`;
+      error = `Could not stop the agent: ${describe(cause)}`;
     }
   }
 
@@ -955,7 +1107,7 @@
 
 <svelte:head><title>SAI Harness · Plan workspace</title></svelte:head>
 <div class="app-shell">
-  <aside class="sidebar" aria-label="Plan sessions">
+  <aside class="sidebar" aria-label="Sessions">
     <div class="brand"><span class="brand-mark">S.</span><span>SAI Harness</span></div>
     <div class="project-switcher">
       <span class="label">PROJECT</span><button
@@ -969,22 +1121,32 @@
       >
     </div>
     <div class="session-heading">
-      <span class="label">PLAN SESSIONS</span><Button
+      <span class="label">SESSIONS</span><Button
+        size="sm"
+        variant="ghost"
+        onclick={newWork}
+        disabled={!workReady || switching || sending}
+        aria-label="New work">New work</Button
+      >
+      <Button
         size="sm"
         variant="ghost"
         onclick={newPlan}
-        disabled={!agentReady}
-        aria-label="New plan">＋</Button
+        disabled={!planReady || switching || sending}
+        title={planReady
+          ? 'Start an Architect plan'
+          : 'Complete Architect setup in Repository setup'}
+        aria-label="New plan">New plan</Button
       >
     </div>
     {#if directory}<input
         class="session-search"
-        aria-label="Search plan sessions"
-        placeholder="Search plans"
+        aria-label="Search sessions"
+        placeholder="Search sessions"
         bind:value={sessionSearch}
         oninput={changeSearch}
       />{/if}
-    <nav aria-label="Plan sessions">
+    <nav aria-label="Sessions">
       {#each visibleSessions as session (session.id)}<div
           class:active={session.id === sessionID}
           class="session-row"
@@ -1004,9 +1166,9 @@
             </div>{:else}<button
               class="session-item"
               onclick={() => selectSession(session.id)}
-              title={session.title ?? 'Untitled plan'}
+              title={session.title ?? 'Untitled session'}
               ><span class="session-symbol">◇</span><span class="session-details"
-                ><strong>{session.title ?? 'Untitled plan'}</strong><small
+                ><strong>{session.title ?? 'Untitled session'}</strong><small
                   >{session.agent ?? 'Unknown'} · {activeSessionIDs.includes(session.id)
                     ? 'Running'
                     : (session.outcome ?? 'Idle')}</small
@@ -1023,9 +1185,9 @@
             >{/if}
         </div>{:else}<p class="session-empty">
           {sessionLoading
-            ? 'Loading plans…'
+            ? 'Loading sessions…'
             : directory
-              ? 'No plans found'
+              ? 'No sessions found'
               : 'Choose a repository to begin'}
         </p>{/each}
     </nav>
@@ -1049,7 +1211,10 @@
           onclick={chooseProject}
           disabled={runtimeState !== 'connected'}
           >{directory ? directory.split('/').filter(Boolean).at(-1) : 'Workspace'} ⌄</button
-        ><span class="slash">/</span><strong>{currentSession?.title ?? 'New plan'}</strong>
+        ><span class="slash">/</span><strong
+          >{currentSession?.title ??
+            (newSessionMode === 'work' ? 'New work' : 'New session')}</strong
+        >
       </div>
       <div class="topbar-actions">
         {#if directory}<Button variant="ghost" size="sm" onclick={() => (setupOpen = !setupOpen)}
@@ -1072,8 +1237,8 @@
             <Button size="sm" onclick={retryRuntime}>Save and reconnect</Button>
           </div>
         </details>
-        <Badge tone={agentReady ? 'success' : 'neutral'}
-          >{agentReady ? 'Ready' : 'Setup needed'}</Badge
+        <Badge tone={workReady ? 'success' : 'neutral'}
+          >{workReady ? 'Ready' : 'Setup needed'}</Badge
         ><Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
           >{dark ? 'Light' : 'Dark'} theme</Button
         >
@@ -1106,8 +1271,11 @@
               </div>
             {/each}
           </div>{/if}
-        {#if !agentReady}<div class="setup-steps">
+        {#if !planReady}<div class="setup-steps">
             <strong>To start planning</strong>
+            {#if workReady}<p>
+                General agent work is ready. Planning needs the Architect and plan-review plugin.
+              </p>{/if}
             <p>
               Install OpenCode v2, then choose a Git repository. In OpenCode, run
               <code>/connect</code> to connect a provider and <code>/models</code> to select a model.
@@ -1124,8 +1292,8 @@
             </p>
           </div>{/if}
       </section>{/if}
-    <div class="workspace">
-      <main class="chat-area" aria-label="Architect conversation">
+    <div class:single={!showPlanPanel} class="workspace">
+      <main class="chat-area" aria-label="Session conversation">
         <div
           class="conversation"
           bind:this={chatScroll}
@@ -1141,10 +1309,10 @@
           {#if !sessionID && messages.length === 0}<div class="welcome">
               <div class="welcome-mark">◇</div>
               <p class="eyebrow">PLAN WITH ARCHITECT</p>
-              <h1>What are we building?</h1>
+              <h1>What are we working on?</h1>
               <p>
-                Describe the work. The architect will explore the repository, ask for decisions, and
-                create a plan you can review.
+                Choose an agent and model, then describe the work. Use New plan for Architect-first
+                planning.
               </p>
               {#if !directory}<Button
                   onclick={chooseProject}
@@ -1157,6 +1325,12 @@
                 <div class="message-body">
                   <div class="message-author">You</div>
                   <Markdown source={message.text} />
+                  {#if message.files?.length}<div class="message-files">
+                      {#each message.files as file, fileIndex (fileIndex)}<span
+                          >{file.name ??
+                            (file.source.type === 'uri' ? file.source.uri : 'Attachment')}</span
+                        >{/each}
+                    </div>{/if}
                 </div>
               </article>
             {:else if message.type === 'assistant'}<article class="message assistant-message">
@@ -1193,7 +1367,7 @@
             <article class="message assistant-message" data-message-id={id}>
               <div class="avatar agent-avatar">S.</div>
               <div class="message-body">
-                <div class="message-author">Architect · streaming</div>
+                <div class="message-author">{currentSession?.agent ?? 'Agent'} · streaming</div>
                 <Markdown
                   source={Object.entries(parts)
                     .toSorted(([a], [b]) => Number(a) - Number(b))
@@ -1204,7 +1378,8 @@
             </article>
           {/each}
           {#if running}<div class="working">
-              <span class="pulse"></span> Architect is working…
+              <span class="pulse"></span>
+              {currentSession?.agent ?? 'Agent'} is working…
               <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
             </div>{/if}
         </div>
@@ -1218,32 +1393,66 @@
             onchanged={() => refreshPrompts()}
           />
           <div class="composer">
+            <div class="work-controls">
+              <label
+                >Agent<select
+                  value={selectedAgentID}
+                  disabled={running || sending || switching || !workReady}
+                  onchange={(event) => void chooseAgent(event.currentTarget.value)}
+                >
+                  {#each setup?.agents ?? [] as agent (agent.id)}<option value={agent.id}
+                      >{agent.name}</option
+                    >{/each}
+                </select></label
+              >
+              <label
+                >Model<select
+                  value={selectedModelKey}
+                  disabled={running || sending || switching || !workReady}
+                  onchange={(event) => void chooseModel(event.currentTarget.value)}
+                >
+                  {#each setup?.models ?? [] as model (modelKey(model))}<option
+                      value={modelKey(model)}>{model.providerID} / {model.name}</option
+                    >{/each}
+                </select></label
+              >
+            </div>
+            {#if attachedFiles.length}<div class="attachments">
+                {#each attachedFiles as path (path)}<span
+                    >{path.split(/[\\/]/).at(-1)}<button
+                      aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
+                      onclick={() =>
+                        (attachedFiles = attachedFiles.filter((item) => item !== path))}>×</button
+                    ></span
+                  >{/each}
+              </div>{/if}
             <textarea
               bind:value={draft}
               onkeydown={keydown}
               rows="3"
-              placeholder={agentReady
-                ? 'Describe a goal or ask the architect a question…'
+              placeholder={inputReady
+                ? 'Describe the work or ask a question…'
                 : 'Complete repository setup before planning…'}
-              disabled={!agentReady || sending}></textarea>
+              disabled={!inputReady || sending}></textarea>
             <div class="composer-bottom">
               <span>Enter to send · Shift+Enter for newline</span><Button
-                onclick={send}
-                disabled={!canSend}
-                loading={sending}>Send ↗</Button
-              >
+                variant="ghost"
+                size="sm"
+                onclick={attachFiles}
+                disabled={!inputReady || sending}>Attach files</Button
+              ><Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
             </div>
           </div>
         </div>
       </main>
-      <PlanPanel
-        {snapshot}
-        client={connecting ? null : client}
-        {directory}
-        {sessionID}
-        {dark}
-        onchanged={() => refreshSession()}
-      />
+      {#if showPlanPanel}<PlanPanel
+          {snapshot}
+          client={connecting ? null : client}
+          {directory}
+          {sessionID}
+          {dark}
+          onchanged={() => refreshSession()}
+        />{/if}
     </div>
   </div>
 </div>

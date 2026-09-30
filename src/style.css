@@ -110,7 +110,12 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 0 8px 7px;
+}
+.session-heading .label {
+  flex-basis: 100%;
 }
 .sidebar nav {
   flex: 1;
@@ -378,6 +383,9 @@ button:disabled {
   flex: 1;
   min-height: 0;
 }
+.workspace.single {
+  grid-template-columns: minmax(0, 1fr);
+}
 .chat-area {
   display: flex;
   flex-direction: column;
@@ -502,6 +510,31 @@ button:disabled {
   color: var(--sui-danger);
   font-size: 12px;
 }
+.message-files,
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.message-files span,
+.attachments span {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--sui-subtle);
+  color: var(--sui-muted);
+  font-size: 11px;
+}
+.attachments {
+  padding: 0 16px;
+}
+.attachments button {
+  margin-left: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
 .working {
   display: flex;
   align-items: center;
@@ -530,6 +563,30 @@ button:disabled {
 .composer {
   border: 1px solid var(--sui-border);
   border-radius: 12px;
+  background: var(--sui-surface);
+}
+.work-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px 0;
+}
+.work-controls label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+  color: var(--sui-muted);
+  font-size: 11px;
+}
+.work-controls select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 6px;
+  color: var(--sui-foreground);
   background: var(--sui-surface);
 }
 .composer:focus-within {
@@ -688,7 +745,7 @@ button:disabled {
   .chat-area {
     min-height: 65vh;
   }
-  .workspace > :last-child {
+  .workspace > :last-child:not(.chat-area) {
     min-height: 500px;
     border-top: 1px solid var(--shell-divider);
     border-left: 0;

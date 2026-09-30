@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { OpenCodeClient, PluginInfo } from '@opencode/client';
+import type { AgentInfo, ModelInfo, ModelRef, OpenCodeClient, PluginInfo } from '@opencode/client';
 
 export type SetupCheck = { state: 'ready' | 'action'; detail: string };
 export type SetupReport = {
@@ -9,6 +9,12 @@ export type SetupReport = {
   architect: SetupCheck;
   rpc: SetupCheck;
   model: SetupCheck;
+  planModel: SetupCheck;
+  agents: AgentInfo[];
+  models: ModelInfo[];
+  defaultModel: ModelRef | null;
+  workReady: boolean;
+  planReady: boolean;
   ready: boolean;
 };
 
@@ -120,39 +126,55 @@ export async function inspectRepository(
             false,
           );
 
-  let modelCheck: SetupCheck;
-  if (foundDefault.status === 'rejected') {
-    modelCheck = problem(foundDefault);
-  } else if (foundProviders.status === 'rejected') {
-    modelCheck = problem(foundProviders);
-  } else if (foundIntegrations.status === 'rejected') {
-    modelCheck = problem(foundIntegrations);
-  } else {
-    const preferred = architect?.model;
-    const model = preferred
-      ? foundModels.status === 'fulfilled'
-        ? foundModels.value.data.find(
-            (item) => item.id === preferred.id && item.providerID === preferred.providerID,
-          )
-        : undefined
-      : foundDefault.value.data;
-    const provider =
-      model && foundProviders.value.data.find((item) => item.id === model.providerID);
-    const integration = provider?.integrationID
-      ? foundIntegrations.value.data.find((item) => item.id === provider.integrationID)
-      : undefined;
-    const connected =
-      !provider?.integrationID ||
-      !!integration?.connections.some((item) => item.status?.status !== 'needs_auth');
-    modelCheck = model
-      ? check(
-          `${provider?.name ?? model.providerID} / ${model.name}${!connected ? ' (connect provider in OpenCode)' : model.enabled ? '' : ' (disabled)'}`,
-          model.enabled && !!provider && provider.activation !== 'disabled' && connected,
-        )
-      : check('No usable model selected. Configure an OpenCode provider and default model.', false);
-  }
-
-  const checks = [locationCheck, pluginCheck, architectCheck, rpcCheck, modelCheck];
+  const agents =
+    foundAgents.status === 'fulfilled'
+      ? foundAgents.value.data.filter((agent) => !agent.hidden && agent.mode !== 'subagent')
+      : [];
+  const models =
+    foundModels.status === 'fulfilled' &&
+    foundProviders.status === 'fulfilled' &&
+    foundIntegrations.status === 'fulfilled'
+      ? foundModels.value.data.filter((model) => {
+          const provider = foundProviders.value.data.find((item) => item.id === model.providerID);
+          const integration = provider?.integrationID
+            ? foundIntegrations.value.data.find((item) => item.id === provider.integrationID)
+            : undefined;
+          return (
+            model.enabled &&
+            !!provider &&
+            provider.activation !== 'disabled' &&
+            (!provider.integrationID ||
+              !!integration?.connections.some((item) => item.status?.status !== 'needs_auth'))
+          );
+        })
+      : [];
+  const preferred = foundDefault.status === 'fulfilled' ? foundDefault.value.data : null;
+  const defaultModel =
+    models.find(
+      (model) => model.id === preferred?.id && model.providerID === preferred.providerID,
+    ) ?? models[0];
+  const modelCheck = defaultModel
+    ? check(`${defaultModel.providerID} / ${defaultModel.name} available`, true)
+    : check('No usable model. Connect a provider and enable a model in OpenCode.', false);
+  const hasPlanModel = architect?.model
+    ? models.some(
+        (model) =>
+          model.id === architect.model?.id && model.providerID === architect.model.providerID,
+      )
+    : !!defaultModel;
+  const planModel = check(
+    hasPlanModel
+      ? 'Architect model available'
+      : 'Architect model unavailable; connect or enable its provider',
+    hasPlanModel,
+  );
+  const workReady = locationCheck.state === 'ready' && agents.length > 0 && models.length > 0;
+  const planReady =
+    locationCheck.state === 'ready' &&
+    pluginCheck.state === 'ready' &&
+    architectCheck.state === 'ready' &&
+    rpcCheck.state === 'ready' &&
+    planModel.state === 'ready';
   return {
     repository,
     location: locationCheck,
@@ -160,6 +182,14 @@ export async function inspectRepository(
     architect: architectCheck,
     rpc: rpcCheck,
     model: modelCheck,
-    ready: checks.every((item) => item.state === 'ready'),
+    planModel,
+    agents,
+    models,
+    defaultModel: defaultModel
+      ? { id: defaultModel.id, providerID: defaultModel.providerID }
+      : null,
+    workReady,
+    planReady,
+    ready: planReady,
   };
 }
