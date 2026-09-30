@@ -11,6 +11,7 @@
   import Markdown from './Markdown.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import DiffPanel from './DiffPanel.svelte';
+  import HistoryPanel from './HistoryPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import {
     connect,
@@ -19,7 +20,7 @@
     type SessionInfo,
     type SessionMessageInfo,
   } from './lib/opencode';
-  import { getPlan, type PlanSnapshot } from './lib/plan';
+  import { getHistory, getPlan, type HistoryEntry, type PlanSnapshot } from './lib/plan';
   import { mergeMessages, nearBottom } from './lib/timeline';
   import { fileUri } from './lib/attachments';
   import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
@@ -71,9 +72,13 @@
   let diffs = $state<FileDiffInfo[]>([]);
   let diffLoading = $state(false);
   let diffError = $state('');
+  let historyEvents = $state<HistoryEntry[]>([]);
+  let historyLoading = $state(false);
+  let historyError = $state('');
   let selectedFilePath = $state<string | null>(null);
-  let sideTab = $state<'plan' | 'changes'>('plan');
+  let sideTab = $state<'plan' | 'changes' | 'history'>('plan');
   let diffRefresh = 0;
+  let historyRefresh = 0;
   let draft = $state('');
   let sending = $state(false);
   let switching = $state(false);
@@ -129,7 +134,9 @@
 
   let chosenModel = $derived(setup?.models.find((model) => modelKey(model) === selectedModelKey));
   let showPlanPanel = $derived(!!snapshot.plan || !!snapshot.questions);
-  let activeSideTab = $derived(showPlanPanel && sideTab === 'plan' ? 'plan' : 'changes');
+  let activeSideTab = $derived(
+    showPlanPanel && sideTab === 'plan' ? 'plan' : sideTab === 'history' ? 'history' : 'changes',
+  );
   let diffAnnotations = $derived(annotateDiffs(diffs, snapshot.plan, directory));
 
   function setupRows(report: SetupReport): [string, SetupCheck][] {
@@ -312,6 +319,10 @@
     diffError = '';
     ++diffRefresh;
     diffLoading = false;
+    historyEvents = [];
+    historyError = '';
+    ++historyRefresh;
+    historyLoading = false;
     if (!(await refreshSetup(path)) || current !== selection) return;
     if (!workReady && !planReady) return;
     try {
@@ -518,6 +529,10 @@
     diffError = '';
     ++diffRefresh;
     diffLoading = false;
+    historyEvents = [];
+    historyError = '';
+    ++historyRefresh;
+    historyLoading = false;
     sideTab = 'plan';
     error = '';
     localStorage.setItem(`sai-session:${directory}`, id);
@@ -545,6 +560,10 @@
     sideTab = 'changes';
     ++diffRefresh;
     diffLoading = false;
+    historyEvents = [];
+    historyError = '';
+    ++historyRefresh;
+    historyLoading = false;
     pendingPermissions = [];
     pendingForms = [];
     attachedFiles = [];
@@ -898,6 +917,38 @@
     }
   }
 
+  async function refreshHistory(id = sessionID, current = selection) {
+    if (!client || !id || !directory) return;
+    if (setup?.rpc.state !== 'ready') {
+      historyEvents = [];
+      historyError = 'Install the plan-review plugin to record plan history.';
+      return;
+    }
+    const source = client;
+    const path = directory;
+    const generation = ++historyRefresh;
+    historyLoading = true;
+    try {
+      const next = await getHistory(source, path, id);
+      if (
+        generation !== historyRefresh ||
+        current !== selection ||
+        id !== sessionID ||
+        path !== directory
+      )
+        return;
+      historyEvents = next;
+      historyError = '';
+    } catch (cause) {
+      if (generation === historyRefresh && current === selection && id === sessionID) {
+        historyError = describe(cause);
+        historyEvents = [];
+      }
+    } finally {
+      if (generation === historyRefresh) historyLoading = false;
+    }
+  }
+
   function selectDiffPath(path: string) {
     sideTab = 'changes';
     const key = repoPath(path, directory);
@@ -917,6 +968,7 @@
         : Promise.resolve({ plan: null, questions: null } as PlanSnapshot),
       refreshPrompts(id, current),
       refreshDiff(id, current),
+      refreshHistory(id, current),
     ]);
     if (current !== selection || id !== sessionID) return;
     if (history.status === 'rejected') error = describe(history.reason);
@@ -936,6 +988,7 @@
         : Promise.resolve({ plan: null, questions: null } as PlanSnapshot),
       refreshPrompts(id, current),
       refreshDiff(id, current),
+      refreshHistory(id, current),
     ]);
     if (current !== selection || id !== sessionID) return;
     if (plan.status === 'fulfilled') snapshot = plan.value;
@@ -1517,6 +1570,10 @@
               class:active={activeSideTab === 'changes'}
               aria-current={activeSideTab === 'changes' ? 'page' : undefined}
               onclick={() => (sideTab = 'changes')}>Changes ({diffs.length})</button
+            ><button
+              class:active={activeSideTab === 'history'}
+              aria-current={activeSideTab === 'history' ? 'page' : undefined}
+              onclick={() => (sideTab = 'history')}>History</button
             >
           </nav>
           <div class="side-panel-body">
@@ -1540,6 +1597,15 @@
                 error={diffError}
                 onselect={(file) => (selectedFilePath = file)}
                 onrefresh={() => refreshDiff()}
+              />
+            </div>
+            <div class:inactive={activeSideTab !== 'history'} class="side-view">
+              <HistoryPanel
+                events={historyEvents}
+                session={currentSession}
+                loading={historyLoading}
+                error={historyError}
+                onrefresh={() => refreshHistory()}
               />
             </div>
           </div>

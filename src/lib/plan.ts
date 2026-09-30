@@ -80,6 +80,34 @@ const PlanSnapshotSchema = z.object({
   questions: PlanQuestionsSchema.nullable(),
 });
 
+const HistoryEntrySchema = z.object({
+  id: z.number().int().positive(),
+  at: z.number(),
+  reason: z.enum(['proposed', 'reviewed', 'amended', 'step', 'checkpoint', 'done', 'touch']),
+  version: z.number().int().positive(),
+  plan: PlanSchema,
+  review: z
+    .object({
+      sessionID: z.string(),
+      version: z.number(),
+      action: z.enum(['revise', 'execute']),
+      decisions: z.array(
+        z.object({
+          stepID: z.string(),
+          verdict: z.enum(['approve', 'reject', 'revise']).optional(),
+          comment: z.string().optional(),
+          edit: z
+            .object({ title: z.string().optional(), detail: z.string().optional() })
+            .optional(),
+        }),
+      ),
+      note: z.string().optional(),
+    })
+    .optional(),
+});
+
+const HistoryOutputSchema = z.object({ events: z.array(HistoryEntrySchema) });
+
 const OutcomeSchema = z.object({ ok: z.boolean(), error: z.string().optional() });
 
 export type Plan = z.infer<typeof PlanSchema>;
@@ -87,6 +115,7 @@ export type PlanStep = z.infer<typeof PlanStepSchema>;
 export type PlanQuestion = z.infer<typeof PlanQuestionSchema>;
 export type PlanQuestions = z.infer<typeof PlanQuestionsSchema>;
 export type PlanSnapshot = z.infer<typeof PlanSnapshotSchema>;
+export type HistoryEntry = z.infer<typeof HistoryEntrySchema>;
 
 function relativeFile(file: string, directory: string): string {
   const target = file.replaceAll('\\', '/').replaceAll(/\/+/g, '/');
@@ -226,6 +255,17 @@ export async function getPlan(
   sessionID: string,
 ): Promise<PlanSnapshot> {
   return PlanSnapshotSchema.parse(await call(client, directory, 'get', { sessionID }));
+}
+
+export async function getHistory(
+  client: OpenCodeClient,
+  directory: string,
+  sessionID: string,
+): Promise<HistoryEntry[]> {
+  const response = HistoryOutputSchema.parse(
+    await call(client, directory, 'history', { sessionID }),
+  );
+  return response.events.toSorted((a, b) => a.id - b.id);
 }
 
 export async function answerQuestions(
