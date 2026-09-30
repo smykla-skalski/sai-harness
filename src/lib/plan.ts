@@ -88,6 +88,75 @@ export type PlanQuestion = z.infer<typeof PlanQuestionSchema>;
 export type PlanQuestions = z.infer<typeof PlanQuestionsSchema>;
 export type PlanSnapshot = z.infer<typeof PlanSnapshotSchema>;
 
+function relativeFile(file: string, directory: string): string {
+  const target = file.replaceAll('\\', '/').replaceAll(/\/+/g, '/');
+  const root = directory.replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/\/$/, '');
+  if (target.startsWith('/') || /^[A-Za-z]:\//.test(target)) {
+    const windows = /^[A-Za-z]:\//.test(target);
+    const matches = windows
+      ? target.toLowerCase().startsWith(`${root.toLowerCase()}/`)
+      : target.startsWith(`${root}/`);
+    return matches ? target.slice(root.length + 1) : '../outside';
+  }
+  return target.replace(/^\.\//, '');
+}
+
+function escapePattern(value: string) {
+  return value.replaceAll(/[.+^${}()|[\]\\]/g, '\\$&');
+}
+
+function coveredFile(file: string, approved: string[], directory: string): boolean {
+  const target = relativeFile(file, directory);
+  if (target.startsWith('../')) return false;
+  return approved.some((entry) => {
+    const listed = relativeFile(entry, directory).replace(/\/$/, '');
+    if (listed.includes('*') || listed.includes('?')) {
+      const source = listed
+        .split('**')
+        .map((part) =>
+          part
+            .split('*')
+            .map((piece) => escapePattern(piece))
+            .join('[^/]*')
+            .replaceAll('?', '[^/]'),
+        )
+        .join('.*');
+      return new RegExp(`^${source}$`).test(target);
+    }
+    return target === listed || target.startsWith(`${listed}/`);
+  });
+}
+
+export function executionSummary(plan: Plan, directory: string) {
+  const done = plan.steps.filter((step) => step.status === 'done').length;
+  const skipped = plan.steps.filter((step) => step.status === 'skipped').length;
+  const excluded = plan.steps.filter((step) =>
+    ['rejected', 'revise', 'proposed'].includes(step.status),
+  ).length;
+  const blocked = plan.steps.filter((step) => step.status === 'blocked');
+  const failed = plan.steps.filter((step) => step.check?.outcome === 'fail');
+  const touched = [...new Set(plan.steps.flatMap((step) => step.touched))];
+  const drift = plan.steps.flatMap((step) =>
+    step.touched
+      .filter((file) => !coveredFile(file, step.files, directory))
+      .map((file) => ({ step: step.title, file })),
+  );
+  return {
+    done,
+    skipped,
+    excluded,
+    total: plan.steps.length,
+    progress: plan.steps.length
+      ? Math.round(((done + skipped + excluded) / plan.steps.length) * 100)
+      : 100,
+    blocked,
+    failed,
+    touched,
+    drift,
+    unattributed: [...new Set(plan.outside)],
+  };
+}
+
 export interface PlanDecision {
   stepID: string;
   verdict?: 'approve' | 'reject' | 'revise';

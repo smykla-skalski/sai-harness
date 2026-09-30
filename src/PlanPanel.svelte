@@ -4,6 +4,7 @@
   import {
     answerQuestions,
     canExecutePlan,
+    executionSummary,
     getPlan,
     reviewPlan,
     skippedSteps,
@@ -48,6 +49,7 @@
   let questions = $derived(snapshot.questions);
   let canExecute = $derived(!!plan && canExecutePlan(plan, decisions));
   let skipped = $derived(plan ? skippedSteps(plan, decisions) : []);
+  let execution = $derived(plan ? executionSummary(plan, directory) : null);
 
   function planDraftKey(key: string) {
     return `sai-plan-draft:${key}`;
@@ -379,7 +381,17 @@
   <div class="panel-heading">
     <div>
       <p class="eyebrow">PLAN WORKSPACE</p>
-      <h2>Review</h2>
+      <h2>
+        {plan?.state === 'done'
+          ? 'Run complete'
+          : plan?.state === 'executing'
+            ? 'Execution'
+            : plan?.reviewReason === 'checkpoint'
+              ? 'Checkpoint'
+              : plan?.reviewReason === 'amendment'
+                ? 'Amendment'
+                : 'Review'}
+      </h2>
     </div>
     {#if plan}<Badge tone={plan.state === 'review' ? 'warning' : 'success'}
         >v{plan.version} · {plan.state}</Badge
@@ -470,6 +482,69 @@
               : 'Plan proposal: review the steps before execution.'}
         </p>{/if}
       <p class="summary">{plan.summary}</p>
+      {#if execution && (plan.state !== 'review' || plan.reviewReason !== 'plan')}<section
+          class="execution-progress"
+          aria-label="Execution progress"
+        >
+          <div>
+            <strong>{execution.done} of {execution.total} steps done</strong><span
+              >{execution.skipped} skipped · {execution.excluded} excluded · {execution.progress}%
+              settled</span
+            >
+          </div>
+          <progress
+            value={execution.done + execution.skipped + execution.excluded}
+            max={execution.total || 1}
+          ></progress>
+        </section>{/if}
+      {#if execution && (execution.blocked.length || execution.failed.length)}<section
+          class="execution-alert"
+          role="status"
+        >
+          <strong>Needs attention</strong>
+          {#if execution.blocked.length}<p>
+              Blocked: {execution.blocked.map((step) => step.title).join(' · ')}
+            </p>{/if}
+          {#if execution.failed.length}<p>
+              Failed checks: {execution.failed
+                .map((step) => `${step.title} — ${step.check?.summary ?? 'Check failed'}`)
+                .join(' · ')}
+            </p>{/if}
+        </section>{/if}
+      {#if execution && (execution.drift.length || execution.unattributed.length)}<section
+          class="execution-alert"
+          role="status"
+        >
+          <strong>Work outside approved steps</strong>
+          {#if execution.drift.length}<p>
+              Outside step files: {execution.drift
+                .map((item) => `${item.step}: ${item.file}`)
+                .join(' · ')}
+            </p>{/if}
+          {#if execution.unattributed.length}<p>
+              Edited without an active step: {execution.unattributed.join(' · ')}
+            </p>{/if}
+        </section>{/if}
+      {#if plan.state === 'done' && execution}<section class="run-digest" aria-label="Final digest">
+          <strong>Final digest</strong>
+          <p>
+            {execution.done} completed · {execution.skipped} skipped · {execution.excluded} excluded ·
+            {execution.failed.length} failed checks
+          </p>
+          <p>
+            Changed files: {execution.touched.length
+              ? execution.touched.join(' · ')
+              : 'None reported'}
+          </p>
+          {#if execution.drift.length}<p>
+              Outside step files: {execution.drift
+                .map((item) => `${item.step}: ${item.file}`)
+                .join(' · ')}
+            </p>{/if}
+          {#if execution.unattributed.length}<p>
+              Edited without an active step: {execution.unattributed.join(' · ')}
+            </p>{/if}
+        </section>{/if}
       {#if plan.diagram}<Diagram source={plan.diagram} title="Plan overview" {dark} />{/if}
       {#if plan.sequence}<h4 class="diagram-heading">Runtime sequence</h4>
         <Diagram source={plan.sequence} title="Runtime sequence" {dark} />{/if}
@@ -477,10 +552,6 @@
         <h4 class="diagram-heading">{extra.title}</h4>
         <Diagram source={extra.source} title={extra.title} {dark} />
       {/each}
-      {#if plan.outside.length}<p class="outside-files">
-          <strong>Files outside approved paths:</strong>
-          {plan.outside.join(' · ')}
-        </p>{/if}
 
       {#if plan.alternatives?.length}
         <div class="subheading">Approaches</div>
@@ -526,6 +597,15 @@
           {#if step.origin === 'amendment'}<p class="step-flag">Added during execution</p>{/if}
           {#if decisions[step.id]?.edit}<p class="step-flag">Edited in your draft</p>{/if}
           {#if step.needsYou}<p class="decision-prompt">Decision: {step.needsYou}</p>{/if}
+          {#if plan.state !== 'review' || plan.reviewReason !== 'plan'}<div class="step-execution">
+              {#if step.note}<p><strong>Progress:</strong> {step.note}</p>{/if}
+              {#if step.check}<p class:failed={step.check.outcome === 'fail'}>
+                  <strong>Check {step.check.outcome}:</strong>
+                  {step.check.summary}{#if step.check.command}<code>{step.check.command}</code>{/if}
+                </p>{/if}
+              <p><strong>Planned files:</strong> {step.files.join(' · ') || 'None listed'}</p>
+              <p><strong>Touched files:</strong> {step.touched.join(' · ') || 'None reported'}</p>
+            </div>{/if}
           <details
             open={!!step.needsYou ||
               step.origin === 'amendment' ||
@@ -537,9 +617,15 @@
             {#if step.rationale}<p>Why: {step.rationale}</p>{/if}
             {#if step.dependsOn?.length}<p>After: {step.dependsOn.join(', ')}</p>{/if}
             {#if step.files.length}<p class="files">Files: {step.files.join(' · ')}</p>{/if}
-            {#if step.touched.length}<p class="files">Touched: {step.touched.join(' · ')}</p>{/if}
-            {#if step.note}<p>Progress: {step.note}</p>{/if}
-            {#if step.check}<p>
+            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.touched.length}<p
+                class="files"
+              >
+                Touched: {step.touched.join(' · ')}
+              </p>{/if}
+            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.note}<p>
+                Progress: {step.note}
+              </p>{/if}
+            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.check}<p>
                 Check ({step.check.outcome}): {step.check.summary}{#if step.check.command}<code>
                     {step.check.command}</code
                   >{/if}
@@ -637,8 +723,10 @@
     </div>
     {#if plan.state === 'review'}
       {#if confirming}<div class="execute-confirm" role="status">
-          Continue with approved steps? {skipped.length} step{skipped.length === 1 ? '' : 's'} will not
-          run{skipped.length ? `: ${skipped.join(', ')}` : ''}.
+          {plan.reviewReason === 'checkpoint' ? 'Continue execution' : 'Execute approved steps'}? {skipped.length}
+          step{skipped.length === 1 ? '' : 's'} will not run{skipped.length
+            ? `: ${skipped.join(', ')}`
+            : ''}.
         </div>{/if}
       <div class="panel-actions split">
         <Button
@@ -652,7 +740,9 @@
           disabled={!canExecute || pending}
           loading={pending}
           >{confirming
-            ? 'Confirm execution'
+            ? plan.reviewReason === 'checkpoint'
+              ? 'Confirm continue'
+              : 'Confirm execution'
             : plan.reviewReason === 'checkpoint'
               ? 'Continue execution'
               : 'Execute approved steps'}</Button
@@ -721,7 +811,6 @@
     white-space: pre-wrap;
   }
   .review-context,
-  .outside-files,
   .execute-confirm {
     color: var(--sui-muted);
     font-size: 12px;
@@ -729,6 +818,43 @@
   }
   .execute-confirm {
     padding: 12px 20px 0;
+  }
+  .execution-progress,
+  .run-digest,
+  .execution-alert {
+    margin: 12px 0 20px;
+    padding: 12px;
+    border: 1px solid var(--shell-divider);
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .execution-progress > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .execution-progress span {
+    color: var(--sui-muted);
+  }
+  .execution-progress progress {
+    width: 100%;
+    height: 8px;
+    margin-top: 10px;
+    accent-color: var(--sui-primary);
+  }
+  .execution-alert {
+    border-color: var(--sui-danger);
+    color: var(--sui-danger-ink);
+    background: var(--sui-danger-subtle);
+  }
+  .execution-alert p,
+  .run-digest p {
+    margin: 6px 0 0;
+    overflow-wrap: anywhere;
+  }
+  .run-digest {
+    background: var(--sui-canvas);
   }
   .diagram-heading {
     margin: 18px 0 8px;
@@ -826,6 +952,23 @@
   .step-card .files {
     font-family: ui-monospace, monospace;
     font-size: 11px;
+  }
+  .step-execution {
+    margin-top: 10px;
+    color: var(--sui-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .step-execution p {
+    margin: 5px 0;
+  }
+  .step-execution .failed {
+    color: var(--sui-danger);
+  }
+  .step-execution code {
+    display: block;
+    margin-top: 4px;
   }
   .decision-buttons {
     display: flex;
