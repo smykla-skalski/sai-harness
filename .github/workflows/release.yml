@@ -1,0 +1,194 @@
+name: Desktop packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos-arm64
+            bundles: dmg
+          - os: macos-15-intel
+            target: macos-x64
+            bundles: dmg
+          - os: ubuntu-22.04
+            target: linux-x64
+            bundles: deb,appimage
+          - os: windows-2022
+            target: windows-x64
+            bundles: nsis
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev libfuse2 xvfb
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Configure macOS signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "$APPLE_CERTIFICATE" ]]; then
+            echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
+            echo 'SAI_SIGNING_MODE=ad-hoc' >> "$GITHUB_ENV"
+          else
+            test -n "$APPLE_CERTIFICATE_PASSWORD"
+            test -n "$APPLE_SIGNING_IDENTITY"
+            test -n "$APPLE_ID"
+            test -n "$APPLE_PASSWORD"
+            test -n "$APPLE_TEAM_ID"
+            certificate="$RUNNER_TEMP/sai-certificate.p12"
+            keychain="$RUNNER_TEMP/sai-build.keychain-db"
+            keychain_password="$(openssl rand -hex 24)"
+            printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+            security create-keychain -p "$keychain_password" "$keychain"
+            security default-keychain -s "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -t 3600 -u "$keychain"
+            security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+            echo 'SAI_SIGNING_MODE=developer-id' >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build installer
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }} --ci
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Stage and hash installer
+        run: node scripts/package-release.mjs stage ${{ matrix.target }}
+
+      - name: Smoke test macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mountpoint="$RUNNER_TEMP/sai-mounted"
+          mkdir -p "$mountpoint"
+          hdiutil attach -quiet -nobrowse -mountpoint "$mountpoint" release-output/*.dmg
+          trap 'hdiutil detach -quiet "$mountpoint"' EXIT
+          apps=("$mountpoint"/*.app)
+          test -d "${apps[0]}"
+          codesign --verify --deep --strict "${apps[0]}"
+          executable="$(plutil -extract CFBundleExecutable raw -o - "${apps[0]}/Contents/Info.plist")"
+          "${apps[0]}/Contents/MacOS/$executable" &
+          app_pid=$!
+          sleep 5
+          kill -0 "$app_pid"
+          kill "$app_pid"
+          wait "$app_pid" || true
+
+      - name: Smoke test Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo dpkg -i release-output/*.deb
+          appimages=(release-output/*.AppImage)
+          test "${#appimages[@]}" -eq 1
+          chmod +x "${appimages[0]}"
+          "${appimages[0]}" --appimage-extract >/dev/null
+          set +e
+          timeout 10 xvfb-run -a /usr/bin/sai-harness
+          exit_code=$?
+          set -e
+          test "$exit_code" -eq 124
+
+      - name: Smoke test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release-output -Filter *.exe | Select-Object -First 1
+          $destination = Join-Path $env:RUNNER_TEMP 'sai-installed'
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "NSIS install failed: $($install.ExitCode)" }
+          $app = Get-ChildItem $destination -Recurse -Filter sai-harness.exe | Select-Object -First 1
+          if (-not $app) { throw 'Installed app executable missing' }
+          $running = Start-Process -FilePath $app.FullName -PassThru
+          Start-Sleep -Seconds 5
+          if ($running.HasExited) { throw "Installed app exited: $($running.ExitCode)" }
+          Stop-Process -Id $running.Id -Force
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: release-output/*
+          if-no-files-found: error
+
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          subject-path: release-output/SAI-Harness-*
+
+  release:
+    name: Development prerelease
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: downloaded
+
+      - name: Verify versions, commits, and hashes
+        run: node scripts/package-release.mjs verify downloaded
+
+      - name: Publish labeled development release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --verify-tag --prerelease --title "SAI Harness $GITHUB_REF_NAME (development)" \
+            --notes-file docs/release-notes.md

@@ -11,6 +11,8 @@ A desktop workspace for planning and reviewing coding-agent work. OpenCode runs 
 
 ## Development
 
+For packaged development builds, see [installation and first project](docs/install.md). The [release checklist](docs/validation.md#release-checklist) covers platform smoke tests and signing status.
+
 Prerequisites: [mise](https://mise.jdx.dev/), [OpenCode v2](https://opencode.ai/v2/docs/), and the platform dependencies required by [Tauri](https://tauri.app/start/prerequisites/). Configure [opencode-plugin-plan-review](https://github.com/smykla-skalski/opencode-plugin-plan-review) before planning. See the [tested version matrix and release smoke](docs/validation.md); the published `0.2.0` plugin lacks the history RPC required by this app. Install the tested Git revision:
 
 ```sh

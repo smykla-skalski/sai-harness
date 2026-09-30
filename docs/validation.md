@@ -39,3 +39,15 @@ Use a clean user profile, the compatibility baseline above, a disposable Git rep
 6. Kill the owned OpenCode child. Confirm the app reports recovery and reconnects to the selected project/session. Quit and reopen the app; confirm the project, session, transcript, plan, checkpoint, and diff can be restored. A session from another repository must not appear in the current project.
 
 Record failures with the exact versions, OS, step, visible error, and relevant OpenCode log. Do not claim the credentialed Architect flow passed from the contract test alone: it does not invoke a model, create prompts, or generate file changes.
+
+## Release checklist
+
+- [ ] Bump `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` to the same version; update `Cargo.lock` and the compatibility baseline.
+- [ ] Run the full CI and live OpenCode contract checks on Ubuntu, macOS, and Windows.
+- [ ] Run the Desktop packages workflow on the release commit; inspect four fresh-runner smoke tests, five packages, per-target hashes, and signing modes.
+- [ ] Run the credentialed release smoke above on clean macOS ARM and Intel, Linux x64, and Windows x64 machines. Record the OS version, result, and any platform gaps.
+- [ ] Configure Apple Developer ID signing and notarization secrets before claiming a trusted macOS build. Otherwise keep the ad-hoc development label. Configure Windows signing before claiming a trusted Windows build.
+- [ ] Create `vX.Y.Z` only after the checks above. The tag workflow verifies version parity and source revision, attests the packages, and publishes a development prerelease with checksums and a manifest.
+- [ ] Verify downloaded package hashes and GitHub attestations from a separate clean machine; install and launch each package there before directing users to the release.
+
+Current platform limits: installers are macOS ARM64/x64, Linux x64, and Windows x64. Linux packages are built on Ubuntu 22.04 for older glibc compatibility; other distributions still require a compatible graphical stack. Windows NSIS may download WebView2 during installation. The app relies on a separately installed OpenCode v2.0.19 and does not self-update. The hosted package smoke checks do not exercise credentialed model execution, so the manual release smoke remains required.

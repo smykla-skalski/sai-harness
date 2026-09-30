@@ -1,5 +1,8 @@
 node_modules
 dist
+release-output
+release-assets
+downloaded
 target
 .tauri
 src-tauri/gen
