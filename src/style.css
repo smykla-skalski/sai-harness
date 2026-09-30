@@ -116,28 +116,91 @@ button:disabled {
   flex: 1;
   overflow: auto;
 }
+.session-search {
+  width: calc(100% - 16px);
+  margin: 0 8px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 8px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+  font: inherit;
+  font-size: 12px;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  border-radius: 8px;
+}
+.session-row:hover,
+.session-row.active {
+  background: var(--shell-selected);
+}
 .session-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
   width: 100%;
-  padding: 11px 10px;
+  padding: 9px 5px 9px 10px;
   border: 0;
-  border-radius: 8px;
   color: var(--sui-muted);
   background: transparent;
   text-align: left;
-  font-size: 13px;
+  font-size: 12px;
 }
-.session-item span:last-child {
+.session-details {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.session-details strong,
+.session-details small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-item:hover,
-.session-item.active {
+.session-details strong {
+  font-size: 12px;
+}
+.session-details small {
+  font-size: 10px;
+}
+.session-row:hover .session-item,
+.session-row.active .session-item {
   color: var(--shell-selected-ink);
-  background: var(--shell-selected);
+}
+.session-action {
+  flex: 0 0 22px;
+  border: 0;
+  color: var(--shell-muted);
+  background: transparent;
+  font-size: 14px;
+}
+.session-action:hover {
+  color: var(--shell-selected-ink);
+}
+.session-edit {
+  display: flex;
+  width: 100%;
+  gap: 3px;
+  padding: 6px;
+}
+.session-edit input {
+  min-width: 0;
+  flex: 1;
+}
+.session-pages {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px;
+}
+.session-pages button {
+  border: 0;
+  color: var(--shell-selected-ink);
+  background: transparent;
+  font-size: 11px;
 }
 .session-symbol {
   font-size: 17px;

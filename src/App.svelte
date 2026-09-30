@@ -2,6 +2,8 @@
   import { onMount, tick } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { ask } from '@tauri-apps/plugin-dialog';
+  import { isSessionNotFoundError } from '@opencode/client';
   import { Badge, Button } from '@smykla-skalski/sui';
   import PlanPanel from './PlanPanel.svelte';
   import {
@@ -28,6 +30,15 @@
   let setupLoading = $state(false);
   let setupOpen = $state(true);
   let sessions = $state<SessionInfo[]>([]);
+  let selectedSession = $state<SessionInfo | null>(null);
+  let sessionSearch = $state('');
+  let sessionCursor = $state<string | undefined>(undefined);
+  let nextSessionCursor = $state<string | null>(null);
+  let previousSessionCursor = $state<string | null>(null);
+  let sessionLoading = $state(false);
+  let activeSessionIDs = $state<string[]>([]);
+  let editingSessionID = $state<string | null>(null);
+  let editedTitle = $state('');
   let sessionID = $state<string | null>(null);
   let messages = $state<SessionMessageInfo[]>([]);
   let snapshot = $state<PlanSnapshot>({ plan: null, questions: null });
@@ -46,8 +57,17 @@
   let hasConnected = false;
   let pendingPermissions = $state(0);
   let selection = 0;
+  let sessionRefresh = 0;
 
-  let currentSession = $derived(sessions.find((session) => session.id === sessionID));
+  let currentSession = $derived(
+    sessions.find((session) => session.id === sessionID) ??
+      (selectedSession?.id === sessionID ? selectedSession : undefined),
+  );
+  let visibleSessions = $derived(
+    selectedSession && !sessions.some((session) => session.id === selectedSession?.id)
+      ? [selectedSession, ...sessions]
+      : sessions,
+  );
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
   );
@@ -185,14 +205,15 @@
     if (!agentReady) return;
     const path = directory;
     await refreshSessions();
-    if (sessionID && !sessions.some((session) => session.id === sessionID)) {
-      sessionID = null;
-    }
+    if (current !== selection || path !== directory) return;
     const saved = localStorage.getItem(`sai-session:${path}`);
-    const initial =
-      sessionID ?? sessions.find((session) => session.id === saved)?.id ?? sessions[0]?.id;
+    const initial = sessionID ?? saved ?? sessions[0]?.id;
     if (initial && initial !== sessionID) {
-      await selectSession(initial);
+      if (!(await restoreSession(initial))) {
+        if (current !== selection || path !== directory) return;
+        localStorage.removeItem(`sai-session:${path}`);
+        if (sessions[0]) await selectSession(sessions[0].id);
+      }
     } else if (initial) {
       await refreshSession(initial);
     }
@@ -216,10 +237,16 @@
     if (!client) return;
     error = '';
     const current = ++selection;
+    ++sessionRefresh;
     agentReady = false;
     setupOpen = true;
     sessionID = null;
+    selectedSession = null;
     sessions = [];
+    sessionSearch = '';
+    sessionCursor = undefined;
+    nextSessionCursor = null;
+    previousSessionCursor = null;
     messages = [];
     running = false;
     pendingPermissions = 0;
@@ -228,9 +255,12 @@
     if (!agentReady) return;
     try {
       await refreshSessions();
+      if (current !== selection) return;
       const saved = localStorage.getItem(`sai-session:${directory}`);
-      const initial = sessions.find((session) => session.id === saved) ?? sessions[0];
-      if (initial) await selectSession(initial.id);
+      if (saved && (await restoreSession(saved))) return;
+      if (current !== selection) return;
+      if (saved) localStorage.removeItem(`sai-session:${directory}`);
+      if (sessions[0]) await selectSession(sessions[0].id);
     } catch (cause) {
       error = describe(cause);
     }
@@ -290,18 +320,98 @@
   async function refreshSessions() {
     if (!client || !directory) return;
     const path = directory;
-    const result = await client.session.list({ directory: path, limit: 50, order: 'desc' });
-    if (path !== directory) return;
-    sessions = result.data.filter(
-      (session) =>
-        (session.agent === 'architect' || session.metadata?.saiHarness === true) &&
-        !session.parentID,
-    );
+    const search = sessionSearch.trim();
+    const cursor = sessionCursor;
+    const current = ++sessionRefresh;
+    sessionLoading = true;
+    try {
+      const [result, active] = await Promise.all([
+        client.session.list({
+          directory: path,
+          limit: 25,
+          order: 'desc',
+          ...(search ? { search } : {}),
+          ...(cursor ? { cursor } : {}),
+        }),
+        client.session.active(),
+      ]);
+      if (
+        path !== directory ||
+        current !== sessionRefresh ||
+        search !== sessionSearch.trim() ||
+        cursor !== sessionCursor
+      )
+        return;
+      sessions = result.data.filter(
+        (session) =>
+          (session.agent === 'architect' || session.metadata?.saiHarness === true) &&
+          !session.parentID,
+      );
+      nextSessionCursor = result.cursor.next ?? null;
+      previousSessionCursor = result.cursor.previous ?? null;
+      activeSessionIDs = Object.keys(active);
+      running = !!sessionID && activeSessionIDs.includes(sessionID);
+      const selected = sessions.find((session) => session.id === sessionID);
+      if (selected) selectedSession = selected;
+      else if (sessionID) {
+        const requestedID = sessionID;
+        try {
+          const info = await client.session.get({ sessionID: requestedID });
+          if (path === directory && current === sessionRefresh && requestedID === sessionID)
+            selectedSession = info;
+        } catch (cause) {
+          if (
+            path === directory &&
+            current === sessionRefresh &&
+            requestedID === sessionID &&
+            isSessionNotFoundError(cause)
+          ) {
+            clearSelectedSession();
+          }
+        }
+      }
+    } finally {
+      if (current === sessionRefresh) sessionLoading = false;
+    }
+  }
+
+  async function restoreSession(id: string) {
+    if (!client) return false;
+    const path = directory;
+    const current = selection;
+    try {
+      const info = await client.session.get({ sessionID: id });
+      if (
+        current !== selection ||
+        path !== directory ||
+        info.location.directory !== path ||
+        info.parentID
+      )
+        return false;
+      if (info.agent !== 'architect' && info.metadata?.saiHarness !== true) return false;
+      selectedSession = info;
+      await selectSession(id);
+      return true;
+    } catch (cause) {
+      if (!isSessionNotFoundError(cause)) error = describe(cause);
+      return false;
+    }
+  }
+
+  function clearSelectedSession() {
+    sessionID = null;
+    selectedSession = null;
+    messages = [];
+    snapshot = { plan: null, questions: null };
+    running = false;
+    pendingPermissions = 0;
+    localStorage.removeItem(`sai-session:${directory}`);
   }
 
   async function selectSession(id: string) {
     const current = ++selection;
     sessionID = id;
+    selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
     messages = [];
     running = false;
     pendingPermissions = 0;
@@ -311,16 +421,79 @@
     await refreshSession(id, current);
   }
 
-  function newPlan() {
-    ++selection;
-    sessionID = null;
-    messages = [];
-    running = false;
-    pendingPermissions = 0;
-    snapshot = { plan: null, questions: null };
-    draft = '';
-    error = '';
-    localStorage.removeItem(`sai-session:${directory}`);
+  async function newPlan() {
+    if (!client || !directory || !agentReady) return;
+    try {
+      const session = await client.session.create({
+        agent: 'architect',
+        location: { directory },
+        metadata: { saiHarness: true },
+        title: 'New plan',
+      });
+      sessionSearch = '';
+      sessionCursor = undefined;
+      await refreshSessions();
+      selectedSession = session;
+      await selectSession(session.id);
+    } catch (cause) {
+      error = describe(cause);
+    }
+  }
+
+  function changeSearch() {
+    sessionCursor = undefined;
+    void refreshSessions().catch((cause) => {
+      error = describe(cause);
+    });
+  }
+
+  function changePage(cursor: string | null) {
+    if (!cursor) return;
+    sessionCursor = cursor;
+    void refreshSessions().catch((cause) => {
+      error = describe(cause);
+    });
+  }
+
+  function startRename(session: SessionInfo) {
+    editingSessionID = session.id;
+    editedTitle = session.title ?? '';
+  }
+
+  async function saveRename() {
+    if (!client || !editingSessionID) return;
+    const title = editedTitle.trim();
+    if (!title) {
+      error = 'Enter a session title.';
+      return;
+    }
+    try {
+      await client.session.update({ sessionID: editingSessionID, title });
+      editingSessionID = null;
+      await refreshSessions();
+    } catch (cause) {
+      error = describe(cause);
+    }
+  }
+
+  async function removeSession(session: SessionInfo) {
+    if (!client) return;
+    const confirmed = await ask(
+      `Delete “${session.title ?? 'Untitled plan'}”? This cannot be undone.`,
+      {
+        title: 'Delete plan session',
+        kind: 'warning',
+      },
+    );
+    if (!confirmed) return;
+    try {
+      await client.session.remove({ sessionID: session.id });
+      if (session.id === sessionID) clearSelectedSession();
+      await refreshSessions();
+      if (!sessions.length && previousSessionCursor) changePage(previousSessionCursor);
+    } catch (cause) {
+      error = describe(cause);
+    }
   }
 
   async function refreshSession(id = sessionID, current = selection) {
@@ -356,7 +529,18 @@
             error = describe(cause);
           });
         }
-        if (event.type === 'session.created' || event.type === 'session.renamed')
+        if (
+          [
+            'session.created',
+            'session.renamed',
+            'session.deleted',
+            'session.agent.selected',
+            'session.execution.started',
+            'session.execution.succeeded',
+            'session.execution.failed',
+            'session.execution.interrupted',
+          ].includes(event.type)
+        )
           void refreshSessions().catch((cause) => {
             error = describe(cause);
           });
@@ -406,7 +590,14 @@
         });
         id = session.id;
         await refreshSessions();
+        selectedSession = session;
         await selectSession(id);
+      } else if (currentSession?.title === 'New plan') {
+        await client.session.update({
+          sessionID: id,
+          title: text.length > 60 ? `${text.slice(0, 57)}…` : text,
+        });
+        await refreshSessions();
       }
       running = true;
       await client.session.prompt({ sessionID: id, text });
@@ -471,18 +662,68 @@
         aria-label="New plan">＋</Button
       >
     </div>
+    {#if directory}<input
+        class="session-search"
+        aria-label="Search plan sessions"
+        placeholder="Search plans"
+        bind:value={sessionSearch}
+        oninput={changeSearch}
+      />{/if}
     <nav aria-label="Plan sessions">
-      {#each sessions as session (session.id)}<button
+      {#each visibleSessions as session (session.id)}<div
           class:active={session.id === sessionID}
-          class="session-item"
-          onclick={() => selectSession(session.id)}
-          title={session.title ?? 'Untitled plan'}
-          ><span class="session-symbol">◇</span><span>{session.title ?? 'Untitled plan'}</span
-          ></button
-        >{:else}<p class="session-empty">
-          {directory ? 'No plans yet' : 'Choose a repository to begin'}
+          class="session-row"
+        >
+          {#if editingSessionID === session.id}<div class="session-edit">
+              <input
+                aria-label="Session title"
+                bind:value={editedTitle}
+                onkeydown={(event) => {
+                  if (event.key === 'Enter') void saveRename();
+                  if (event.key === 'Escape') editingSessionID = null;
+                }}
+              />
+              <button aria-label="Save title" onclick={saveRename}>✓</button>
+              <button aria-label="Cancel rename" onclick={() => (editingSessionID = null)}>×</button
+              >
+            </div>{:else}<button
+              class="session-item"
+              onclick={() => selectSession(session.id)}
+              title={session.title ?? 'Untitled plan'}
+              ><span class="session-symbol">◇</span><span class="session-details"
+                ><strong>{session.title ?? 'Untitled plan'}</strong><small
+                  >{session.agent ?? 'Unknown'} · {activeSessionIDs.includes(session.id)
+                    ? 'Running'
+                    : (session.outcome ?? 'Idle')}</small
+                ><small>Updated {new Date(session.time.updated).toLocaleString()}</small></span
+              ></button
+            ><button
+              class="session-action"
+              aria-label={`Rename ${session.title ?? 'session'}`}
+              onclick={() => startRename(session)}>✎</button
+            ><button
+              class="session-action"
+              aria-label={`Delete ${session.title ?? 'session'}`}
+              onclick={() => removeSession(session)}>×</button
+            >{/if}
+        </div>{:else}<p class="session-empty">
+          {sessionLoading
+            ? 'Loading plans…'
+            : directory
+              ? 'No plans found'
+              : 'Choose a repository to begin'}
         </p>{/each}
     </nav>
+    {#if directory && (previousSessionCursor || nextSessionCursor)}<div class="session-pages">
+        <button
+          disabled={!previousSessionCursor || sessionLoading}
+          onclick={() => changePage(previousSessionCursor)}>Previous</button
+        >
+        <button
+          disabled={!nextSessionCursor || sessionLoading}
+          onclick={() => changePage(nextSessionCursor)}>Next</button
+        >
+      </div>{/if}
     <div class="sidebar-footer">
       <span class:connected={runtimeState === 'connected'} class="status-dot"></span><span
         >OpenCode {runtimeState}</span
