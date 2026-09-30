@@ -21,25 +21,27 @@ struct OwnedRuntime {
     binary: OsString,
 }
 
+fn stop_child(child: &mut Child, binary: &Path) {
+    let _ = binary;
+    #[cfg(windows)]
+    if binary.extension().is_some_and(|extension| {
+        let extension = extension.to_string_lossy();
+        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+    }) && child.try_wait().ok().flatten().is_none()
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 impl Drop for OwnedRuntime {
     fn drop(&mut self) {
-        #[cfg(windows)]
-        if Path::new(&self.binary)
-            .extension()
-            .is_some_and(|extension| {
-                let extension = extension.to_string_lossy();
-                extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-            })
-            && self.child.try_wait().ok().flatten().is_none()
-        {
-            let _ = Command::new("taskkill")
-                .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        stop_child(&mut self.child, Path::new(&self.binary));
     }
 }
 
@@ -244,8 +246,7 @@ fn start_runtime(
         Ok(info) => info,
         Err(_) => {
             let exit = child.try_wait().ok().flatten();
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_child(&mut child, Path::new(&binary));
             return Err(match exit {
                 Some(status) => format!(
                     "OpenCode exited before becoming ready ({status}). Check its configuration and retry."
@@ -268,8 +269,7 @@ fn start_runtime(
         std::thread::sleep(Duration::from_millis(200));
     }
     if !ready {
-        let _ = child.kill();
-        let _ = child.wait();
+        stop_child(&mut child, Path::new(&binary));
         return Err(
             "OpenCode did not respond with a compatible v2 API. Check its configuration and retry."
                 .to_string(),
