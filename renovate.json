@@ -13,7 +13,11 @@
     "security:openssf-scorecard",
     "group:linters"
   ],
-  "ignorePaths": ["**/tmp/**", ".github/workflows/smyklot-pr-commands.yml", ".github/workflows/smyklot-poll.yml"],
+  "ignorePaths": [
+    "**/tmp/**",
+    ".github/workflows/smyklot-pr-commands.yml",
+    ".github/workflows/smyklot-poll.yml"
+  ],
   "osvVulnerabilityAlerts": true,
   "gitIgnoredAuthors": ["205507218+smyklot[bot]@users.noreply.github.com"],
   "internalChecksFilter": "strict",
@@ -63,5 +67,5 @@
       "matchPackageNames": ["smykla-skalski/smyklot"]
     }
   ],
-  "vulnerabilityAlerts": {"automerge": false}
+  "vulnerabilityAlerts": { "automerge": false }
 }

@@ -8,12 +8,12 @@
       "code_block_line_length": 200,
       "code_blocks": true,
       "headings": false,
-      "tables": false
+      "tables": false,
     },
     "MD022": true,
-    "MD031": true
+    "MD031": true,
   },
   "globs": ["**/*.md"],
   "ignores": ["CHANGELOG.md"],
-  "gitignore": true
+  "gitignore": true,
 }
