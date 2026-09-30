@@ -965,6 +965,7 @@
         {snapshot}
         client={connecting ? null : client}
         {directory}
+        {sessionID}
         {dark}
         onchanged={() => refreshSession()}
       />
