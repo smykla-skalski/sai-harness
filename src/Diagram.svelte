@@ -2,9 +2,10 @@
   interface Props {
     source: string;
     dark: boolean;
+    title?: string;
   }
 
-  let { source, dark }: Props = $props();
+  let { source, dark, title = 'Plan diagram' }: Props = $props();
   let imageUrl = $state('');
   let error = $state('');
   let generation = 0;
@@ -34,15 +35,18 @@
   });
 </script>
 
-<div class="diagram" aria-label="Plan diagram">
+<div class="diagram" aria-label={title}>
   {#if imageUrl}
-    <img src={imageUrl} alt="Plan diagram" />
+    <img src={imageUrl} alt={title} />
   {:else if error}
     <p>{error}</p>
-    <pre>{source}</pre>
   {:else}
     <p>Rendering diagram…</p>
   {/if}
+  <details class="diagram-source" open={!!error}>
+    <summary>View diagram source</summary>
+    <pre>{source}</pre>
+  </details>
 </div>
 
 <style>
@@ -68,5 +72,12 @@
     overflow: auto;
     font-size: 12px;
     white-space: pre-wrap;
+  }
+  .diagram-source {
+    margin-top: 12px;
+    font-size: 12px;
+  }
+  summary {
+    cursor: pointer;
   }
 </style>

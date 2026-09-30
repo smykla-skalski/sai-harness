@@ -8,7 +8,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "lint": "oxlint --deny-warnings . && eslint . && prettier --check .",
     "format": "prettier --write .",
-    "test": "node --test test/question-drafts.test.ts",
+    "test": "node --test test/*.test.ts",
     "build": "npm run check && vite build",
     "build:e2e": "tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
     "test:e2e": "wdio run wdio.conf.ts",

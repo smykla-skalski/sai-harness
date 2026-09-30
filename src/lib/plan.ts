@@ -8,16 +8,38 @@ const PlanStepSchema = z.object({
   rationale: z.string().optional(),
   files: z.array(z.string()),
   risk: z.enum(['low', 'medium', 'high']),
+  dependsOn: z.array(z.string()).optional(),
   diagram: z.string().optional(),
   needsYou: z.string().optional(),
-  status: z.string(),
+  status: z.enum([
+    'proposed',
+    'approved',
+    'rejected',
+    'revise',
+    'in_progress',
+    'done',
+    'blocked',
+    'skipped',
+  ]),
   comment: z.string().optional(),
+  note: z.string().optional(),
+  origin: z.enum(['plan', 'amendment']).default('plan'),
+  touched: z.array(z.string()).default([]),
+  check: z
+    .object({
+      outcome: z.enum(['pass', 'fail', 'none']),
+      summary: z.string(),
+      command: z.string().optional(),
+    })
+    .optional(),
 });
 
 const PlanSchema = z.object({
   title: z.string(),
   summary: z.string(),
   diagram: z.string().optional(),
+  sequence: z.string().optional(),
+  diagrams: z.array(z.object({ title: z.string(), source: z.string() })).optional(),
   alternatives: z
     .array(
       z.object({
@@ -32,6 +54,9 @@ const PlanSchema = z.object({
   sessionID: z.string(),
   version: z.number(),
   state: z.enum(['review', 'executing', 'done']),
+  reviewReason: z.enum(['plan', 'amendment', 'checkpoint']).default('plan'),
+  outside: z.array(z.string()).default([]),
+  createdAt: z.number(),
 });
 
 const PlanQuestionSchema = z.object({
@@ -67,6 +92,44 @@ export interface PlanDecision {
   stepID: string;
   verdict?: 'approve' | 'reject' | 'revise';
   comment?: string;
+  edit?: { title?: string; detail?: string };
+}
+
+export function canExecutePlan(plan: Plan, decisions: Record<string, PlanDecision>): boolean {
+  const status = (step: PlanStep) => {
+    if (step.status === 'done' || step.status === 'skipped') return step.status;
+    const decision = decisions[step.id];
+    return decision?.verdict === 'approve' || (decision?.edit && !decision.verdict)
+      ? 'approved'
+      : decision?.verdict === 'reject' || decision?.verdict === 'revise'
+        ? decision.verdict
+        : step.status;
+  };
+  return plan.steps.some((step) => {
+    const next = status(step);
+    return (
+      next === 'approved' ||
+      next === 'in_progress' ||
+      next === 'blocked' ||
+      (next === 'done' && step.check?.outcome === 'fail')
+    );
+  });
+}
+
+export function skippedSteps(plan: Plan, decisions: Record<string, PlanDecision>): string[] {
+  return plan.steps
+    .filter((step) => {
+      if (step.status === 'done' || step.status === 'skipped') return false;
+      const decision = decisions[step.id];
+      const accepted =
+        decision?.verdict === 'approve' ||
+        (!!decision?.edit && !decision.verdict) ||
+        (!decision?.verdict &&
+          !decision?.edit &&
+          ['approved', 'in_progress', 'blocked'].includes(step.status));
+      return !accepted;
+    })
+    .map((step) => step.id);
 }
 
 export function snapshotAnswers(answers: Record<string, string[]>): Record<string, string[]> {
@@ -109,6 +172,26 @@ export async function answerQuestions(
   if (!result.ok) throw new Error(result.error ?? 'The answers were not accepted.');
 }
 
+export function reviewInput(
+  plan: Plan,
+  action: 'revise' | 'execute',
+  decisions: PlanDecision[],
+  note?: string,
+): JsonValue {
+  return {
+    sessionID: plan.sessionID,
+    version: plan.version,
+    action,
+    decisions: decisions.map((decision) => ({
+      stepID: decision.stepID,
+      ...(decision.verdict ? { verdict: decision.verdict } : {}),
+      ...(decision.comment === undefined ? {} : { comment: decision.comment }),
+      ...(decision.edit === undefined ? {} : { edit: decision.edit }),
+    })),
+    ...(note === undefined ? {} : { note }),
+  };
+}
+
 export async function reviewPlan(
   client: OpenCodeClient,
   directory: string,
@@ -117,17 +200,8 @@ export async function reviewPlan(
   decisions: PlanDecision[],
   note?: string,
 ): Promise<void> {
-  const input: JsonValue = {
-    sessionID: plan.sessionID,
-    version: plan.version,
-    action,
-    decisions: decisions.map((decision) => ({
-      stepID: decision.stepID,
-      ...(decision.verdict ? { verdict: decision.verdict } : {}),
-      ...(decision.comment === undefined ? {} : { comment: decision.comment }),
-    })),
-    ...(note === undefined ? {} : { note }),
-  };
-  const result = OutcomeSchema.parse(await call(client, directory, 'review', input));
+  const result = OutcomeSchema.parse(
+    await call(client, directory, 'review', reviewInput(plan, action, decisions, note)),
+  );
   if (!result.ok) throw new Error(result.error ?? 'The review was not accepted.');
 }

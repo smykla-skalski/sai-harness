@@ -3,7 +3,10 @@
   import Diagram from './Diagram.svelte';
   import {
     answerQuestions,
+    canExecutePlan,
+    getPlan,
     reviewPlan,
+    skippedSteps,
     snapshotAnswers,
     type PlanDecision,
     type PlanQuestion,
@@ -31,6 +34,9 @@
     null,
   );
   let note = $state('');
+  let editing = $state<Record<string, boolean>>({});
+  let reviewErrors = $state<Record<string, string>>({});
+  let confirming = $state(false);
   let pending = $state(false);
   let error = $state('');
   let currentPlan = '';
@@ -40,29 +46,70 @@
 
   let plan = $derived(snapshot.plan);
   let questions = $derived(snapshot.questions);
-  let canExecute = $derived(
-    !!plan &&
-      plan.steps.every((step) =>
-        decisions[step.id]?.verdict
-          ? ['approve', 'reject'].includes(decisions[step.id].verdict ?? '')
-          : ['approved', 'in_progress', 'done', 'blocked', 'skipped', 'rejected'].includes(
-              step.status,
-            ),
-      ) &&
-      plan.steps.some(
-        (step) =>
-          decisions[step.id]?.verdict === 'approve' ||
-          (decisions[step.id]?.verdict !== 'reject' &&
-            ['approved', 'in_progress', 'blocked'].includes(step.status)),
-      ),
-  );
+  let canExecute = $derived(!!plan && canExecutePlan(plan, decisions));
+  let skipped = $derived(plan ? skippedSteps(plan, decisions) : []);
+
+  function planDraftKey(key: string) {
+    return `sai-plan-draft:${key}`;
+  }
+
+  function savePlanDraft() {
+    if (!currentPlan) return;
+    localStorage.setItem(
+      planDraftKey(currentPlan),
+      JSON.stringify({
+        decisions: Object.fromEntries(
+          Object.entries(decisions).map(([id, decision]) => [
+            id,
+            {
+              ...decision,
+              ...(decision.edit ? { edit: { ...decision.edit } } : {}),
+            },
+          ]),
+        ),
+        note,
+      }),
+    );
+  }
+
+  function loadPlanDraft(key: string) {
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(planDraftKey(key)) ?? '{}');
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const saved = raw as { decisions?: Record<string, PlanDecision>; note?: string };
+      if (
+        saved.decisions &&
+        typeof saved.decisions === 'object' &&
+        !Array.isArray(saved.decisions)
+      ) {
+        decisions = Object.fromEntries(
+          Object.entries(saved.decisions).filter(
+            ([, decision]) =>
+              decision && typeof decision === 'object' && typeof decision.stepID === 'string',
+          ),
+        );
+        editing = Object.fromEntries(
+          Object.entries(decisions)
+            .filter(([, decision]) => !!decision.edit)
+            .map(([id]) => [id, true]),
+        );
+      }
+      if (typeof saved.note === 'string') note = saved.note;
+    } catch {
+      /* Ignore invalid local drafts. */
+    }
+  }
 
   $effect(() => {
-    const key = plan ? `${plan.sessionID}:${plan.version}` : '';
+    const key = plan ? `${scopeKey(directory, plan.sessionID)}:${plan.version}` : '';
     if (key !== currentPlan) {
       currentPlan = key;
       decisions = {};
       note = '';
+      editing = {};
+      reviewErrors = {};
+      confirming = false;
+      if (key) loadPlanDraft(key);
     }
   });
 
@@ -140,11 +187,52 @@
   });
 
   function setDecision(stepID: string, verdict: PlanDecision['verdict']) {
-    decisions[stepID] = { ...decisions[stepID], stepID, verdict };
+    const previous = decisions[stepID];
+    decisions[stepID] = {
+      ...previous,
+      stepID,
+      verdict,
+      ...(verdict === 'approve' ? {} : { edit: undefined }),
+    };
+    if (verdict !== 'approve') editing[stepID] = false;
+    confirming = false;
+    savePlanDraft();
   }
 
   function setComment(stepID: string, comment: string) {
     decisions[stepID] = { ...decisions[stepID], stepID, comment };
+    reviewErrors[`${stepID}:comment`] = '';
+    savePlanDraft();
+  }
+
+  function setEdit(stepID: string, field: 'title' | 'detail', value: string) {
+    decisions[stepID] = {
+      ...decisions[stepID],
+      stepID,
+      verdict: 'approve',
+      edit: { ...decisions[stepID]?.edit, [field]: value },
+    };
+    confirming = false;
+    reviewErrors[`${stepID}:${field}`] = '';
+    savePlanDraft();
+  }
+
+  function validateReview(): boolean {
+    const errors: Record<string, string> = {};
+    for (const decision of Object.values(decisions)) {
+      if (
+        decision.edit?.title !== undefined &&
+        (!decision.edit.title.trim() || decision.edit.title.length > 120)
+      )
+        errors[`${decision.stepID}:title`] = 'Enter a title of 1–120 characters.';
+      if (decision.edit?.detail !== undefined && decision.edit.detail.length > 4000)
+        errors[`${decision.stepID}:detail`] = 'Keep the detail within 4,000 characters.';
+      if (decision.comment && decision.comment.length > 4000)
+        errors[`${decision.stepID}:comment`] = 'Keep the comment within 4,000 characters.';
+    }
+    if (note.length > 4000) errors.note = 'Keep general feedback within 4,000 characters.';
+    reviewErrors = errors;
+    return Object.keys(errors).length === 0;
   }
 
   function setAnswer(id: string, value: string, multi: boolean) {
@@ -244,21 +332,43 @@
   }
 
   async function sendReview(action: 'revise' | 'execute') {
-    if (!client || !plan) return;
+    if (!client || !plan || pending || (action === 'execute' && !canExecute)) return;
+    if (!validateReview()) return;
+    const submitted = plan;
+    const key = currentPlan;
+    const path = directory;
+    const draft: PlanDecision[] = [];
+    for (const decision of Object.values(decisions))
+      draft.push({ ...decision, ...(decision.edit ? { edit: { ...decision.edit } } : {}) });
+    const submittedNote = note.trim() || undefined;
     pending = true;
     error = '';
     try {
-      await reviewPlan(
-        client,
-        directory,
-        plan,
-        action,
-        Object.values(decisions),
-        note.trim() || undefined,
-      );
-      await onchanged();
+      const latest = await getPlan(client, path, submitted.sessionID);
+      if (currentPlan !== key) return;
+      if (latest.plan?.version !== submitted.version || latest.plan.state !== 'review') {
+        error = `Plan v${submitted.version} changed. Your review draft is saved; check the latest version.`;
+        await onchanged().catch(() => {});
+        return;
+      }
+      await reviewPlan(client, path, submitted, action, draft, submittedNote);
+      localStorage.removeItem(planDraftKey(key));
+      if (currentPlan === key) {
+        decisions = {};
+        note = '';
+        confirming = false;
+      }
+      try {
+        await onchanged();
+      } catch (cause) {
+        if (currentPlan === key)
+          error = `Review sent, but refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      }
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (currentPlan === key) error = message;
+      if (message.includes('plan is at v') || message.includes('not awaiting review'))
+        await onchanged().catch(() => {});
     } finally {
       pending = false;
     }
@@ -352,8 +462,25 @@
   {:else if plan}
     <div class="panel-scroll">
       <h3>{plan.title}</h3>
+      {#if plan.state === 'review'}<p class="review-context">
+          {plan.reviewReason === 'checkpoint'
+            ? 'Checkpoint review: inspect completed work and decide whether to continue.'
+            : plan.reviewReason === 'amendment'
+              ? 'Plan amendment: review new steps and changed file access.'
+              : 'Plan proposal: review the steps before execution.'}
+        </p>{/if}
       <p class="summary">{plan.summary}</p>
-      {#if plan.diagram}<Diagram source={plan.diagram} {dark} />{/if}
+      {#if plan.diagram}<Diagram source={plan.diagram} title="Plan overview" {dark} />{/if}
+      {#if plan.sequence}<h4 class="diagram-heading">Runtime sequence</h4>
+        <Diagram source={plan.sequence} title="Runtime sequence" {dark} />{/if}
+      {#each plan.diagrams ?? [] as extra (extra.title)}
+        <h4 class="diagram-heading">{extra.title}</h4>
+        <Diagram source={extra.source} title={extra.title} {dark} />
+      {/each}
+      {#if plan.outside.length}<p class="outside-files">
+          <strong>Files outside approved paths:</strong>
+          {plan.outside.join(' · ')}
+        </p>{/if}
 
       {#if plan.alternatives?.length}
         <div class="subheading">Approaches</div>
@@ -361,13 +488,17 @@
           <div class="alternative">
             <strong>{alternative.name}</strong>{#if alternative.chosen}<Badge tone="success"
                 >Chosen</Badge
-              >{/if}{#if alternative.pros.length}<p>
+              >{/if}{#if alternative.pros.length}<div>
                 <b>Pros</b>
-                {alternative.pros.join(' · ')}
-              </p>{/if}{#if alternative.cons.length}<p>
+                <ul>
+                  {#each alternative.pros as pro, proIndex (proIndex)}<li>{pro}</li>{/each}
+                </ul>
+              </div>{/if}{#if alternative.cons.length}<div>
                 <b>Cons</b>
-                {alternative.cons.join(' · ')}
-              </p>{/if}
+                <ul>
+                  {#each alternative.cons as con, conIndex (conIndex)}<li>{con}</li>{/each}
+                </ul>
+              </div>{/if}
           </div>
         {/each}
       {/if}
@@ -377,7 +508,7 @@
         <section class="step-card">
           <div class="step-head">
             <span class="step-number">{String(index + 1).padStart(2, '0')}</span>
-            <h4>{step.title}</h4>
+            <h4>{decisions[step.id]?.edit?.title ?? step.title}</h4>
             <Badge
               tone={step.risk === 'high'
                 ? 'danger'
@@ -392,36 +523,101 @@
                   : 'neutral'}>{step.status}</Badge
             >
           </div>
-          <p>{step.detail}</p>
-          {#if step.rationale}<p class="rationale">Why: {step.rationale}</p>{/if}
+          {#if step.origin === 'amendment'}<p class="step-flag">Added during execution</p>{/if}
+          {#if decisions[step.id]?.edit}<p class="step-flag">Edited in your draft</p>{/if}
           {#if step.needsYou}<p class="decision-prompt">Decision: {step.needsYou}</p>{/if}
-          {#if step.diagram}<Diagram source={step.diagram} {dark} />{/if}
-          {#if step.files.length}<p class="files">{step.files.join(' · ')}</p>{/if}
+          <details
+            open={!!step.needsYou ||
+              step.origin === 'amendment' ||
+              step.status === 'blocked' ||
+              step.check?.outcome === 'fail'}
+          >
+            <summary>Step details</summary>
+            <p>{decisions[step.id]?.edit?.detail ?? step.detail}</p>
+            {#if step.rationale}<p>Why: {step.rationale}</p>{/if}
+            {#if step.dependsOn?.length}<p>After: {step.dependsOn.join(', ')}</p>{/if}
+            {#if step.files.length}<p class="files">Files: {step.files.join(' · ')}</p>{/if}
+            {#if step.touched.length}<p class="files">Touched: {step.touched.join(' · ')}</p>{/if}
+            {#if step.note}<p>Progress: {step.note}</p>{/if}
+            {#if step.check}<p>
+                Check ({step.check.outcome}): {step.check.summary}{#if step.check.command}<code>
+                    {step.check.command}</code
+                  >{/if}
+              </p>{/if}
+            {#if step.diagram}<Diagram
+                source={step.diagram}
+                title={`${step.title} diagram`}
+                {dark}
+              />{/if}
+          </details>
           {#if plan.state === 'review'}
-            <div class="decision-buttons">
-              <Button
-                size="sm"
-                variant={decisions[step.id]?.verdict === 'approve' ? 'primary' : 'secondary'}
-                onclick={() => setDecision(step.id, 'approve')}>Approve</Button
+            {#if step.status !== 'done' && step.status !== 'skipped'}<div class="decision-buttons">
+                <Button
+                  size="sm"
+                  variant={decisions[step.id]?.verdict === 'approve' ? 'primary' : 'secondary'}
+                  disabled={pending}
+                  onclick={() => setDecision(step.id, 'approve')}>Approve</Button
+                >
+                <Button
+                  size="sm"
+                  variant={decisions[step.id]?.verdict === 'revise' ? 'primary' : 'secondary'}
+                  disabled={pending}
+                  onclick={() => setDecision(step.id, 'revise')}>Revise</Button
+                >
+                <Button
+                  size="sm"
+                  variant={decisions[step.id]?.verdict === 'reject' ? 'danger' : 'secondary'}
+                  disabled={pending}
+                  onclick={() => setDecision(step.id, 'reject')}>Reject</Button
+                >
+                <Button
+                  size="sm"
+                  variant={editing[step.id] ? 'primary' : 'secondary'}
+                  disabled={pending}
+                  onclick={() => {
+                    editing[step.id] = !editing[step.id];
+                  }}>Edit step</Button
+                >
+              </div>{/if}
+            {#if editing[step.id] && step.status !== 'done' && step.status !== 'skipped'}
+              <label class="edit-field"
+                >Title<input
+                  value={decisions[step.id]?.edit?.title ?? step.title}
+                  maxlength="120"
+                  aria-invalid={!!reviewErrors[`${step.id}:title`]}
+                  disabled={pending}
+                  oninput={(event) => setEdit(step.id, 'title', event.currentTarget.value)}
+                /></label
               >
-              <Button
-                size="sm"
-                variant={decisions[step.id]?.verdict === 'revise' ? 'primary' : 'secondary'}
-                onclick={() => setDecision(step.id, 'revise')}>Revise</Button
+              {#if reviewErrors[`${step.id}:title`]}<p class="question-error" role="alert">
+                  {reviewErrors[`${step.id}:title`]}
+                </p>{/if}
+              <label class="edit-field"
+                >Detail<textarea
+                  rows="4"
+                  value={decisions[step.id]?.edit?.detail ?? step.detail}
+                  maxlength="4000"
+                  aria-invalid={!!reviewErrors[`${step.id}:detail`]}
+                  disabled={pending}
+                  oninput={(event) => setEdit(step.id, 'detail', event.currentTarget.value)}
+                ></textarea></label
               >
-              <Button
-                size="sm"
-                variant={decisions[step.id]?.verdict === 'reject' ? 'danger' : 'secondary'}
-                onclick={() => setDecision(step.id, 'reject')}>Reject</Button
-              >
-            </div>
-            {#if decisions[step.id]?.verdict === 'revise' || decisions[step.id]?.verdict === 'reject'}
-              <textarea
-                rows="2"
-                placeholder="What should change?"
-                value={decisions[step.id]?.comment ?? ''}
-                oninput={(event) => setComment(step.id, event.currentTarget.value)}></textarea>
+              {#if reviewErrors[`${step.id}:detail`]}<p class="question-error" role="alert">
+                  {reviewErrors[`${step.id}:detail`]}
+                </p>{/if}
             {/if}
+            <textarea
+              rows="2"
+              placeholder="Comment on this step (optional)"
+              aria-label={`Comment on ${step.title}`}
+              value={decisions[step.id]?.comment ?? step.comment ?? ''}
+              maxlength="4000"
+              aria-invalid={!!reviewErrors[`${step.id}:comment`]}
+              disabled={pending}
+              oninput={(event) => setComment(step.id, event.currentTarget.value)}></textarea>
+            {#if reviewErrors[`${step.id}:comment`]}<p class="question-error" role="alert">
+                {reviewErrors[`${step.id}:comment`]}
+              </p>{/if}
           {/if}
         </section>
       {/each}
@@ -429,15 +625,37 @@
           class="review-note"
           rows="2"
           placeholder="General feedback for the architect (optional)"
-          bind:value={note}></textarea>{/if}
+          maxlength="4000"
+          aria-invalid={!!reviewErrors.note}
+          disabled={pending}
+          bind:value={note}
+          oninput={() => {
+            reviewErrors.note = '';
+            savePlanDraft();
+          }}></textarea>{/if}
+      {#if reviewErrors.note}<p class="question-error" role="alert">{reviewErrors.note}</p>{/if}
     </div>
     {#if plan.state === 'review'}
+      {#if confirming}<div class="execute-confirm" role="status">
+          Continue with approved steps? {skipped.length} step{skipped.length === 1 ? '' : 's'} will not
+          run{skipped.length ? `: ${skipped.join(', ')}` : ''}.
+        </div>{/if}
       <div class="panel-actions split">
-        <Button variant="secondary" onclick={() => sendReview('revise')} loading={pending}
-          >Request changes</Button
+        <Button
+          variant="secondary"
+          onclick={() => sendReview('revise')}
+          disabled={pending}
+          loading={pending}>Request changes</Button
         >
-        <Button onclick={() => sendReview('execute')} disabled={!canExecute} loading={pending}
-          >Execute plan</Button
+        <Button
+          onclick={() => (confirming ? sendReview('execute') : (confirming = true))}
+          disabled={!canExecute || pending}
+          loading={pending}
+          >{confirming
+            ? 'Confirm execution'
+            : plan.reviewReason === 'checkpoint'
+              ? 'Continue execution'
+              : 'Execute approved steps'}</Button
         >
       </div>
     {/if}
@@ -502,6 +720,19 @@
     line-height: 1.55;
     white-space: pre-wrap;
   }
+  .review-context,
+  .outside-files,
+  .execute-confirm {
+    color: var(--sui-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .execute-confirm {
+    padding: 12px 20px 0;
+  }
+  .diagram-heading {
+    margin: 18px 0 8px;
+  }
   .subheading {
     display: flex;
     justify-content: space-between;
@@ -520,9 +751,16 @@
   .alternative :global(.sui-badge) {
     margin-left: 8px;
   }
-  .alternative p {
+  .alternative div {
     margin: 5px 0 0;
     color: var(--sui-muted);
+  }
+  .alternative ul {
+    margin: 4px 0 8px;
+    padding-left: 20px;
+  }
+  .alternative li {
+    margin: 3px 0;
   }
   .step-card,
   .question-block {
@@ -548,6 +786,38 @@
     font-size: 13px;
     line-height: 1.5;
     white-space: pre-wrap;
+  }
+  .step-card details {
+    margin-top: 10px;
+    color: var(--sui-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .step-card details p {
+    white-space: pre-wrap;
+  }
+  .step-card summary {
+    cursor: pointer;
+  }
+  .step-card .step-flag {
+    color: var(--sui-primary);
+    font-weight: 600;
+  }
+  .edit-field {
+    display: block;
+    margin-top: 12px;
+    font-size: 12px;
+  }
+  .edit-field input {
+    display: block;
+    width: 100%;
+    margin-top: 5px;
+    padding: 10px 12px;
+    border: 1px solid var(--sui-border);
+    border-radius: 8px;
+    color: var(--sui-foreground);
+    background: var(--sui-surface);
+    font: 13px/1.5 var(--sui-font);
   }
   .step-card .decision-prompt {
     color: var(--sui-foreground);
