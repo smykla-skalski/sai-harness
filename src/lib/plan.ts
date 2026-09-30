@@ -105,7 +105,7 @@ function escapePattern(value: string) {
   return value.replaceAll(/[.+^${}()|[\]\\]/g, '\\$&');
 }
 
-function coveredFile(file: string, approved: string[], directory: string): boolean {
+export function coveredFile(file: string, approved: string[], directory: string): boolean {
   const target = relativeFile(file, directory);
   if (target.startsWith('../')) return false;
   return approved.some((entry) => {

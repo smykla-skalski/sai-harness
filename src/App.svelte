@@ -5,11 +5,12 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
   import { isSessionNotFoundError } from '@opencode/client';
-  import type { FormInfo, PermissionRequest } from '@opencode/client';
+  import type { FileDiffInfo, FormInfo, PermissionRequest } from '@opencode/client';
   import type { ModelRef } from '@opencode/client';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
   import PlanPanel from './PlanPanel.svelte';
+  import DiffPanel from './DiffPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import {
     connect,
@@ -21,6 +22,7 @@
   import { getPlan, type PlanSnapshot } from './lib/plan';
   import { mergeMessages, nearBottom } from './lib/timeline';
   import { fileUri } from './lib/attachments';
+  import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
   import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
@@ -66,6 +68,12 @@
   >();
   let messageGeneration = new SvelteMap<string, number>();
   let snapshot = $state<PlanSnapshot>({ plan: null, questions: null });
+  let diffs = $state<FileDiffInfo[]>([]);
+  let diffLoading = $state(false);
+  let diffError = $state('');
+  let selectedFilePath = $state<string | null>(null);
+  let sideTab = $state<'plan' | 'changes'>('plan');
+  let diffRefresh = 0;
   let draft = $state('');
   let sending = $state(false);
   let switching = $state(false);
@@ -121,6 +129,8 @@
 
   let chosenModel = $derived(setup?.models.find((model) => modelKey(model) === selectedModelKey));
   let showPlanPanel = $derived(!!snapshot.plan || !!snapshot.questions);
+  let activeSideTab = $derived(showPlanPanel && sideTab === 'plan' ? 'plan' : 'changes');
+  let diffAnnotations = $derived(annotateDiffs(diffs, snapshot.plan, directory));
 
   function setupRows(report: SetupReport): [string, SetupCheck][] {
     return [
@@ -297,6 +307,11 @@
     pendingPermissions = [];
     pendingForms = [];
     snapshot = { plan: null, questions: null };
+    diffs = [];
+    selectedFilePath = null;
+    diffError = '';
+    ++diffRefresh;
+    diffLoading = false;
     if (!(await refreshSetup(path)) || current !== selection) return;
     if (!workReady && !planReady) return;
     try {
@@ -498,6 +513,12 @@
     pendingPermissions = [];
     pendingForms = [];
     snapshot = { plan: null, questions: null };
+    diffs = [];
+    selectedFilePath = null;
+    diffError = '';
+    ++diffRefresh;
+    diffLoading = false;
+    sideTab = 'plan';
     error = '';
     localStorage.setItem(`sai-session:${directory}`, id);
     await refreshSession(id, current);
@@ -519,6 +540,11 @@
     if (setup?.defaultModel) selectedModelKey = modelKey(setup.defaultModel);
     resetTimeline();
     snapshot = { plan: null, questions: null };
+    diffs = [];
+    selectedFilePath = null;
+    sideTab = 'changes';
+    ++diffRefresh;
+    diffLoading = false;
     pendingPermissions = [];
     pendingForms = [];
     attachedFiles = [];
@@ -846,6 +872,40 @@
     messageTimers.set(messageID, { timer, settled: settled || !!previous?.settled });
   }
 
+  async function refreshDiff(id = sessionID, current = selection) {
+    if (!client || !id || !directory) return;
+    const source = client;
+    const path = directory;
+    const generation = ++diffRefresh;
+    diffLoading = true;
+    try {
+      const next = await source.session.diff({ sessionID: id });
+      if (
+        generation !== diffRefresh ||
+        current !== selection ||
+        id !== sessionID ||
+        path !== directory
+      )
+        return;
+      diffs = next;
+      diffError = '';
+      selectedFilePath = selectedDiffFile(next, selectedFilePath, path);
+    } catch (cause) {
+      if (generation === diffRefresh && current === selection && id === sessionID)
+        diffError = describe(cause);
+    } finally {
+      if (generation === diffRefresh) diffLoading = false;
+    }
+  }
+
+  function selectDiffPath(path: string) {
+    sideTab = 'changes';
+    const key = repoPath(path, directory);
+    selectedFilePath =
+      (key ? diffs.find((file) => repoPath(file.file, directory) === key)?.file : undefined) ??
+      path;
+  }
+
   async function refreshSession(id = sessionID, current = selection) {
     if (!client || !id || !directory) return;
     const source = client;
@@ -856,6 +916,7 @@
         ? getPlan(source, path, id)
         : Promise.resolve({ plan: null, questions: null } as PlanSnapshot),
       refreshPrompts(id, current),
+      refreshDiff(id, current),
     ]);
     if (current !== selection || id !== sessionID) return;
     if (history.status === 'rejected') error = describe(history.reason);
@@ -874,6 +935,7 @@
         ? getPlan(source, path, id)
         : Promise.resolve({ plan: null, questions: null } as PlanSnapshot),
       refreshPrompts(id, current),
+      refreshDiff(id, current),
     ]);
     if (current !== selection || id !== sessionID) return;
     if (plan.status === 'fulfilled') snapshot = plan.value;
@@ -1292,7 +1354,7 @@
             </p>
           </div>{/if}
       </section>{/if}
-    <div class:single={!showPlanPanel} class="workspace">
+    <div class:single={!sessionID} class="workspace">
       <main class="chat-area" aria-label="Session conversation">
         <div
           class="conversation"
@@ -1445,14 +1507,43 @@
           </div>
         </div>
       </main>
-      {#if showPlanPanel}<PlanPanel
-          {snapshot}
-          client={connecting ? null : client}
-          {directory}
-          {sessionID}
-          {dark}
-          onchanged={() => refreshSession()}
-        />{/if}
+      {#if sessionID}<section class="side-area" aria-label="Session details">
+          <nav class="side-tabs" aria-label="Session detail tabs">
+            {#if showPlanPanel}<button
+                class:active={activeSideTab === 'plan'}
+                aria-current={activeSideTab === 'plan' ? 'page' : undefined}
+                onclick={() => (sideTab = 'plan')}>Plan</button
+              >{/if}<button
+              class:active={activeSideTab === 'changes'}
+              aria-current={activeSideTab === 'changes' ? 'page' : undefined}
+              onclick={() => (sideTab = 'changes')}>Changes ({diffs.length})</button
+            >
+          </nav>
+          <div class="side-panel-body">
+            {#if showPlanPanel}<div class:inactive={activeSideTab !== 'plan'} class="side-view">
+                <PlanPanel
+                  {snapshot}
+                  client={connecting ? null : client}
+                  {directory}
+                  {sessionID}
+                  {dark}
+                  onchanged={() => refreshSession()}
+                  onselectfile={selectDiffPath}
+                />
+              </div>{/if}
+            <div class:inactive={activeSideTab !== 'changes'} class="side-view">
+              <DiffPanel
+                files={diffs}
+                annotations={diffAnnotations}
+                selected={selectedFilePath}
+                loading={diffLoading}
+                error={diffError}
+                onselect={(file) => (selectedFilePath = file)}
+                onrefresh={() => refreshDiff()}
+              />
+            </div>
+          </div>
+        </section>{/if}
     </div>
   </div>
 </div>

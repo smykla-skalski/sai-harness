@@ -23,9 +23,10 @@
     sessionID: string | null;
     dark: boolean;
     onchanged: () => Promise<void>;
+    onselectfile: (path: string) => void;
   }
 
-  let { snapshot, client, directory, sessionID, dark, onchanged }: Props = $props();
+  let { snapshot, client, directory, sessionID, dark, onchanged, onselectfile }: Props = $props();
   let decisions = $state<Record<string, PlanDecision>>({});
   let answers = $state<Record<string, string[]>>({});
   let questionErrors = $state<Record<string, string>>({});
@@ -517,12 +518,17 @@
         >
           <strong>Work outside approved steps</strong>
           {#if execution.drift.length}<p>
-              Outside step files: {execution.drift
-                .map((item) => `${item.step}: ${item.file}`)
-                .join(' · ')}
+              Outside step files:
+              {#each execution.drift as item, index (index)}<button
+                  class="file-link"
+                  onclick={() => onselectfile(item.file)}>{item.step}: {item.file}</button
+                >{/each}
             </p>{/if}
           {#if execution.unattributed.length}<p>
-              Edited without an active step: {execution.unattributed.join(' · ')}
+              Edited without an active step: {#each execution.unattributed as file (file)}<button
+                  class="file-link"
+                  onclick={() => onselectfile(file)}>{file}</button
+                >{/each}
             </p>{/if}
         </section>{/if}
       {#if plan.state === 'done' && execution}<section class="run-digest" aria-label="Final digest">
@@ -537,12 +543,17 @@
               : 'None reported'}
           </p>
           {#if execution.drift.length}<p>
-              Outside step files: {execution.drift
-                .map((item) => `${item.step}: ${item.file}`)
-                .join(' · ')}
+              Outside step files:
+              {#each execution.drift as item, index (index)}<button
+                  class="file-link"
+                  onclick={() => onselectfile(item.file)}>{item.step}: {item.file}</button
+                >{/each}
             </p>{/if}
           {#if execution.unattributed.length}<p>
-              Edited without an active step: {execution.unattributed.join(' · ')}
+              Edited without an active step: {#each execution.unattributed as file (file)}<button
+                  class="file-link"
+                  onclick={() => onselectfile(file)}>{file}</button
+                >{/each}
             </p>{/if}
         </section>{/if}
       {#if plan.diagram}<Diagram source={plan.diagram} title="Plan overview" {dark} />{/if}
@@ -604,7 +615,14 @@
                   {step.check.summary}{#if step.check.command}<code>{step.check.command}</code>{/if}
                 </p>{/if}
               <p><strong>Planned files:</strong> {step.files.join(' · ') || 'None listed'}</p>
-              <p><strong>Touched files:</strong> {step.touched.join(' · ') || 'None reported'}</p>
+              <p>
+                <strong>Touched files:</strong>
+                {#each step.touched as file (file)}<button
+                    class="file-link"
+                    onclick={() => onselectfile(file)}>{file}</button
+                  >{:else}
+                  None reported{/each}
+              </p>
             </div>{/if}
           <details
             open={!!step.needsYou ||
@@ -969,6 +987,16 @@
   .step-execution code {
     display: block;
     margin-top: 4px;
+  }
+  .file-link {
+    margin: 0 3px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--sui-primary);
+    font: inherit;
+    text-decoration: underline;
+    overflow-wrap: anywhere;
   }
   .decision-buttons {
     display: flex;

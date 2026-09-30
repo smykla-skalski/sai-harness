@@ -386,6 +386,46 @@ button:disabled {
 .workspace.single {
   grid-template-columns: minmax(0, 1fr);
 }
+.side-area {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.side-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-left: 1px solid var(--shell-divider);
+  border-bottom: 1px solid var(--shell-divider);
+  background: var(--sui-surface);
+}
+.side-tabs button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sui-muted);
+  font: inherit;
+  font-size: 12px;
+}
+.side-tabs button.active {
+  background: var(--shell-selected);
+  color: var(--shell-selected-ink);
+  font-weight: 700;
+}
+.side-panel-body {
+  flex: 1;
+  min-height: 0;
+}
+.side-view {
+  height: 100%;
+  min-height: 0;
+}
+.side-view.inactive {
+  display: none;
+}
 .chat-area {
   display: flex;
   flex-direction: column;
