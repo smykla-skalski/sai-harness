@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
   import { isSessionNotFoundError } from '@opencode/client';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import { Badge, Button } from '@smykla-skalski/sui';
+  import Markdown from './Markdown.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import {
@@ -16,6 +18,7 @@
     type SessionMessageInfo,
   } from './lib/opencode';
   import { getPlan, type PlanSnapshot } from './lib/plan';
+  import { mergeMessages, nearBottom } from './lib/timeline';
   import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
@@ -43,12 +46,24 @@
   let editedTitle = $state('');
   let sessionID = $state<string | null>(null);
   let messages = $state<SessionMessageInfo[]>([]);
+  let olderMessageCursor = $state<string | null>(null);
+  let loadingOlder = $state(false);
+  let liveText = $state<Record<string, Record<number, string>>>({});
+  let timelineSession = '';
+  let timelineRefresh = 0;
+  let followChat = true;
+  let followFrame = 0;
+  let messageTimers = new SvelteMap<
+    string,
+    { timer: ReturnType<typeof setTimeout>; settled: boolean }
+  >();
+  let messageGeneration = new SvelteMap<string, number>();
   let snapshot = $state<PlanSnapshot>({ plan: null, questions: null });
   let draft = $state('');
   let sending = $state(false);
   let running = $state(false);
   let error = $state('');
-  let chatEnd: HTMLDivElement;
+  let chatScroll: HTMLDivElement;
   let client = $state<OpenCodeClient | null>(null);
   let eventController: AbortController | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -76,6 +91,9 @@
   );
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
+  );
+  let liveOnly = $derived(
+    Object.entries(liveText).filter(([id]) => !messages.some((message) => message.id === id)),
   );
   let canSend = $derived(
     runtimeState === 'connected' &&
@@ -113,6 +131,8 @@
       clearTimeout(refreshTimer);
       clearTimeout(recoveryTimer);
       clearInterval(healthTimer);
+      cancelAnimationFrame(followFrame);
+      for (const pending of messageTimers.values()) clearTimeout(pending.timer);
     };
   });
 
@@ -205,6 +225,7 @@
 
   async function resync() {
     if (!client || !directory) return;
+    liveText = {};
     const current = selection;
     await refreshSetup(directory);
     if (current !== selection) return;
@@ -248,7 +269,7 @@
     sessionCursor = undefined;
     nextSessionCursor = null;
     sessionPageHistory = [];
-    messages = [];
+    resetTimeline();
     running = false;
     pendingPermissions = [];
     pendingForms = [];
@@ -426,7 +447,7 @@
   function clearSelectedSession() {
     sessionID = null;
     selectedSession = null;
-    messages = [];
+    resetTimeline();
     snapshot = { plan: null, questions: null };
     running = false;
     pendingPermissions = [];
@@ -438,7 +459,7 @@
     const current = ++selection;
     sessionID = id;
     selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
-    messages = [];
+    resetTimeline();
     running = activeSessionIDs.includes(id);
     pendingPermissions = [];
     pendingForms = [];
@@ -568,31 +589,187 @@
     await Promise.all([permissionsTask, formsTask]);
   }
 
+  function resetTimeline() {
+    ++timelineRefresh;
+    timelineSession = '';
+    messages = [];
+    olderMessageCursor = null;
+    loadingOlder = false;
+    liveText = {};
+    followChat = true;
+    for (const pending of messageTimers.values()) clearTimeout(pending.timer);
+    messageTimers.clear();
+    messageGeneration.clear();
+  }
+
+  function scrollToLatest() {
+    if (!followChat) return;
+    cancelAnimationFrame(followFrame);
+    followFrame = requestAnimationFrame(() => {
+      if (chatScroll && followChat) chatScroll.scrollTop = chatScroll.scrollHeight;
+    });
+  }
+
+  function acceptProjectedMessages(
+    incoming: SessionMessageInfo[],
+    observed: Record<string, number>,
+  ): SessionMessageInfo[] {
+    const accepted = incoming.filter(
+      (message) => (messageGeneration.get(message.id) ?? 0) === (observed[message.id] ?? 0),
+    );
+    for (const message of accepted)
+      messageGeneration.set(message.id, (messageGeneration.get(message.id) ?? 0) + 1);
+    return accepted;
+  }
+
+  async function refreshTimeline(id: string, current: number) {
+    if (!client) return;
+    const source = client;
+    const request = ++timelineRefresh;
+    const observed = Object.fromEntries(messageGeneration);
+    const valid = () => current === selection && id === sessionID && request === timelineRefresh;
+    const first = await source.message.list({ sessionID: id, limit: 50, order: 'desc' });
+    if (!valid()) return;
+    if (timelineSession !== id) {
+      timelineSession = id;
+      messages = acceptProjectedMessages(first.data, observed).toReversed();
+      olderMessageCursor = first.cursor.next ?? null;
+      await tick();
+      scrollToLatest();
+      return;
+    }
+    const known = new Set(messages.map((message) => message.id));
+    async function collectGap(
+      cursor: string | null,
+      incoming: SessionMessageInfo[],
+    ): Promise<SessionMessageInfo[]> {
+      if (!cursor || !incoming.length || incoming.some((message) => known.has(message.id)))
+        return incoming;
+      const page = await source.message.list({ sessionID: id, limit: 50, cursor });
+      if (!valid()) return incoming;
+      const combined = [...incoming, ...page.data];
+      if (page.cursor.next === cursor || !page.data.length) return combined;
+      return collectGap(page.cursor.next ?? null, combined);
+    }
+    const incoming = await collectGap(first.cursor.next ?? null, [...first.data]);
+    if (!valid()) return;
+    messages = mergeMessages(messages, acceptProjectedMessages(incoming, observed));
+    await tick();
+    scrollToLatest();
+  }
+
+  async function loadOlderMessages() {
+    if (!client || !sessionID || !olderMessageCursor || loadingOlder) return;
+    const id = sessionID;
+    const current = selection;
+    const cursor = olderMessageCursor;
+    const observed = Object.fromEntries(messageGeneration);
+    const height = chatScroll?.scrollHeight ?? 0;
+    const top = chatScroll?.scrollTop ?? 0;
+    loadingOlder = true;
+    try {
+      const page = await client.message.list({ sessionID: id, limit: 50, cursor });
+      if (current !== selection || id !== sessionID) return;
+      messages = mergeMessages(messages, acceptProjectedMessages(page.data, observed));
+      olderMessageCursor = page.cursor.next ?? null;
+      followChat = false;
+      await tick();
+      if (chatScroll) chatScroll.scrollTop = top + chatScroll.scrollHeight - height;
+    } catch (cause) {
+      error = describe(cause);
+    } finally {
+      loadingOlder = false;
+    }
+  }
+
+  async function refreshMessage(
+    id: string,
+    messageID: string,
+    settled: boolean,
+    generation: number,
+  ) {
+    if (!client) return;
+    const current = selection;
+    try {
+      const message = await client.session.message.get({ sessionID: id, messageID });
+      if (
+        current !== selection ||
+        id !== sessionID ||
+        messageGeneration.get(messageID) !== generation
+      )
+        return;
+      messages = mergeMessages(messages, [message]);
+      if (settled) {
+        const remaining = { ...liveText };
+        delete remaining[messageID];
+        liveText = remaining;
+      }
+      await tick();
+      scrollToLatest();
+    } catch {
+      // The projection may not exist yet; the next durable event or resync will load it.
+    }
+  }
+
+  function scheduleMessageRefresh(id: string, messageID: string, settled = false) {
+    const previous = messageTimers.get(messageID);
+    if (previous) clearTimeout(previous.timer);
+    const generation = (messageGeneration.get(messageID) ?? 0) + 1;
+    messageGeneration.set(messageID, generation);
+    const timer = setTimeout(() => {
+      messageTimers.delete(messageID);
+      void refreshMessage(id, messageID, settled || !!previous?.settled, generation);
+    }, 80);
+    messageTimers.set(messageID, { timer, settled: settled || !!previous?.settled });
+  }
+
   async function refreshSession(id = sessionID, current = selection) {
     if (!client || !id || !directory) return;
     const source = client;
     const path = directory;
-    const promptTask = refreshPrompts(id, current);
-    const contentTask = (async () => {
-      const [history, plan] = await Promise.allSettled([
-        source.message.list({ sessionID: id, limit: 100, order: 'asc' }),
-        getPlan(source, path, id),
-      ]);
-      if (current !== selection || id !== sessionID) return;
-      if (history.status === 'fulfilled') {
-        messages = history.value.data;
-        await tick();
-        chatEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-      } else error = describe(history.reason);
-      if (plan.status === 'fulfilled') snapshot = plan.value;
-      else error = describe(plan.reason);
-    })();
-    await Promise.all([promptTask, contentTask]);
+    const [history, plan] = await Promise.allSettled([
+      refreshTimeline(id, current),
+      getPlan(source, path, id),
+      refreshPrompts(id, current),
+    ]);
+    if (current !== selection || id !== sessionID) return;
+    if (history.status === 'rejected') error = describe(history.reason);
+    if (plan.status === 'fulfilled') snapshot = plan.value;
+    else error = describe(plan.reason);
+  }
+
+  async function refreshSidePanels() {
+    if (!client || !sessionID || !directory) return;
+    const source = client;
+    const id = sessionID;
+    const path = directory;
+    const current = selection;
+    const [plan] = await Promise.allSettled([
+      getPlan(source, path, id),
+      refreshPrompts(id, current),
+    ]);
+    if (current !== selection || id !== sessionID) return;
+    if (plan.status === 'fulfilled') snapshot = plan.value;
+    else error = describe(plan.reason);
   }
 
   function scheduleRefresh() {
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => void refreshSession(), 120);
+    refreshTimer = setTimeout(() => void refreshSidePanels(), 120);
+  }
+
+  function applyTextDelta(messageID: string, ordinal: number, delta: string) {
+    const existing = messages.find((message) => message.id === messageID);
+    const part = existing?.type === 'assistant' ? existing.content[ordinal] : undefined;
+    const parts = liveText[messageID] ?? {};
+    const base = parts[ordinal] ?? (part?.type === 'text' ? part.text : '');
+    liveText[messageID] = { ...parts, [ordinal]: base + delta };
+    scrollToLatest();
+  }
+
+  async function reconcileExecution(id: string, current: number) {
+    await refreshTimeline(id, current);
+    if (id === sessionID && !running) liveText = {};
   }
 
   async function watchEvents(source: OpenCodeClient, signal: AbortSignal) {
@@ -625,6 +802,34 @@
           eventSession === sessionID ||
           (event.type === 'rpc.planreview.changed' && event.location?.directory === directory)
         ) {
+          const eventType: string = event.type;
+          if (
+            eventType === 'session.message.content.updated' &&
+            'data' in event &&
+            'messageID' in event.data &&
+            typeof event.data.messageID === 'string' &&
+            sessionID
+          )
+            scheduleMessageRefresh(sessionID, event.data.messageID);
+          if (event.type === 'session.text.delta') {
+            applyTextDelta(event.data.assistantMessageID, event.data.ordinal, event.data.delta);
+            continue;
+          }
+          if (event.type === 'session.text.ended') {
+            const parts = liveText[event.data.assistantMessageID] ?? {};
+            liveText[event.data.assistantMessageID] = {
+              ...parts,
+              [event.data.ordinal]: event.data.text,
+            };
+            scheduleMessageRefresh(event.data.sessionID, event.data.assistantMessageID, true);
+          }
+          if (
+            'data' in event &&
+            'assistantMessageID' in event.data &&
+            typeof event.data.assistantMessageID === 'string' &&
+            event.type !== 'session.text.ended'
+          )
+            scheduleMessageRefresh(event.data.sessionID, event.data.assistantMessageID);
           if (event.type === 'session.execution.started') running = true;
           if (
             [
@@ -634,7 +839,27 @@
             ].includes(event.type)
           )
             running = false;
-          scheduleRefresh();
+          if (
+            [
+              'session.execution.started',
+              'session.execution.succeeded',
+              'session.execution.failed',
+              'session.execution.interrupted',
+            ].includes(event.type) &&
+            sessionID
+          )
+            void reconcileExecution(sessionID, selection).catch((cause) => {
+              error = describe(cause);
+            });
+          if (
+            event.type === 'rpc.planreview.changed' ||
+            [
+              'session.execution.succeeded',
+              'session.execution.failed',
+              'session.execution.interrupted',
+            ].includes(event.type)
+          )
+            scheduleRefresh();
         }
         if (
           event.type === 'permission.asked' ||
@@ -692,6 +917,18 @@
     }
   }
 
+  async function stop() {
+    if (!client || !sessionID || !running) return;
+    const id = sessionID;
+    try {
+      await client.session.interrupt({ sessionID: id });
+      if (id === sessionID) running = false;
+      await refreshTimeline(id, selection);
+    } catch (cause) {
+      error = `Could not stop the architect: ${describe(cause)}`;
+    }
+  }
+
   function keydown(event: KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -707,15 +944,12 @@
   function assistantText(message: SessionMessageInfo): string {
     return message.type === 'assistant'
       ? message.content
-          .filter((part) => part.type === 'text')
-          .map((part) => part.text)
+          .map((part, ordinal) =>
+            part.type === 'text' ? (liveText[message.id]?.[ordinal] ?? part.text) : '',
+          )
+          .filter(Boolean)
           .join('\n')
       : '';
-  }
-  function toolsUsed(message: SessionMessageInfo): string[] {
-    return message.type === 'assistant'
-      ? message.content.filter((part) => part.type === 'tool').map((part) => part.name)
-      : [];
   }
 </script>
 
@@ -892,7 +1126,18 @@
       </section>{/if}
     <div class="workspace">
       <main class="chat-area" aria-label="Architect conversation">
-        <div class="conversation">
+        <div
+          class="conversation"
+          bind:this={chatScroll}
+          onscroll={() => (followChat = nearBottom(chatScroll))}
+        >
+          {#if olderMessageCursor}<button
+              class="older-messages"
+              onclick={loadOlderMessages}
+              disabled={loadingOlder}
+            >
+              {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+            </button>{/if}
           {#if !sessionID && messages.length === 0}<div class="welcome">
               <div class="welcome-mark">◇</div>
               <p class="eyebrow">PLAN WITH ARCHITECT</p>
@@ -911,27 +1156,57 @@
                 <div class="avatar user-avatar">You</div>
                 <div class="message-body">
                   <div class="message-author">You</div>
-                  <p>{message.text}</p>
+                  <Markdown source={message.text} />
                 </div>
               </article>
             {:else if message.type === 'assistant'}<article class="message assistant-message">
                 <div class="avatar agent-avatar">S.</div>
                 <div class="message-body">
-                  <div class="message-author">Architect</div>
-                  {#if assistantText(message)}<p>
-                      {assistantText(message)}
-                    </p>{/if}{#if toolsUsed(message).length}<div class="tool-line">
-                      Used {toolsUsed(message).join(', ')}
-                    </div>{/if}{#if message.error}<div class="message-error">
-                      {JSON.stringify(message.error)}
-                    </div>{/if}
+                  <div class="message-author">{message.agent}</div>
+                  {#if assistantText(message)}<Markdown source={assistantText(message)} />{/if}
+                  {#each message.content as part, ordinal (ordinal)}
+                    {#if part.type === 'tool'}<details class="tool-card">
+                        <summary>{part.name} · {part.state.status}</summary>
+                        {#if part.state.status === 'streaming'}<pre>{part.state.input}</pre>
+                        {:else}<pre>{JSON.stringify(part.state.input, null, 2)}</pre>{/if}
+                        {#if part.state.status === 'completed' || part.state.status === 'error'}
+                          {#each part.state.content ?? [] as item, itemIndex (itemIndex)}
+                            {#if item.type === 'text'}<pre>{item.text}</pre>
+                            {:else}<p>{item.name ?? item.uri}</p>{/if}
+                          {/each}
+                        {/if}
+                        {#if part.state.status === 'error'}<p class="message-error">
+                            {part.state.error.message}
+                          </p>{/if}
+                      </details>{/if}
+                  {/each}
+                  {#if message.retry}<p class="retry-state" role="status">
+                      Retry {message.retry.attempt}: {message.retry.error.message}
+                    </p>{/if}
+                  {#if message.error}<p class="message-error" role="alert">
+                      {message.error.message}
+                    </p>{/if}
                 </div>
               </article>{/if}
           {/each}
+          {#each liveOnly as [id, parts] (id)}
+            <article class="message assistant-message" data-message-id={id}>
+              <div class="avatar agent-avatar">S.</div>
+              <div class="message-body">
+                <div class="message-author">Architect · streaming</div>
+                <Markdown
+                  source={Object.entries(parts)
+                    .toSorted(([a], [b]) => Number(a) - Number(b))
+                    .map(([, value]) => value)
+                    .join('\n')}
+                />
+              </div>
+            </article>
+          {/each}
           {#if running}<div class="working">
               <span class="pulse"></span> Architect is working…
+              <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
             </div>{/if}
-          <div bind:this={chatEnd}></div>
         </div>
         <div class="composer-wrap">
           {#if error}<p class="notice error" role="alert">{error}</p>{/if}

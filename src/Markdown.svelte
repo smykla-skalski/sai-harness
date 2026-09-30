@@ -1,0 +1,129 @@
+<script lang="ts">
+  import { marked, type Token } from 'marked';
+  import { safeMarkdownHref } from './lib/markdown';
+
+  let { source }: { source: string } = $props();
+  let blocks = $derived(marked.lexer(source));
+</script>
+
+{#snippet inline(tokens: Token[])}
+  {#each tokens as token, index (index)}
+    {#if token.type === 'text' || token.type === 'escape'}{token.text}
+    {:else if token.type === 'codespan'}<code>{token.text}</code>
+    {:else if token.type === 'strong'}<strong>{@render inline(token.tokens ?? [])}</strong>
+    {:else if token.type === 'em'}<em>{@render inline(token.tokens ?? [])}</em>
+    {:else if token.type === 'del'}<del>{@render inline(token.tokens ?? [])}</del>
+    {:else if token.type === 'link'}
+      {#if safeMarkdownHref(token.href)}<a
+          href={safeMarkdownHref(token.href) ?? '#'}
+          target="_blank"
+          rel="noopener noreferrer">{@render inline(token.tokens ?? [])}</a
+        >
+      {:else}{@render inline(token.tokens ?? [])}{/if}
+    {:else if token.type === 'image'}{token.text}
+    {:else if token.type === 'br'}<br />
+    {:else if 'text' in token && typeof token.text === 'string'}{token.text}{/if}
+  {/each}
+{/snippet}
+
+{#snippet renderBlocks(tokens: Token[])}
+  {#each tokens as token, index (index)}
+    {#if token.type === 'paragraph'}<p>{@render inline(token.tokens ?? [])}</p>
+    {:else if token.type === 'heading'}<svelte:element this={`h${token.depth}`}
+        >{@render inline(token.tokens ?? [])}</svelte:element
+      >
+    {:else if token.type === 'code'}<pre><code>{token.text}</code></pre>
+    {:else if token.type === 'blockquote'}<blockquote>
+        {@render renderBlocks(token.tokens ?? [])}
+      </blockquote>
+    {:else if token.type === 'list'}
+      {#if token.ordered}<ol start={token.start || 1}>
+          {#each token.items as item, itemIndex (itemIndex)}<li>
+              {@render renderBlocks(item.tokens)}
+            </li>{/each}
+        </ol>
+      {:else}<ul>
+          {#each token.items as item, itemIndex (itemIndex)}<li>
+              {@render renderBlocks(item.tokens)}
+            </li>{/each}
+        </ul>{/if}
+    {:else if token.type === 'table'}<div class="table-scroll">
+        <table>
+          <thead
+            ><tr
+              >{#each token.header as cell, cellIndex (cellIndex)}<th
+                  >{@render inline(cell.tokens)}</th
+                >{/each}</tr
+            ></thead
+          >
+          <tbody
+            >{#each token.rows as row, rowIndex (rowIndex)}<tr>
+                {#each row as cell, cellIndex (cellIndex)}<td>{@render inline(cell.tokens)}</td
+                  >{/each}
+              </tr>{/each}</tbody
+          >
+        </table>
+      </div>
+    {:else if token.type === 'hr'}<hr />
+    {:else if token.type === 'html'}<p>{token.text}</p>
+    {:else if token.type === 'text'}<p>{@render inline(token.tokens ?? [token])}</p>{/if}
+  {/each}
+{/snippet}
+
+<div class="markdown">{@render renderBlocks(blocks)}</div>
+
+<style>
+  .markdown {
+    overflow-wrap: anywhere;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .markdown :global(p) {
+    margin: 0 0 10px;
+    white-space: normal;
+  }
+  .markdown :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .markdown :global(pre) {
+    overflow: auto;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--sui-subtle);
+  }
+  .markdown :global(code) {
+    font:
+      12px/1.5 ui-monospace,
+      monospace;
+  }
+  .markdown :global(:not(pre) > code) {
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--sui-subtle);
+  }
+  .markdown :global(ul),
+  .markdown :global(ol) {
+    margin: 8px 0;
+    padding-left: 24px;
+  }
+  .markdown :global(blockquote) {
+    margin: 10px 0;
+    padding-left: 12px;
+    border-left: 3px solid var(--shell-divider);
+  }
+  .markdown :global(a) {
+    color: var(--sui-primary);
+  }
+  .table-scroll {
+    overflow-x: auto;
+  }
+  table {
+    border-collapse: collapse;
+  }
+  th,
+  td {
+    padding: 6px 9px;
+    border: 1px solid var(--shell-divider);
+    text-align: left;
+  }
+</style>
