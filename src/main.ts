@@ -3,4 +3,9 @@ import './style.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 
-mount(App, { target: document.getElementById('root')! });
+async function start() {
+  if (import.meta.env.MODE === 'e2e') await import('@wdio/tauri-plugin');
+  mount(App, { target: document.getElementById('root')! });
+}
+
+void start();
