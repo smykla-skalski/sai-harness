@@ -142,6 +142,38 @@ fn resolve_binary(binary_path: Option<String>) -> Result<OsString, String> {
     }))
 }
 
+fn probe_runtime(info: &RuntimeInfo) -> Result<(), String> {
+    let diagnostic =
+        "OpenCode did not respond with a compatible v2 API. Check its configuration and retry.";
+    let url = reqwest::Url::parse(&info.url).map_err(|_| diagnostic.to_string())?;
+    if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") || url.port().is_none() {
+        return Err(diagnostic.to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .no_proxy()
+        .build()
+        .map_err(|_| diagnostic.to_string())?;
+    let response = client
+        .get(format!("{}/api/info", info.url.trim_end_matches('/')))
+        .basic_auth("opencode", Some(&info.password))
+        .send()
+        .map_err(|_| diagnostic.to_string())?;
+    if !response.status().is_success() {
+        return Err(diagnostic.to_string());
+    }
+    let body: serde_json::Value = response.json().map_err(|_| diagnostic.to_string())?;
+    if body
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|version| version.starts_with("2."))
+    {
+        Ok(())
+    } else {
+        Err(diagnostic.to_string())
+    }
+}
+
 #[tauri::command]
 fn start_runtime(
     manager: State<'_, RuntimeManager>,
@@ -224,6 +256,25 @@ fn start_runtime(
         }
     };
     info.binary_path = Path::new(&binary).to_string_lossy().into_owned();
+    let mut ready = false;
+    for _ in 0..5 {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        if probe_runtime(&info).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    if !ready {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(
+            "OpenCode did not respond with a compatible v2 API. Check its configuration and retry."
+                .to_string(),
+        );
+    }
     *runtime = Some(OwnedRuntime {
         child,
         info: info.clone(),

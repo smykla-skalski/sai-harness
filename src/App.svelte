@@ -16,7 +16,7 @@
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
   let directory = $state(localStorage.getItem('sai-directory') ?? '');
   let binaryPath = $state(localStorage.getItem('sai-opencode-bin') ?? '');
-  let appliedBinaryPath = binaryPath;
+  let appliedBinaryPath = localStorage.getItem('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
   let runtimeSettingsOpen = $state(false);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
