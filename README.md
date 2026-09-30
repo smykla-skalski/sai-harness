@@ -11,7 +11,13 @@ A desktop workspace for planning and reviewing coding-agent work. OpenCode runs 
 
 ## Development
 
-Prerequisites: [mise](https://mise.jdx.dev/), [OpenCode v2](https://opencode.ai/v2/docs/), and the platform dependencies required by [Tauri](https://tauri.app/start/prerequisites/). Configure `opencode-plugin-plan-review` in each repository you want to plan in. Until the plugin is published, use its local checkout in that repository's `opencode.jsonc`:
+Prerequisites: [mise](https://mise.jdx.dev/), [OpenCode v2](https://opencode.ai/v2/docs/), and the platform dependencies required by [Tauri](https://tauri.app/start/prerequisites/). Configure [opencode-plugin-plan-review](https://github.com/smykla-skalski/opencode-plugin-plan-review) before planning. Install the published package globally:
+
+```sh
+opencode plugin add @smykla-skalski/opencode-plugin-plan-review@latest
+```
+
+For a local checkout, add its path to the selected repository's `opencode.jsonc`:
 
 ```jsonc
 { "plugins": ["/absolute/path/to/opencode-plugin-plan-review"] }
@@ -23,7 +29,7 @@ Mise installs the latest stable Node.js and Rust toolchains. The development tas
 mise run dev
 ```
 
-Select the repository in the app, then describe the work in chat. The first message creates an Architect session. The app detects OpenCode in common installation locations. Open **OpenCode settings** to see the detected binary or set an absolute path; the app remembers an override. You can also set `SAI_OPENCODE_BIN` before starting the app.
+Select the repository in the app and complete the repository setup checks, then describe the work in chat. The first message creates an Architect session. The app detects OpenCode in common installation locations. Open **OpenCode settings** to see the detected binary or set an absolute path; the app remembers an override. You can also set `SAI_OPENCODE_BIN` before starting the app.
 
 Other tasks:
 

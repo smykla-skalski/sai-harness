@@ -172,6 +172,64 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
 }
+.setup-panel {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--shell-divider);
+  background: var(--sui-surface);
+  overflow: auto;
+  max-height: 48vh;
+}
+.setup-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.setup-heading h2 {
+  margin: 4px 0 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.setup-checks {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+}
+.setup-check {
+  display: grid;
+  grid-template-columns: 20px 145px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.setup-check strong {
+  font-weight: 650;
+}
+.setup-indicator {
+  color: var(--sui-danger);
+  font-weight: 700;
+}
+.setup-indicator.ready {
+  color: var(--sui-success);
+}
+.setup-steps {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.setup-steps p {
+  margin: 8px 0 0;
+}
+.setup-steps pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  background: var(--sui-canvas);
+}
 .topbar {
   display: flex;
   align-items: center;

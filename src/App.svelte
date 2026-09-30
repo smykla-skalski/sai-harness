@@ -12,6 +12,7 @@
     type SessionMessageInfo,
   } from './lib/opencode';
   import { getPlan, type PlanSnapshot } from './lib/plan';
+  import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
   let directory = $state(localStorage.getItem('sai-directory') ?? '');
@@ -22,6 +23,10 @@
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
   let runtimeError = $state('');
   let agentReady = $state(false);
+  let setup = $state<SetupReport | null>(null);
+  let setupError = $state('');
+  let setupLoading = $state(false);
+  let setupOpen = $state(true);
   let sessions = $state<SessionInfo[]>([]);
   let sessionID = $state<string | null>(null);
   let messages = $state<SessionMessageInfo[]>([]);
@@ -54,6 +59,16 @@
       !!draft.trim() &&
       !sending,
   );
+
+  function setupRows(report: SetupReport): [string, SetupCheck][] {
+    return [
+      ['OpenCode location', report.location],
+      ['Plan-review plugin', report.plugin],
+      ['Architect agent', report.architect],
+      ['Plan RPC', report.rpc],
+      ['Provider and model', report.model],
+    ];
+  }
 
   function setTheme(value: boolean) {
     dark = value;
@@ -162,10 +177,11 @@
 
   async function resync() {
     if (!client || !directory) return;
+    const current = selection;
+    await refreshSetup(directory);
+    if (current !== selection) return;
+    if (!agentReady) return;
     const path = directory;
-    const agents = await client.agent.list({ location: { directory: path } });
-    if (path !== directory) return;
-    agentReady = agents.data.some((agent) => agent.id === 'architect');
     await refreshSessions();
     if (sessionID && !sessions.some((session) => session.id === sessionID)) {
       sessionID = null;
@@ -198,29 +214,45 @@
     if (!client) return;
     error = '';
     const current = ++selection;
-    directory = path;
-    localStorage.setItem('sai-directory', path);
+    if (!(await refreshSetup(path)) || current !== selection) return;
     sessionID = null;
     messages = [];
     running = false;
     pendingPermissions = 0;
     snapshot = { plan: null, questions: null };
-    agentReady = false;
+    if (!agentReady) return;
     try {
-      const agents = await client.agent.list({ location: { directory: path } });
-      if (current !== selection) return;
-      agentReady = agents.data.some((agent) => agent.id === 'architect');
-      if (!agentReady) {
-        error =
-          'Architect agent unavailable. Install and configure opencode-plugin-plan-review for this repository.';
-        return;
-      }
       await refreshSessions();
-      const saved = localStorage.getItem(`sai-session:${path}`);
+      const saved = localStorage.getItem(`sai-session:${directory}`);
       const initial = sessions.find((session) => session.id === saved) ?? sessions[0];
       if (initial) await selectSession(initial.id);
     } catch (cause) {
       error = describe(cause);
+    }
+  }
+
+  async function refreshSetup(path = directory) {
+    if (!client || !path) return false;
+    setupLoading = true;
+    setupError = '';
+    const current = selection;
+    try {
+      const report = await inspectRepository(client, path);
+      if (current !== selection) return false;
+      directory = report.repository;
+      localStorage.setItem('sai-directory', report.repository);
+      setup = report;
+      agentReady = report.ready;
+      setupOpen = !report.ready;
+      return true;
+    } catch (cause) {
+      if (current !== selection) return false;
+      setupError = describe(cause);
+      setupOpen = true;
+      agentReady = false;
+      return false;
+    } finally {
+      if (current === selection) setupLoading = false;
     }
   }
 
@@ -437,6 +469,9 @@
         ><span class="slash">/</span><strong>{currentSession?.title ?? 'New plan'}</strong>
       </div>
       <div class="topbar-actions">
+        {#if directory}<Button variant="ghost" size="sm" onclick={() => (setupOpen = !setupOpen)}
+            >Repository setup</Button
+          >{/if}
         <details class="runtime-settings" bind:open={runtimeSettingsOpen}>
           <summary>OpenCode settings</summary>
           <div class="runtime-settings-panel">
@@ -455,12 +490,53 @@
           </div>
         </details>
         <Badge tone={agentReady ? 'success' : 'neutral'}
-          >{agentReady ? 'Architect' : 'No agent'}</Badge
+          >{agentReady ? 'Ready' : 'Setup needed'}</Badge
         ><Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
           >{dark ? 'Light' : 'Dark'} theme</Button
         >
       </div>
     </header>
+    {#if setupOpen && (directory || setupError)}<section
+        class="setup-panel"
+        aria-label="Repository setup"
+      >
+        <div class="setup-heading">
+          <div>
+            <p class="eyebrow">REPOSITORY SETUP</p>
+            <h2>{directory || 'Choose a repository'}</h2>
+          </div>
+          <Button size="sm" variant="ghost" onclick={() => void resync()} disabled={setupLoading}
+            >{setupLoading ? 'Checking…' : 'Check again'}</Button
+          >
+        </div>
+        {#if setupError}<p class="notice error" role="alert">{setupError}</p>{/if}
+        {#if setup && !setupError}<div class="setup-checks">
+            {#each setupRows(setup) as [label, item] (label)}
+              <div class="setup-check">
+                <span class:ready={item.state === 'ready'} class="setup-indicator"
+                  >{item.state === 'ready' ? '✓' : '!'}</span
+                ><strong>{label}</strong><span>{item.detail}</span>
+              </div>
+            {/each}
+          </div>{/if}
+        {#if !agentReady}<div class="setup-steps">
+            <strong>To start planning</strong>
+            <p>
+              Install OpenCode v2, then choose a Git repository. In OpenCode, run
+              <code>/connect</code> to connect a provider and <code>/models</code> to select a model.
+            </p>
+            <p>
+              Install the published plugin with <code
+                >opencode plugin add @smykla-skalski/opencode-plugin-plan-review@latest</code
+              >, or add a local checkout path to <code>opencode.jsonc</code>:
+            </p>
+            <pre>{'{ "plugins": ["/absolute/path/to/opencode-plugin-plan-review"] }'}</pre>
+            <p>
+              OpenCode loads plugin changes on reload. Choose <strong>Check again</strong> after configuration.
+              This app does not change your repository.
+            </p>
+          </div>{/if}
+      </section>{/if}
     <div class="workspace">
       <main class="chat-area" aria-label="Architect conversation">
         <div class="conversation">
@@ -517,7 +593,7 @@
               rows="3"
               placeholder={agentReady
                 ? 'Describe a goal or ask the architect a question…'
-                : 'Select a repository with the architect plugin installed…'}
+                : 'Complete repository setup before planning…'}
               disabled={!agentReady || sending}></textarea>
             <div class="composer-bottom">
               <span>Enter to send · Shift+Enter for newline</span><Button

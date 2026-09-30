@@ -311,12 +311,54 @@ fn start_runtime(
     Ok(info)
 }
 
+#[tauri::command]
+fn validate_repository(path: String) -> Result<String, String> {
+    let directory = Path::new(&path)
+        .canonicalize()
+        .map_err(|_| "Repository path does not exist. Choose an existing directory.".to_string())?;
+    if !directory.is_dir() {
+        return Err("Repository path is not a directory.".to_string());
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&directory)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|_| "Git is unavailable. Install Git to select a repository.".to_string())?;
+    if !output.status.success() {
+        return Err("Selected directory is not inside a Git repository.".to_string());
+    }
+    let root = String::from_utf8(output.stdout)
+        .map_err(|_| "Git returned a repository path that cannot be displayed.".to_string())?;
+    Ok(root.trim().to_string())
+}
+
+#[tauri::command]
+fn local_plugin_version(path: String) -> Option<String> {
+    let source = Path::new(&path);
+    let directory = if source.is_dir() {
+        source
+    } else {
+        source.parent()?
+    };
+    let package = std::fs::read_to_string(directory.join("package.json")).ok()?;
+    let package: serde_json::Value = serde_json::from_str(&package).ok()?;
+    if package.get("name")?.as_str()? != "@smykla-skalski/opencode-plugin-plan-review" {
+        return None;
+    }
+    package.get("version")?.as_str().map(str::to_string)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(RuntimeManager::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![start_runtime]);
+        .invoke_handler(tauri::generate_handler![
+            start_runtime,
+            validate_repository,
+            local_plugin_version
+        ]);
     #[cfg(feature = "e2e")]
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
