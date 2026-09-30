@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::State;
 
 #[derive(Clone, Serialize)]
@@ -96,16 +96,44 @@ fn version_number(output: &str) -> Option<&str> {
 }
 
 fn compatible_version(binary: &Path) -> Result<(), String> {
-    let output = Command::new(binary)
+    let mut child = Command::new(binary)
         .arg("--version")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|_| {
             "OpenCode binary not found or cannot run. Choose an absolute binary path in settings."
                 .to_string()
         })?;
-    let output_text = String::from_utf8_lossy(&output.stdout);
-    let version = version_number(&output_text);
-    if output.status.success() && version.is_some_and(|value| value.starts_with("2.")) {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("OpenCode did not provide version output")?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut line);
+        let _ = sender.send(line);
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                stop_child(&mut child, binary);
+                return Err(
+                    "OpenCode version check timed out. Choose another binary in settings."
+                        .to_string(),
+                );
+            }
+        }
+    };
+    let output = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_default();
+    let version = version_number(&output);
+    if status.success() && version.is_some_and(|value| value.starts_with("2.")) {
         Ok(())
     } else {
         Err(format!(
