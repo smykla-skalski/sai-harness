@@ -93,7 +93,12 @@ jobs:
             echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
           fi
 
-      - name: Build installer
+      - name: Build development installer
+        if: runner.os != 'macOS' || env.SAI_SIGNING_MODE == 'ad-hoc'
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }} --ci
+
+      - name: Build and notarize Developer ID installer
+        if: runner.os == 'macOS' && env.SAI_SIGNING_MODE == 'developer-id'
         run: npm run tauri build -- --bundles ${{ matrix.bundles }} --ci
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
