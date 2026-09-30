@@ -34,7 +34,7 @@
   let sessionSearch = $state('');
   let sessionCursor = $state<string | undefined>(undefined);
   let nextSessionCursor = $state<string | null>(null);
-  let previousSessionCursor = $state<string | null>(null);
+  let sessionPageHistory = $state<(string | undefined)[]>([]);
   let sessionLoading = $state(false);
   let activeSessionIDs = $state<string[]>([]);
   let editingSessionID = $state<string | null>(null);
@@ -64,7 +64,9 @@
       (selectedSession?.id === sessionID ? selectedSession : undefined),
   );
   let visibleSessions = $derived(
-    selectedSession && !sessions.some((session) => session.id === selectedSession?.id)
+    !sessionSearch.trim() &&
+      selectedSession &&
+      !sessions.some((session) => session.id === selectedSession?.id)
       ? [selectedSession, ...sessions]
       : sessions,
   );
@@ -243,10 +245,11 @@
     sessionID = null;
     selectedSession = null;
     sessions = [];
+    activeSessionIDs = [];
     sessionSearch = '';
     sessionCursor = undefined;
     nextSessionCursor = null;
-    previousSessionCursor = null;
+    sessionPageHistory = [];
     messages = [];
     running = false;
     pendingPermissions = 0;
@@ -319,22 +322,48 @@
 
   async function refreshSessions() {
     if (!client || !directory) return;
+    const source = client;
     const path = directory;
     const search = sessionSearch.trim();
     const cursor = sessionCursor;
     const current = ++sessionRefresh;
     sessionLoading = true;
     try {
-      const [result, active] = await Promise.all([
-        client.session.list({
+      async function collect(
+        pageCursor: string | undefined,
+        matches: SessionInfo[],
+        seen: Set<string>,
+      ): Promise<{ matches: SessionInfo[]; next: string | null }> {
+        const result = await source.session.list({
           directory: path,
           limit: 25,
           order: 'desc',
+          parentID: null,
           ...(search ? { search } : {}),
-          ...(cursor ? { cursor } : {}),
-        }),
-        client.session.active(),
-      ]);
+          ...(pageCursor ? { cursor: pageCursor } : {}),
+        });
+        matches.push(
+          ...result.data.filter(
+            (session) => session.agent === 'architect' || session.metadata?.saiHarness === true,
+          ),
+        );
+        const following = result.cursor.next ?? null;
+        if (
+          matches.length >= 25 ||
+          !following ||
+          following === pageCursor ||
+          seen.has(following) ||
+          path !== directory ||
+          current !== sessionRefresh ||
+          search !== sessionSearch.trim() ||
+          cursor !== sessionCursor
+        ) {
+          return { matches, next: following };
+        }
+        seen.add(following);
+        return collect(following, matches, seen);
+      }
+      const { matches, next } = await collect(cursor, [], new Set());
       if (
         path !== directory ||
         current !== sessionRefresh ||
@@ -342,13 +371,10 @@
         cursor !== sessionCursor
       )
         return;
-      sessions = result.data.filter(
-        (session) =>
-          (session.agent === 'architect' || session.metadata?.saiHarness === true) &&
-          !session.parentID,
-      );
-      nextSessionCursor = result.cursor.next ?? null;
-      previousSessionCursor = result.cursor.previous ?? null;
+      const active = await source.session.active();
+      if (path !== directory || current !== sessionRefresh) return;
+      sessions = matches;
+      nextSessionCursor = next;
       activeSessionIDs = Object.keys(active);
       running = !!sessionID && activeSessionIDs.includes(sessionID);
       const selected = sessions.find((session) => session.id === sessionID);
@@ -393,8 +419,8 @@
       await selectSession(id);
       return true;
     } catch (cause) {
-      if (!isSessionNotFoundError(cause)) error = describe(cause);
-      return false;
+      if (isSessionNotFoundError(cause)) return false;
+      throw cause;
     }
   }
 
@@ -413,7 +439,7 @@
     sessionID = id;
     selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
     messages = [];
-    running = false;
+    running = activeSessionIDs.includes(id);
     pendingPermissions = 0;
     snapshot = { plan: null, questions: null };
     error = '';
@@ -423,16 +449,21 @@
 
   async function newPlan() {
     if (!client || !directory || !agentReady) return;
+    const path = directory;
+    const current = selection;
     try {
       const session = await client.session.create({
         agent: 'architect',
-        location: { directory },
+        location: { directory: path },
         metadata: { saiHarness: true },
         title: 'New plan',
       });
+      if (current !== selection || path !== directory) return;
       sessionSearch = '';
       sessionCursor = undefined;
+      sessionPageHistory = [];
       await refreshSessions();
+      if (current !== selection || path !== directory) return;
       selectedSession = session;
       await selectSession(session.id);
     } catch (cause) {
@@ -442,14 +473,25 @@
 
   function changeSearch() {
     sessionCursor = undefined;
+    sessionPageHistory = [];
     void refreshSessions().catch((cause) => {
       error = describe(cause);
     });
   }
 
-  function changePage(cursor: string | null) {
-    if (!cursor) return;
-    sessionCursor = cursor;
+  function nextPage() {
+    if (!nextSessionCursor) return;
+    sessionPageHistory = [...sessionPageHistory, sessionCursor];
+    sessionCursor = nextSessionCursor;
+    void refreshSessions().catch((cause) => {
+      error = describe(cause);
+    });
+  }
+
+  function previousPage() {
+    if (!sessionPageHistory.length) return;
+    sessionCursor = sessionPageHistory[sessionPageHistory.length - 1];
+    sessionPageHistory = sessionPageHistory.slice(0, -1);
     void refreshSessions().catch((cause) => {
       error = describe(cause);
     });
@@ -490,7 +532,7 @@
       await client.session.remove({ sessionID: session.id });
       if (session.id === sessionID) clearSelectedSession();
       await refreshSessions();
-      if (!sessions.length && previousSessionCursor) changePage(previousSessionCursor);
+      if (!sessions.length && sessionPageHistory.length) previousPage();
     } catch (cause) {
       error = describe(cause);
     }
@@ -714,15 +756,11 @@
               : 'Choose a repository to begin'}
         </p>{/each}
     </nav>
-    {#if directory && (previousSessionCursor || nextSessionCursor)}<div class="session-pages">
-        <button
-          disabled={!previousSessionCursor || sessionLoading}
-          onclick={() => changePage(previousSessionCursor)}>Previous</button
+    {#if directory && (sessionPageHistory.length || nextSessionCursor)}<div class="session-pages">
+        <button disabled={!sessionPageHistory.length || sessionLoading} onclick={previousPage}
+          >Previous</button
         >
-        <button
-          disabled={!nextSessionCursor || sessionLoading}
-          onclick={() => changePage(nextSessionCursor)}>Next</button
-        >
+        <button disabled={!nextSessionCursor || sessionLoading} onclick={nextPage}>Next</button>
       </div>{/if}
     <div class="sidebar-footer">
       <span class:connected={runtimeState === 'connected'} class="status-dot"></span><span
