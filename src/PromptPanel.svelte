@@ -64,7 +64,7 @@
         const current = value(form, condition.key);
         const matches = Array.isArray(current)
           ? current.includes(String(condition.value))
-          : typeof condition.value === 'number' && typeof current === 'string'
+          : typeof condition.value === 'number' && typeof current === 'string' && current !== ''
             ? Number(current) === condition.value
             : current === condition.value;
         return condition.op === 'eq' ? matches : !matches;
@@ -108,7 +108,9 @@
           throw new Error(`${field.title ?? field.key} must be at most ${field.maximum}.`);
         result[field.key] = parsed;
       } else if (field.type === 'multiselect') {
-        const selected = Array.isArray(current) ? current : [];
+        const entry = field.custom ? customInputs[`${form.id}:${field.key}`]?.trim() : undefined;
+        const selected = Array.isArray(current) ? [...current] : [];
+        if (entry && !selected.includes(entry)) selected.push(entry);
         if (selected.length < (field.minItems ?? (field.required ? 1 : 0)))
           throw new Error(`Choose more options for ${field.title ?? field.key}.`);
         if (field.maxItems !== undefined && selected.length > field.maxItems)

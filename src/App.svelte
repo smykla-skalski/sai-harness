@@ -61,6 +61,7 @@
   let pendingForms = $state<FormInfo[]>([]);
   let selection = 0;
   let sessionRefresh = 0;
+  let promptRefresh = 0;
 
   let currentSession = $derived(
     sessions.find((session) => session.id === sessionID) ??
@@ -543,27 +544,50 @@
     }
   }
 
+  async function refreshPrompts(id = sessionID, current = selection) {
+    if (!client || !id || !directory) return;
+    const source = client;
+    const request = ++promptRefresh;
+    const valid = () => current === selection && id === sessionID && request === promptRefresh;
+    const permissionsTask = (async () => {
+      try {
+        const requests = await source.permission.list({ sessionID: id });
+        if (valid()) pendingPermissions = requests;
+      } catch (cause) {
+        if (valid()) error = describe(cause);
+      }
+    })();
+    const formsTask = (async () => {
+      try {
+        const forms = await source.session.form.list({ sessionID: id });
+        if (valid()) pendingForms = forms;
+      } catch (cause) {
+        if (valid()) error = describe(cause);
+      }
+    })();
+    await Promise.all([permissionsTask, formsTask]);
+  }
+
   async function refreshSession(id = sessionID, current = selection) {
     if (!client || !id || !directory) return;
-    const [history, plan, permissions, forms] = await Promise.allSettled([
-      client.message.list({ sessionID: id, limit: 100, order: 'asc' }),
-      getPlan(client, directory, id),
-      client.permission.list({ sessionID: id }),
-      client.session.form.list({ sessionID: id }),
-    ]);
-    if (current !== selection || id !== sessionID) return;
-    if (history.status === 'fulfilled') messages = history.value.data;
-    if (plan.status === 'fulfilled') snapshot = plan.value;
-    if (permissions.status === 'fulfilled') pendingPermissions = permissions.value;
-    if (forms.status === 'fulfilled') pendingForms = forms.value;
-    const failed = [history, plan, permissions, forms].find(
-      (result) => result.status === 'rejected',
-    );
-    if (failed?.status === 'rejected') error = describe(failed.reason);
-    if (history.status === 'fulfilled') {
-      await tick();
-      chatEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-    }
+    const source = client;
+    const path = directory;
+    const promptTask = refreshPrompts(id, current);
+    const contentTask = (async () => {
+      const [history, plan] = await Promise.allSettled([
+        source.message.list({ sessionID: id, limit: 100, order: 'asc' }),
+        getPlan(source, path, id),
+      ]);
+      if (current !== selection || id !== sessionID) return;
+      if (history.status === 'fulfilled') {
+        messages = history.value.data;
+        await tick();
+        chatEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      } else error = describe(history.reason);
+      if (plan.status === 'fulfilled') snapshot = plan.value;
+      else error = describe(plan.reason);
+    })();
+    await Promise.all([promptTask, contentTask]);
   }
 
   function scheduleRefresh() {
@@ -916,7 +940,7 @@
             {pendingForms}
             client={connecting ? null : client}
             {sessionID}
-            onchanged={() => refreshSession()}
+            onchanged={() => refreshPrompts()}
           />
           <div class="composer">
             <textarea
