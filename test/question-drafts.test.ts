@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { snapshotAnswers } from '../src/lib/plan.ts';
 
-test('snapshots reactive answer arrays before submission', () => {
+await test('snapshots reactive answer arrays before submission', () => {
   const text = new Proxy(['draft'], {});
   const answers = new Proxy({ text }, {});
 
