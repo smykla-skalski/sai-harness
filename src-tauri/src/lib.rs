@@ -204,6 +204,29 @@ fn probe_runtime(info: &RuntimeInfo) -> Result<(), String> {
     }
 }
 
+fn server_args() -> Vec<&'static str> {
+    let mut args = vec![
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        "0",
+        "--cors",
+        "tauri://localhost",
+        "--cors",
+        "http://tauri.localhost",
+    ];
+    if cfg!(debug_assertions) {
+        args.extend([
+            "--cors",
+            "http://localhost:1420",
+            "--cors",
+            "http://127.0.0.1:1420",
+        ]);
+    }
+    args
+}
+
 #[tauri::command]
 fn start_runtime(
     manager: State<'_, RuntimeManager>,
@@ -222,21 +245,7 @@ fn start_runtime(
     }
 
     let mut child = Command::new(&binary)
-        .args([
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--cors",
-            "http://localhost:1420",
-            "--cors",
-            "http://127.0.0.1:1420",
-            "--cors",
-            "tauri://localhost",
-            "--cors",
-            "http://tauri.localhost",
-        ])
+        .args(server_args())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -341,7 +350,12 @@ fn local_plugin_version(path: String) -> Option<String> {
     } else {
         source.parent()?
     };
-    let package = std::fs::read_to_string(directory.join("package.json")).ok()?;
+    let package_path = directory.join("package.json");
+    let metadata = std::fs::metadata(&package_path).ok()?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 {
+        return None;
+    }
+    let package = std::fs::read_to_string(package_path).ok()?;
     let package: serde_json::Value = serde_json::from_str(&package).ok()?;
     if package.get("name")?.as_str()? != "@smykla-skalski/opencode-plugin-plan-review" {
         return None;
@@ -370,11 +384,26 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::version_number;
+    use super::{server_args, version_number};
 
     #[test]
     fn accepts_real_opencode_version_output() {
         assert_eq!(version_number("opencode v2.0.19\n"), Some("2.0.19"));
         assert_eq!(version_number("2.1.0\n"), Some("2.1.0"));
+    }
+
+    #[test]
+    fn server_is_loopback_and_only_allows_packaged_origins_in_release() {
+        let args = server_args();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--hostname", "127.0.0.1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--port", "0"]));
+        assert!(args.contains(&"tauri://localhost"));
+        assert!(args.contains(&"http://tauri.localhost"));
+        if !cfg!(debug_assertions) {
+            assert!(!args.contains(&"http://localhost:1420"));
+            assert!(!args.contains(&"http://127.0.0.1:1420"));
+        }
     }
 }

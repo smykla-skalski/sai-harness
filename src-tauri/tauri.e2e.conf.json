@@ -5,17 +5,24 @@
   "app": {
     "withGlobalTauri": true,
     "security": {
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self' data:",
+        "img-src": "'self' data:",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:*",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-src": "'none'"
+      },
       "capabilities": [
+        "default",
         {
           "identifier": "e2e",
           "windows": ["main"],
-          "permissions": [
-            "core:default",
-            "dialog:allow-open",
-            "dialog:allow-ask",
-            "wdio:default",
-            "wdio-webdriver:default"
-          ]
+          "permissions": ["wdio:default", "wdio-webdriver:default"]
         }
       ]
     }

@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Permissions for the main desktop window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-ask"]
+  "permissions": [
+    "allow-start-runtime",
+    "allow-validate-repository",
+    "allow-local-plugin-version",
+    "dialog:allow-open",
+    "dialog:allow-message"
+  ]
 }

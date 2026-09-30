@@ -554,7 +554,11 @@
           ...(search ? { search } : {}),
           ...(pageCursor ? { cursor: pageCursor } : {}),
         });
-        matches.push(...result.data);
+        matches.push(
+          ...result.data.filter(
+            (session) => session.location.directory === path && !session.parentID,
+          ),
+        );
         const following = result.cursor.next ?? null;
         if (
           matches.length >= 25 ||
@@ -594,8 +598,13 @@
         try {
           const info = await client.session.get({ sessionID: requestedID });
           if (path === directory && current === sessionRefresh && requestedID === sessionID) {
-            selectedSession = info;
-            syncSessionChoice(info);
+            if (info.location.directory === path && !info.parentID) {
+              selectedSession = info;
+              syncSessionChoice(info);
+            } else {
+              clearSelectedSession();
+              error = 'This session does not belong to the selected repository.';
+            }
           }
         } catch (cause) {
           if (
@@ -651,12 +660,24 @@
   }
 
   async function selectSession(id: string) {
+    if (!client || !directory) return;
     if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
       saveViewState();
     const current = ++selection;
+    const path = directory;
+    let info: SessionInfo;
+    try {
+      info = await client.session.get({ sessionID: id });
+      if (current !== selection || path !== directory) return;
+      if (info.location.directory !== path || info.parentID)
+        throw new Error('This session does not belong to the selected repository.');
+    } catch (cause) {
+      if (current === selection && path === directory) error = describe(cause);
+      return;
+    }
     sessionID = id;
-    selectedSession = sessions.find((session) => session.id === id) ?? selectedSession;
-    if (selectedSession?.id === id) syncSessionChoice(selectedSession);
+    selectedSession = info;
+    syncSessionChoice(info);
     newSessionMode = null;
     attachedFiles = [];
     resetTimeline();
