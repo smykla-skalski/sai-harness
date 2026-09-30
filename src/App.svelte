@@ -111,7 +111,7 @@
       client = null;
       runtimeState = 'error';
       runtimeError = describe(cause);
-      if (hasConnected) recoveryTimer = setTimeout(() => void recoverRuntime(true), 5000);
+      if (hasConnected) recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
     } finally {
       connecting = false;
     }
@@ -127,7 +127,7 @@
     try {
       await client.server.info({ signal: AbortSignal.timeout(3000) });
     } catch {
-      await recoverRuntime(true);
+      await recoverRuntime();
     }
   }
 
@@ -291,7 +291,10 @@
     } catch {
       // A new subscription reloads missed state after the live stream fails.
     }
-    if (!signal.aborted) await recoverRuntime();
+    if (!signal.aborted) {
+      runtimeState = 'starting';
+      recoveryTimer = setTimeout(() => void recoverRuntime(), 1500);
+    }
   }
 
   async function send() {
