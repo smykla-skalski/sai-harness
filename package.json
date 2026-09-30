@@ -20,7 +20,7 @@
     "@smykla-skalski/sui": "^0.2.1",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.8.0",
-    "marked": "^16.4.2",
+    "marked": "^18.0.0",
     "mermaid": "^12.0.0",
     "svelte": "^5.57.1",
     "zod": "^4.6.5"
