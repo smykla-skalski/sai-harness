@@ -520,13 +520,18 @@
 
   async function removeSession(session: SessionInfo) {
     if (!client) return;
-    const confirmed = await ask(
-      `Delete “${session.title ?? 'Untitled plan'}”? This cannot be undone.`,
-      {
-        title: 'Delete plan session',
-        kind: 'warning',
-      },
-    );
+    const e2eAnswer =
+      import.meta.env.MODE === 'e2e' ? sessionStorage.getItem('sai-e2e-delete-answer') : null;
+    if (e2eAnswer) sessionStorage.removeItem('sai-e2e-delete-answer');
+    const confirmed =
+      e2eAnswer === 'Yes'
+        ? true
+        : e2eAnswer === 'No'
+          ? false
+          : await ask(`Delete “${session.title ?? 'Untitled plan'}”? This cannot be undone.`, {
+              title: 'Delete plan session',
+              kind: 'warning',
+            });
     if (!confirmed) return;
     try {
       await client.session.remove({ sessionID: session.id });
