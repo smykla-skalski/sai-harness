@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -68,6 +69,8 @@ try {
   mkdirSync(repository);
   mkdirSync(config);
   execFileSync('git', ['init', '-q', repository]);
+  const marker = randomUUID();
+  writeFileSync(join(repository, '.sai-contract-marker'), marker);
   writeFileSync(join(repository, 'opencode.jsonc'), JSON.stringify({ plugins: [plugin] }));
   const version = execFileSync(cli, ['--version'], { env, encoding: 'utf8' }).trim();
   assert.match(version, /^opencode v2\.0\.19$/);
@@ -85,10 +88,8 @@ try {
   await ready(url, authorization);
   const client = OpenCode.make({ baseUrl: url, headers: { authorization } });
   const location = { directory: repository };
-  assert.equal(
-    (await client.location.get({ location })).project.canonical,
-    realpathSync(repository),
-  );
+  const canonical = (await client.location.get({ location })).project.canonical;
+  assert.equal(readFileSync(join(canonical, '.sai-contract-marker'), 'utf8'), marker);
   await untilPlugin(client, location);
   assert(Array.isArray((await client.agent.list({ location })).data));
   assert(Array.isArray((await client.model.list({ location })).data));
