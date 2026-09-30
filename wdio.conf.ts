@@ -29,6 +29,6 @@ export const config = {
   waitforTimeout: 20_000,
   connectionRetryTimeout: 90_000,
   onComplete() {
-    rmSync(state, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   },
 };

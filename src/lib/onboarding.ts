@@ -105,10 +105,20 @@ export async function inspectRepository(
           !!architect,
         );
 
+  const rpcOutput: unknown = foundRpc.status === 'fulfilled' ? foundRpc.value.output : null;
   const rpcCheck =
-    foundRpc.status === 'fulfilled'
-      ? check('planreview RPC responds', true)
-      : check(`planreview RPC unavailable: ${problem(foundRpc).detail}`, false);
+    pluginCheck.state !== 'ready'
+      ? check('planreview RPC unavailable until the plugin loads', false)
+      : foundRpc.status === 'fulfilled' &&
+          typeof rpcOutput === 'object' &&
+          rpcOutput !== null &&
+          'plan' in rpcOutput &&
+          'questions' in rpcOutput
+        ? check('planreview RPC responds', true)
+        : check(
+            `planreview RPC unavailable${foundRpc.status === 'rejected' ? `: ${problem(foundRpc).detail}` : ''}`,
+            false,
+          );
 
   let modelCheck: SetupCheck;
   if (foundDefault.status === 'rejected') {

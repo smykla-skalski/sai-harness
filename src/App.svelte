@@ -41,7 +41,7 @@
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
-  let connecting = false;
+  let connecting = $state(false);
   let disposed = false;
   let hasConnected = false;
   let pendingPermissions = $state(0);
@@ -53,6 +53,7 @@
   );
   let canSend = $derived(
     runtimeState === 'connected' &&
+      !connecting &&
       !!client &&
       !!directory &&
       agentReady &&
@@ -104,6 +105,7 @@
     if (!server.version.startsWith('2.'))
       throw new Error('OpenCode v2 is required. Choose a compatible binary in settings.');
     if (disposed) return;
+    clearTimeout(recoveryTimer);
     eventController?.abort();
     client = nextClient;
     activeBinary = info.binaryPath;
@@ -214,12 +216,15 @@
     if (!client) return;
     error = '';
     const current = ++selection;
-    if (!(await refreshSetup(path)) || current !== selection) return;
+    agentReady = false;
+    setupOpen = true;
     sessionID = null;
+    sessions = [];
     messages = [];
     running = false;
     pendingPermissions = 0;
     snapshot = { plan: null, questions: null };
+    if (!(await refreshSetup(path)) || current !== selection) return;
     if (!agentReady) return;
     try {
       await refreshSessions();
@@ -253,6 +258,32 @@
       return false;
     } finally {
       if (current === selection) setupLoading = false;
+    }
+  }
+
+  async function restartSetup() {
+    if (connecting || !client) return;
+    connecting = true;
+    setupLoading = true;
+    setupError = '';
+    clearTimeout(recoveryTimer);
+    try {
+      const active = await client.session.active();
+      if (sending || Object.values(active).some((session) => session.type === 'running')) {
+        setupError = 'Wait for active OpenCode sessions to finish before restarting.';
+        return;
+      }
+      const info = await invoke<RuntimeInfo>('start_runtime', {
+        binaryPath: appliedBinaryPath || null,
+        restart: true,
+      });
+      await activateRuntime(info);
+      setupOpen = true;
+    } catch (cause) {
+      setupError = describe(cause);
+    } finally {
+      connecting = false;
+      setupLoading = false;
     }
   }
 
@@ -505,8 +536,12 @@
             <p class="eyebrow">REPOSITORY SETUP</p>
             <h2>{directory || 'Choose a repository'}</h2>
           </div>
-          <Button size="sm" variant="ghost" onclick={() => void resync()} disabled={setupLoading}
-            >{setupLoading ? 'Checking…' : 'Check again'}</Button
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={restartSetup}
+            disabled={setupLoading || running || sending}
+            >{setupLoading ? 'Checking…' : 'Restart and check'}</Button
           >
         </div>
         {#if setupError}<p class="notice error" role="alert">{setupError}</p>{/if}
@@ -532,8 +567,8 @@
             </p>
             <pre>{'{ "plugins": ["/absolute/path/to/opencode-plugin-plan-review"] }'}</pre>
             <p>
-              OpenCode loads plugin changes on reload. Choose <strong>Check again</strong> after configuration.
-              This app does not change your repository.
+              Choose <strong>Restart and check</strong> after changing plugin configuration. This app
+              does not change your repository.
             </p>
           </div>{/if}
       </section>{/if}
@@ -605,7 +640,13 @@
           </div>
         </div>
       </main>
-      <PlanPanel {snapshot} {client} {directory} {dark} onchanged={() => refreshSession()} />
+      <PlanPanel
+        {snapshot}
+        client={connecting ? null : client}
+        {directory}
+        {dark}
+        onchanged={() => refreshSession()}
+      />
     </div>
   </div>
 </div>
