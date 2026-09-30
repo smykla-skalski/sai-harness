@@ -20,6 +20,7 @@
   let { pendingPermissions, pendingForms, client, sessionID, onchanged }: Props = $props();
   type Value = string | number | boolean | string[];
   let drafts = $state<Record<string, Record<string, Value>>>({});
+  let customInputs = $state<Record<string, string>>({});
   let feedback = $state<Record<string, string>>({});
   let busyID = $state<string | null>(null);
   let error = $state('');
@@ -45,13 +46,27 @@
     drafts[form.id] = { ...drafts[form.id], [key]: next };
   }
 
+  function addCustom(form: FormInfo, key: string) {
+    const id = `${form.id}:${key}`;
+    const entry = customInputs[id]?.trim();
+    const selected = value(form, key);
+    if (!entry || !Array.isArray(selected) || selected.includes(entry)) return;
+    setValue(form, key, [...selected, entry]);
+    customInputs[id] = '';
+  }
+
   function visible(form: FormInfo, field: FormField): boolean {
     if ('hidden' in field && field.hidden) return false;
     return (
       !('when' in field) ||
       !field.when?.length ||
       field.when.every((condition) => {
-        const matches = value(form, condition.key) === condition.value;
+        const current = value(form, condition.key);
+        const matches = Array.isArray(current)
+          ? current.includes(String(condition.value))
+          : typeof condition.value === 'number' && typeof current === 'string'
+            ? Number(current) === condition.value
+            : current === condition.value;
         return condition.op === 'eq' ? matches : !matches;
       })
     );
@@ -80,6 +95,10 @@
           if (field.required) throw new Error(`${field.title ?? field.key} is required.`);
           continue;
         }
+        if (current === 'Infinity' || current === '-Infinity' || current === 'NaN') {
+          result[field.key] = current;
+          continue;
+        }
         const parsed = Number(current);
         if (!Number.isFinite(parsed) || (field.type === 'integer' && !Number.isInteger(parsed)))
           throw new Error(`Enter a valid number for ${field.title ?? field.key}.`);
@@ -101,6 +120,7 @@
         const text = String(current);
         if (field.required && !text.trim())
           throw new Error(`${field.title ?? field.key} is required.`);
+        if (!text && !field.required) continue;
         if (field.minLength !== undefined && text.length < field.minLength)
           throw new Error(`${field.title ?? field.key} is too short.`);
         if (field.maxLength !== undefined && text.length > field.maxLength)
@@ -244,6 +264,32 @@
                       }}
                     />{option.label}</label
                   >{/each}
+                {#if field.custom}
+                  {#each (value(form, field.key) as string[]).filter((item) => !field.options.some((option) => option.value === item)) as item (item)}
+                    <button
+                      type="button"
+                      class="prompt-custom-option"
+                      aria-label={`Remove ${item}`}
+                      onclick={() =>
+                        setValue(
+                          form,
+                          field.key,
+                          (value(form, field.key) as string[]).filter(
+                            (selected) => selected !== item,
+                          ),
+                        )}>{item} ×</button
+                    >
+                  {/each}
+                  <div class="prompt-custom-entry">
+                    <input
+                      aria-label={`Custom ${field.title ?? field.key}`}
+                      value={customInputs[`${form.id}:${field.key}`] ?? ''}
+                      oninput={(event) =>
+                        (customInputs[`${form.id}:${field.key}`] = event.currentTarget.value)}
+                    />
+                    <button type="button" onclick={() => addCustom(form, field.key)}>Add</button>
+                  </div>
+                {/if}
               {:else if field.type === 'string' && field.options?.length && !field.custom}
                 <select
                   aria-label={field.title ?? field.key}
@@ -256,21 +302,32 @@
                     >{/each}
                 </select>
               {:else}<input
-                  type={field.type === 'number' || field.type === 'integer'
-                    ? 'number'
-                    : field.type === 'string'
-                      ? field.format === 'uri'
-                        ? 'url'
-                        : field.format === 'date-time'
-                          ? 'datetime-local'
-                          : (field.format ?? 'text')
-                      : 'text'}
+                  type={field.type === 'string'
+                    ? field.format === 'uri'
+                      ? 'url'
+                      : field.format === 'date-time'
+                        ? 'text'
+                        : (field.format ?? 'text')
+                    : 'text'}
                   aria-label={field.title ?? field.key}
-                  step={field.type === 'integer' ? '1' : 'any'}
+                  inputmode={field.type === 'number' || field.type === 'integer'
+                    ? 'decimal'
+                    : undefined}
+                  list={field.type === 'string' && field.custom && field.options?.length
+                    ? `options-${form.id}-${field.key}`
+                    : undefined}
                   value={String(value(form, field.key))}
                   placeholder={field.type === 'string' ? (field.placeholder ?? '') : ''}
                   oninput={(event) => setValue(form, field.key, event.currentTarget.value)}
-                />{/if}
+                />
+                {#if field.type === 'string' && field.custom && field.options?.length}
+                  <datalist id={`options-${form.id}-${field.key}`}>
+                    {#each field.options as option (option.value)}<option value={option.value}
+                        >{option.label}</option
+                      >{/each}
+                  </datalist>
+                {/if}
+              {/if}
             </div>
           {/if}
         {/each}

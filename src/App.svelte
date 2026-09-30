@@ -545,22 +545,24 @@
 
   async function refreshSession(id = sessionID, current = selection) {
     if (!client || !id || !directory) return;
-    try {
-      const [history, plan, permissions, forms] = await Promise.all([
-        client.message.list({ sessionID: id, limit: 100, order: 'asc' }),
-        getPlan(client, directory, id),
-        client.permission.list({ sessionID: id }),
-        client.session.form.list({ sessionID: id }),
-      ]);
-      if (current !== selection || id !== sessionID) return;
-      messages = history.data;
-      snapshot = plan;
-      pendingPermissions = permissions;
-      pendingForms = forms;
+    const [history, plan, permissions, forms] = await Promise.allSettled([
+      client.message.list({ sessionID: id, limit: 100, order: 'asc' }),
+      getPlan(client, directory, id),
+      client.permission.list({ sessionID: id }),
+      client.session.form.list({ sessionID: id }),
+    ]);
+    if (current !== selection || id !== sessionID) return;
+    if (history.status === 'fulfilled') messages = history.value.data;
+    if (plan.status === 'fulfilled') snapshot = plan.value;
+    if (permissions.status === 'fulfilled') pendingPermissions = permissions.value;
+    if (forms.status === 'fulfilled') pendingForms = forms.value;
+    const failed = [history, plan, permissions, forms].find(
+      (result) => result.status === 'rejected',
+    );
+    if (failed?.status === 'rejected') error = describe(failed.reason);
+    if (history.status === 'fulfilled') {
       await tick();
       chatEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-    } catch (cause) {
-      if (current === selection) error = describe(cause);
     }
   }
 
