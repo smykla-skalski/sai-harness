@@ -1591,8 +1591,9 @@
               <code>/connect</code> to connect a provider and <code>/models</code> to select a model.
             </p>
             <p>
-              Install the published plugin with <code
-                >opencode plugin add @smykla-skalski/opencode-plugin-plan-review@latest</code
+              Install the tested plugin revision with <code
+                >opencode plugin add
+                github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5</code
               >, or add a local checkout path to <code>opencode.jsonc</code>:
             </p>
             <pre>{'{ "plugins": ["/absolute/path/to/opencode-plugin-plan-review"] }'}</pre>

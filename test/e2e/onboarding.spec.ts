@@ -40,7 +40,7 @@ describe('repository setup', () => {
     );
     await expect($('.setup-panel')).toHaveText(
       expect.stringContaining(
-        'opencode plugin add @smykla-skalski/opencode-plugin-plan-review@latest',
+        'github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5',
       ),
     );
     await expect($('[aria-label="New plan"]')).toBeDisabled();
