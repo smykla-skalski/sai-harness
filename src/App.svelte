@@ -2126,11 +2126,10 @@
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
       !event.shiftKey &&
-      event.key.toLowerCase() === 'w' &&
-      !event.repeat
+      event.key.toLowerCase() === 'w'
     ) {
       event.preventDefault();
-      if (!document.querySelector('dialog[open]')) closeCurrentPane();
+      if (!event.repeat && !document.querySelector('dialog[open]')) closeCurrentPane();
       return;
     }
     if (
