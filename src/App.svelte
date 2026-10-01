@@ -254,6 +254,7 @@
   let eventController: AbortController | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let diffTimer: ReturnType<typeof setTimeout> | undefined;
+  let diffPollTimer: ReturnType<typeof setInterval> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
   let connecting = $state(false);
@@ -399,6 +400,16 @@
     observer.observe(workspaceElement);
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
+    diffPollTimer = setInterval(() => {
+      if (
+        detailsOpen &&
+        activeSideTab === 'changes' &&
+        sessionID &&
+        (!window.matchMedia('(max-width: 850px)').matches || mobileView === 'details') &&
+        !diffLoading
+      )
+        void refreshDiff(sessionID, selection, true);
+    }, 3000);
     return () => {
       disposed = true;
       observer.disconnect();
@@ -407,6 +418,7 @@
       clearTimeout(diffTimer);
       clearTimeout(recoveryTimer);
       clearInterval(healthTimer);
+      clearInterval(diffPollTimer);
       cancelAnimationFrame(followFrame);
       for (const pending of messageTimers.values()) clearTimeout(pending.timer);
     };
@@ -1174,12 +1186,12 @@
     messageTimers.set(messageID, { timer, settled: settled || !!previous?.settled });
   }
 
-  async function refreshDiff(id = sessionID, current = selection) {
+  async function refreshDiff(id = sessionID, current = selection, quiet = false) {
     if (!client || !id || !directory) return;
     const source = client;
     const path = directory;
     const generation = ++diffRefresh;
-    diffLoading = true;
+    if (!quiet) diffLoading = true;
     try {
       const next = (await source.vcs.diff({ location: { directory: path }, mode: 'working' })).data;
       if (
