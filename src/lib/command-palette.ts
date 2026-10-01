@@ -57,12 +57,8 @@ export function searchCommandPalette(
   query: string,
 ): PaletteEntry[] {
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  const selectedAgent = agents.find((agent) =>
-    terms.some(
-      (term) =>
-        term.length >= 2 &&
-        (agent.id.toLowerCase().startsWith(term) || agent.name.toLowerCase().startsWith(term)),
-    ),
+  const selectedAgent = agents.find(
+    (agent) => agent.available && terms.some((term) => agentMatches(agent, term)),
   );
   const searchTerms = selectedAgent
     ? terms.filter((term) => !agentMatches(selectedAgent, term))
@@ -99,6 +95,7 @@ export function searchCommandPalette(
       });
   }
   for (const thread of threads) {
+    if (!agents.some((agent) => agent.id === thread.agent && agent.available)) continue;
     if (selectedAgent && thread.agent !== selectedAgent.id) continue;
     const location = locations.find((item) => item.directory === thread.directory);
     if (!location) continue;
@@ -130,8 +127,5 @@ export function searchCommandPalette(
 }
 
 function agentMatches(agent: AgentAvailability, term: string): boolean {
-  return (
-    term.length >= 2 &&
-    (agent.id.toLowerCase().startsWith(term) || agent.name.toLowerCase().startsWith(term))
-  );
+  return agent.id.toLowerCase() === term || agent.name.toLowerCase() === term;
 }

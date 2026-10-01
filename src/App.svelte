@@ -1144,15 +1144,19 @@
       paletteIndex =
         (paletteIndex + (event.key === 'ArrowDown' ? 1 : -1) + paletteEntries.length) %
         paletteEntries.length;
-      void tick().then(() =>
-        paletteDialog
-          .querySelector<HTMLElement>('.palette-entry.active')
-          ?.scrollIntoView({ block: 'nearest' }),
-      );
+      scrollToActivePaletteEntry();
     } else if (event.key === 'Enter') {
       event.preventDefault();
       void choosePaletteEntry(paletteEntries[paletteIndex] ?? null);
     }
+  }
+
+  function scrollToActivePaletteEntry() {
+    void tick().then(() =>
+      paletteDialog
+        .querySelector<HTMLElement>('.palette-entry.active')
+        ?.scrollIntoView({ block: 'nearest' }),
+    );
   }
 
   function saveAgentThread(thread: AgentThread) {
@@ -2836,6 +2840,7 @@
       oninput={(event) => {
         paletteQuery = event.currentTarget.value;
         paletteIndex = 0;
+        scrollToActivePaletteEntry();
       }}
       onkeydown={keydownCommandPalette}
     />

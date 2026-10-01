@@ -35,6 +35,24 @@ void test('agent term filters threads and keeps empty locations available', () =
   assert.deepEqual(searchCommandPalette(catalog, threads, agents, '/work/alpha', 'no-match'), []);
 });
 
+void test('agent filters require an available agent and a full name', () => {
+  const companyCatalog = {
+    ...catalog,
+    repositories: [...catalog.repositories, '/work/company'],
+  };
+  const prefix = searchCommandPalette(companyCatalog, threads, agents, '/work/alpha', 'co');
+  assert.deepEqual(
+    prefix.map((entry) => entry.directory),
+    ['/work/company'],
+  );
+
+  const unavailable = agents.map((agent) =>
+    agent.id === 'codex' ? { ...agent, available: false } : agent,
+  );
+  assert.deepEqual(searchCommandPalette(catalog, threads, unavailable, '/work/alpha', 'codex'), []);
+  assert.deepEqual(searchCommandPalette(catalog, threads, unavailable, '/work/alpha', 'fix'), []);
+});
+
 void test('location picks newest thread with an available agent', () => {
   const withUnavailable = [
     ...threads,
