@@ -50,17 +50,12 @@ export function leaves(pane: Pane): Extract<Pane, { agent: AgentId | null }>[] {
   return 'direction' in pane ? [...leaves(pane.first), ...leaves(pane.second)] : [pane];
 }
 
-export function splitPane(
-  pane: Pane,
-  id: string,
-  direction: 'row' | 'column',
-  agent: AgentId,
-): Pane {
+export function splitPane(pane: Pane, id: string, direction: 'row' | 'column'): Pane {
   if ('direction' in pane)
     return {
       ...pane,
-      first: splitPane(pane.first, id, direction, agent),
-      second: splitPane(pane.second, id, direction, agent),
+      first: splitPane(pane.first, id, direction),
+      second: splitPane(pane.second, id, direction),
     };
   if (pane.id !== id) return pane;
   return {
@@ -68,7 +63,7 @@ export function splitPane(
     direction,
     ratio: 0.5,
     first: pane,
-    second: { id: crypto.randomUUID(), agent, thread: null },
+    second: { id: crypto.randomUUID(), agent: null, thread: null },
   };
 }
 

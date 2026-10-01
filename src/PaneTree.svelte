@@ -5,6 +5,7 @@
   import PaneTree from './PaneTree.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import DiffPanel from './DiffPanel.svelte';
+  import EmptyPanePicker from './EmptyPanePicker.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
   import type { Pane } from './lib/panes';
 
@@ -20,6 +21,7 @@
     onclose: (id: string) => void;
     onratio: (id: string, ratio: number) => void;
     oncreated: (id: string, thread: AgentThread) => void;
+    onchooseagent: (id: string, agent: string) => void;
     onactivity: (thread: AgentThread) => void;
     focusPromptPane: string | null;
     onpromptfocused: () => void;
@@ -40,6 +42,7 @@
     onclose,
     onratio,
     oncreated,
+    onchooseagent,
     onactivity,
     focusPromptPane,
     onpromptfocused,
@@ -130,6 +133,7 @@
       {onclose}
       {onratio}
       {oncreated}
+      {onchooseagent}
       {onactivity}
       {focusPromptPane}
       {onpromptfocused}
@@ -177,6 +181,7 @@
       {onclose}
       {onratio}
       {oncreated}
+      {onchooseagent}
       {onactivity}
       {focusPromptPane}
       {onpromptfocused}
@@ -191,16 +196,27 @@
     class:focused={focused === pane.id}
     data-pane-id={pane.id}
     aria-keyshortcuts="Meta+Alt+ArrowLeft Meta+Alt+ArrowRight Meta+Alt+ArrowUp Meta+Alt+ArrowDown F6 Shift+F6"
-    aria-label={pane.agent ? `${pane.agent} pane` : 'Main pane'}
+    aria-label={pane.id === 'main' ? 'Main pane' : pane.agent ? `${pane.agent} pane` : 'Empty pane'}
     tabindex="-1"
     onfocusin={() => onfocus(pane.id)}
-    onpointerdown={() => onfocus(pane.id)}
+    onpointerdown={(event) => {
+      onfocus(pane.id);
+      if (pane.id === 'main' || pane.agent || !(event.target instanceof Element)) return;
+      if (event.target.closest('button, input, textarea, select')) return;
+      (
+        event.currentTarget.querySelector<HTMLButtonElement>(
+          '[data-agent-choice]:not(:disabled), [data-pane-picker]',
+        ) ?? event.currentTarget
+      ).focus();
+    }}
   >
     {#if pane.id !== 'main'}
       <div class="pane-heading">
-        <span>{pane.thread?.title ?? `New ${pane.agent} thread`}</span><small
-          >⌘⌥ + arrow to switch</small
-        ><button aria-label="Close pane" onclick={() => onclose(pane.id)}>×</button>
+        <span>{pane.thread?.title ?? (pane.agent ? `New ${pane.agent} thread` : 'Empty pane')}</span
+        ><small>⌘⌥ + arrow to switch</small><button
+          aria-label="Close pane"
+          onclick={() => onclose(pane.id)}>×</button
+        >
       </div>
     {:else if canClose}
       <div class="pane-heading">
@@ -242,6 +258,12 @@
           {/if}
         </div>
       {/key}
+    {:else}
+      <EmptyPanePicker
+        {agents}
+        focused={focused === pane.id}
+        onselect={(agent) => onchooseagent(pane.id, agent)}
+      />
     {/if}
   </section>
 {/if}

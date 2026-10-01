@@ -1357,16 +1357,7 @@
   function splitFocusedPane(direction: 'row' | 'column') {
     if (!directory) return;
     ++recentJumpGeneration;
-    const agent =
-      (focusedPane === 'main'
-        ? acpAgent
-        : leaves(paneLayout).find((leaf) => leaf.id === focusedPane)?.agent) ??
-      agentAvailability.find((item) => item.available)?.id;
-    if (!agent) {
-      error = 'Install an agent to open another pane.';
-      return;
-    }
-    const layout = splitPane(paneLayout, focusedPane, direction, agent);
+    const layout = splitPane(paneLayout, focusedPane, direction);
     const old = new Set(leaves(paneLayout).map((leaf) => leaf.id));
     const created = leaves(layout).find((leaf) => !old.has(leaf.id));
     if (!created) return;
@@ -1397,8 +1388,14 @@
     if (focusedPane !== id || promptFocusPane !== id) return;
     const pane = document.querySelector<HTMLElement>(`[data-pane-id="${id}"]`);
     const prompt = pane?.querySelector<HTMLTextAreaElement>('[data-pane-prompt]:not(:disabled)');
+    const picker = pane?.querySelector<HTMLButtonElement>(
+      '[data-agent-choice]:not(:disabled), [data-pane-picker]',
+    );
     if (prompt) {
       prompt.focus();
+      promptFocusPane = null;
+    } else if (picker) {
+      picker.focus();
       promptFocusPane = null;
     } else {
       pane?.focus();
@@ -1447,6 +1444,11 @@
     savePaneLayout(updatePane(paneLayout, id, { thread }));
     saveAgentThread(thread);
     rememberRecentThread(thread);
+  }
+
+  function choosePaneAgent(id: string, agent: AgentId) {
+    savePaneLayout(updatePane(paneLayout, id, { agent, thread: null }));
+    focusPaneForTyping(id);
   }
 
   function focusMainPane() {
@@ -3038,6 +3040,7 @@
       onclose={closeFocusedPane}
       onratio={updatePaneRatio}
       oncreated={createPaneThread}
+      onchooseagent={choosePaneAgent}
       onactivity={saveAgentThread}
       focusPromptPane={promptFocusPane}
       onpromptfocused={() => (promptFocusPane = null)}

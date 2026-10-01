@@ -63,6 +63,21 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'd']);
     await expect($('.pane-split.row')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(2);
+    await expect($('.pane-leaf.focused [data-pane-picker]')).toBeFocused();
+    await browser.keys('a');
+    await expect($('.pane-leaf.focused [data-agent-choice]:not([disabled])')).toBeFocused();
+    await $('.pane-leaf.focused .pane-picker-intro h2').click();
+    await browser.keys('ArrowDown');
+    await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
+    await browser.keys('ArrowUp');
+    await expect($('.pane-leaf.focused [data-agent-choice]:first-child')).toBeFocused();
+    await browser.execute(() => document.querySelector<HTMLElement>('.sidebar')?.focus());
+    await browser.keys('ArrowDown');
+    await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
+    await browser.keys('ArrowUp');
+    await expect($('.pane-leaf.focused [data-agent-choice]:first-child')).toBeFocused();
+    await browser.keys('Enter');
+    await expect($('.pane-leaf.focused textarea[data-pane-prompt]')).toBeFocused();
     const header = await browser.execute(() => ({
       right: document.querySelector('.topbar-actions')!.getBoundingClientRect().right,
       themeRight: document.querySelector('button[aria-label$=" theme"]')!.getBoundingClientRect()
@@ -87,6 +102,9 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'Shift', 'd']);
     await expect($('.pane-split.column')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(3);
+    await expect($('.pane-leaf.focused [data-pane-picker]')).toBeFocused();
+    await browser.keys('a');
+    await browser.keys('Enter');
     await capture('desktop-agent-three-panes');
     const focusedBefore = await $('.pane-leaf.focused').getAttribute('data-pane-id');
     await browser.keys('F6');

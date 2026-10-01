@@ -25,7 +25,12 @@ void test('arrow navigation follows neighboring panes without wrapping', () => {
 });
 
 void test('split and close preserve neighboring panes and their threads', () => {
-  const first = splitPane(mainPane(), 'main', 'row', 'claude');
+  const empty = splitPane(mainPane(), 'main', 'row');
+  assert.deepEqual(
+    leaves(empty).map((pane) => pane.agent),
+    [null, null],
+  );
+  const first = updatePane(empty, leaves(empty)[1].id, { agent: 'claude' });
   const created = leaves(first)[1];
   const thread = {
     agent: 'claude',
@@ -37,7 +42,8 @@ void test('split and close preserve neighboring panes and their threads', () => 
   const populated = updatePane(first, created.id, { thread });
   const resized = updatePane(populated, populated.id, { ratio: 0.7 });
   assert.equal('direction' in resized && resized.ratio, 0.7);
-  const second = splitPane(resized, created.id, 'column', 'codex');
+  const secondEmpty = splitPane(resized, created.id, 'column');
+  const second = updatePane(secondEmpty, leaves(secondEmpty)[2].id, { agent: 'codex' });
   assert.deepEqual(
     leaves(second).map((pane) => pane.agent),
     [null, 'claude', 'codex'],
@@ -54,7 +60,7 @@ void test('split and close preserve neighboring panes and their threads', () => 
 });
 
 void test('pane layouts survive serialization and reject malformed saved trees', () => {
-  const layout = splitPane(mainPane(), 'main', 'column', 'claude');
+  const layout = splitPane(mainPane(), 'main', 'column');
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': layout }))['/repo'], layout);
   const duplicate = {
     id: 'split',
@@ -75,8 +81,8 @@ void test('pane layouts survive serialization and reject malformed saved trees',
 });
 
 void test('canonical path migration updates threads inside nested panes', () => {
-  const first = splitPane(mainPane(), 'main', 'row', 'claude');
-  const second = splitPane(first, leaves(first)[1].id, 'column', 'codex');
+  const first = splitPane(mainPane(), 'main', 'row');
+  const second = splitPane(first, leaves(first)[1].id, 'column');
   const oldThread = {
     agent: 'codex',
     sessionId: 'session-1',
