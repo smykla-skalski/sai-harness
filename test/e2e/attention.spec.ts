@@ -1,8 +1,9 @@
-import { browser, $, expect } from '@wdio/globals';
+import { browser, $, $$, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { openSettings, returnToWorkspace } from './settings-window';
 
 const waitForComposer = () =>
   browser.waitUntil(
@@ -93,11 +94,13 @@ describe('agent thread attention', () => {
     await expect(cancelled).toHaveText(expect.stringContaining('done'));
     await expect(cancelled.$('.thread-unread')).not.toExist();
 
-    await $$('.runtime-settings summary')[1].click();
+    await openSettings();
+    await $('.settings-navigation button:nth-of-type(3)').click();
     const options = await $$('.attention-setting input');
     await options[0].click();
     await expect(options[1]).toBeEnabled();
     await options[1].click();
+    await returnToWorkspace();
     expect(await browser.execute(() => localStorage.getItem('sai-notifications-enabled'))).toBe(
       'true',
     );
