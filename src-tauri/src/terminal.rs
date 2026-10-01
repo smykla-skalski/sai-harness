@@ -34,11 +34,14 @@ struct TerminalSession {
 
 impl TerminalSession {
     fn stop(&self) {
-        #[cfg(unix)]
         if self
             .output
             .lock()
-            .is_ok_and(|output| output.exit_code.is_none())
+            .is_ok_and(|output| output.exit_code.is_some())
+        {
+            return;
+        }
+        #[cfg(unix)]
         {
             if let Ok(master) = self.master.lock() {
                 if let Some(group) = master.process_group_leader() {
@@ -53,6 +56,36 @@ impl TerminalSession {
             let _ = killer.kill();
         }
     }
+}
+
+fn default_editor() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        for candidate in [
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+            "/Applications/Zed.app/Contents/MacOS/cli",
+        ] {
+            if Path::new(candidate).is_file() {
+                return candidate.to_string();
+            }
+        }
+    }
+    "code".to_string()
+}
+
+fn editor_program(program: &str) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if !Path::new(program).is_absolute() {
+        let candidate = match program {
+            "code" => Some("/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"),
+            "zed" => Some("/Applications/Zed.app/Contents/MacOS/cli"),
+            _ => None,
+        };
+        if let Some(candidate) = candidate.filter(|path| Path::new(path).is_file()) {
+            return PathBuf::from(candidate);
+        }
+    }
+    PathBuf::from(program)
 }
 
 #[derive(Default)]
@@ -205,10 +238,10 @@ pub fn terminal_open(
         .map_err(|error| error.to_string())?;
     let mut output = session.output.lock().map_err(|error| error.to_string())?;
     output.subscriber = Some((attachment, on_event.clone()));
-    if !output.history.is_empty() {
+    for chunk in output.history.chunks(8192) {
         on_event
             .send(TerminalEvent::Output {
-                data: output.history.clone(),
+                data: chunk.to_vec(),
             })
             .map_err(|error| error.to_string())?;
     }
@@ -366,7 +399,7 @@ pub fn terminal_open_file(
     let editor = std::env::var("SAIL_EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
         .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "code".to_string());
+        .unwrap_or_else(|_| default_editor());
     let parts = shell_words::split(&editor).map_err(|error| error.to_string())?;
     let (program, arguments) = parts.split_first().ok_or("Editor is empty")?;
     let name = Path::new(program)
@@ -422,7 +455,7 @@ pub fn terminal_open_file(
             command
         }
     } else {
-        Command::new(program)
+        Command::new(editor_program(program))
     };
     command.args(arguments);
     if ["code", "codium", "cursor"].contains(&name) {
