@@ -33,6 +33,14 @@
     touchRecentThread,
   } from './lib/recent-threads';
   import {
+    loadAttention,
+    markAttentionRead,
+    reconcileAttention,
+    updateAttention,
+    type AttentionMap,
+    type ThreadStatus,
+  } from './lib/attention';
+  import {
     adjacentPaneId,
     closePane,
     leaves,
@@ -49,6 +57,7 @@
     loadAgentThreads,
     saveAgentThreads,
     type AgentAvailability,
+    type AgentEvent,
     type AgentId,
     type AgentThread,
   } from './lib/acp';
@@ -95,6 +104,10 @@
   let agentAvailability = $state<AgentAvailability[]>([]);
   let agentDetectionError = $state('');
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
+  let threadAttention = $state<AttentionMap>(loadAttention(getSetting('sai-thread-attention')));
+  let attentionRevision = 0;
+  let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
+  let notificationSound = $state(getSetting('sai-notification-sound') !== 'false');
   let recentThreadKeys = $state<string[]>(
     loadRecentThreadKeys(getSetting('sai-recent-agent-threads'), savedAgentThreads),
   );
@@ -539,6 +552,8 @@
       busy: connecting || running || sending,
       agents: agentAvailability,
       agentsError: agentDetectionError,
+      notificationsEnabled,
+      notificationSound,
     };
   }
 
@@ -597,6 +612,8 @@
   }
 
   onMount(() => {
+    let unlistenAgentEvents: (() => void) | undefined;
+    let unlistenNotificationClick: (() => void) | undefined;
     setTheme(dark);
     let stopSettingsRequest: (() => void) | undefined;
     let stopSettingsAction: (() => void) | undefined;
@@ -629,12 +646,38 @@
         else if (action.type === 'binary') {
           binaryPath = action.value;
           void retryRuntime();
+        } else if (action.type === 'notifications') {
+          notificationsEnabled = action.value;
+          setSetting('sai-notifications-enabled', String(action.value));
+        } else if (action.type === 'notification-sound') {
+          notificationSound = action.value;
+          setSetting('sai-notification-sound', String(action.value));
         } else if (action.type === 'detect-agents') void detectAgents();
         else if (action.type === 'restart-setup') void restartSetup();
         void sendSettingsState();
       }).then((unlisten) => (stopSettingsAction = unlisten));
     }
     if (isTauri()) void detectAgents();
+    if (isTauri()) {
+      void listen<AgentEvent>('acp-event', ({ payload }) => handleAgentEvent(payload)).then(
+        (unlisten) => {
+          if (disposed) unlisten();
+          else {
+            unlistenAgentEvents = unlisten;
+            void restoreAgentActivity();
+          }
+          return undefined;
+        },
+      );
+      void listen<string>('sail-notification-click', ({ payload }) => {
+        void jumpToRecentThread(payload);
+      }).then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenNotificationClick = unlisten;
+        return undefined;
+      });
+      updateAttentionBadge();
+    }
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
     diffPollTimer = setInterval(() => {
@@ -664,6 +707,8 @@
       clearTimeout(recoveryTimer);
       clearInterval(healthTimer);
       clearInterval(diffPollTimer);
+      unlistenAgentEvents?.();
+      unlistenNotificationClick?.();
       cancelAnimationFrame(followFrame);
       for (const pending of messageTimers.values()) clearTimeout(pending.timer);
     };
@@ -917,7 +962,7 @@
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
       saveAgentThreads(agentThreads);
       forgetMissingRecentThreads();
-      for (const thread of removedThreads) updateAgentThreadStatus(thread, false);
+      for (const thread of removedThreads) forgetThreadAttention(thread);
       delete paneLayouts[path];
       persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
@@ -965,8 +1010,10 @@
       recordRestoredThread &&
       restoredThread &&
       agentThreads.some((thread) => threadKey(thread) === threadKey(restoredThread))
-    )
+    ) {
       rememberRecentThread(restoredThread);
+      if (document.hasFocus()) markThreadRead(restoredThread);
+    }
     ++sessionRefresh;
     workReady = false;
     planReady = false;
@@ -1054,6 +1101,21 @@
           report.repository,
         );
         setSetting('sai-recent-agent-threads', JSON.stringify(recentThreadKeys));
+        const attentionKeys = new Map(
+          agentThreads
+            .filter((thread) => thread.directory === path)
+            .map((thread) => [
+              threadKey(thread),
+              threadKey({ ...thread, directory: report.repository }),
+            ]),
+        );
+        threadAttention = Object.fromEntries(
+          Object.entries(threadAttention).map(([key, value]) => [
+            attentionKeys.get(key) ?? key,
+            value,
+          ]),
+        );
+        saveThreadAttention();
         agentThreads = agentThreads.map((thread) =>
           thread.directory === path
             ? Object.assign({}, thread, { directory: report.repository })
@@ -1245,7 +1307,10 @@
       recentCycleKeys = null;
       ++recentJumpGeneration;
     }
-    if (thread) rememberRecentThread(thread);
+    if (thread) {
+      rememberRecentThread(thread);
+      markThreadRead(thread);
+    }
     if (focusedPane !== 'main' && leaves(paneLayout).some((leaf) => leaf.id === focusedPane)) {
       savePaneLayout(updatePane(paneLayout, focusedPane, { agent, thread }));
       return;
@@ -1480,7 +1545,10 @@
     focusedPane = id;
     const thread =
       id === 'main' ? acpThread : leaves(paneLayout).find((pane) => pane.id === id)?.thread;
-    if (thread) rememberRecentThread(thread);
+    if (thread) {
+      rememberRecentThread(thread);
+      markThreadRead(thread);
+    }
     promptFocusPane = id;
     void focusPanePromptAfterTick(id);
   }
@@ -1491,7 +1559,10 @@
     focusedPane = id;
     const thread =
       id === 'main' ? acpThread : leaves(paneLayout).find((pane) => pane.id === id)?.thread;
-    if (thread) rememberRecentThread(thread);
+    if (thread) {
+      rememberRecentThread(thread);
+      markThreadRead(thread);
+    }
   }
 
   async function focusPanePromptAfterTick(id: string) {
@@ -1584,7 +1655,7 @@
     );
     saveAgentThreads(agentThreads);
     forgetMissingRecentThreads();
-    updateAgentThreadStatus(thread, false);
+    forgetThreadAttention(thread);
     for (const [path, layout] of Object.entries(paneLayouts)) {
       let next = layout;
       for (const leaf of leaves(layout)) {
@@ -1609,16 +1680,149 @@
   }
 
   function agentThreadKey(thread: AgentThread): string {
-    return JSON.stringify([thread.agent, thread.directory, thread.sessionId]);
+    return threadKey(thread);
   }
 
-  function updateAgentThreadStatus(thread: AgentThread, active: boolean) {
+  function saveThreadAttention() {
+    setSetting('sai-thread-attention', JSON.stringify(threadAttention));
+  }
+
+  function markThreadRead(thread: AgentThread) {
+    const next = markAttentionRead(threadAttention, threadKey(thread));
+    if (next === threadAttention) return;
+    threadAttention = next;
+    attentionRevision++;
+    saveThreadAttention();
+  }
+
+  function forgetThreadAttention(thread: AgentThread) {
+    const key = threadKey(thread);
+    const next = { ...threadAttention };
+    delete next[key];
+    threadAttention = next;
+    saveThreadAttention();
+    const nextRunning = { ...runningAgentThreads };
+    delete nextRunning[key];
+    runningAgentThreads = nextRunning;
+    updateAttentionBadge();
+  }
+
+  function threadIsViewed(key: string): boolean {
+    return (
+      document.hasFocus() &&
+      leaves(paneLayout).some((pane) => pane.thread && threadKey(pane.thread) === key)
+    );
+  }
+
+  function updateAttentionBadge() {
+    if (!isTauri()) return;
+    const threads = new Set(agentThreads.map(threadKey));
+    const count = Object.entries(threadAttention).filter(
+      ([key, item]) => threads.has(key) && item.status === 'waiting',
+    ).length;
+    void invoke('set_attention_badge', { count }).catch(() => undefined);
+  }
+
+  async function restoreAgentActivity(attempt = 0) {
+    const revision = attentionRevision;
+    try {
+      const backendActivity = await acp.activity();
+      if (disposed) return;
+      if (revision !== attentionRevision) {
+        if (attempt < 2) await restoreAgentActivity(attempt + 1);
+        return;
+      }
+      const previousAttention = threadAttention;
+      threadAttention = reconcileAttention(
+        threadAttention,
+        agentThreads.map((thread) => ({
+          agent: thread.agent,
+          sessionId: thread.sessionId,
+          key: threadKey(thread),
+          viewed: threadIsViewed(threadKey(thread)),
+        })),
+        backendActivity,
+      );
+      saveThreadAttention();
+      runningAgentThreads = Object.fromEntries(
+        Object.entries(threadAttention)
+          .filter(([, item]) => item.status === 'working' || item.status === 'waiting')
+          .map(([key]) => [key, true]),
+      );
+      updateAttentionBadge();
+      for (const thread of agentThreads) {
+        const key = threadKey(thread);
+        const before = previousAttention[key];
+        const after = threadAttention[key];
+        if (
+          after?.unread &&
+          before?.status !== after.status &&
+          (after.status === 'waiting' || after.status === 'done')
+        )
+          showThreadAttentionNotification(thread, after.status);
+      }
+    } catch {
+      return;
+    }
+  }
+
+  function updateAgentThreadStatus(thread: AgentThread, status: ThreadStatus, notifyOnDone = true) {
     const key = agentThreadKey(thread);
-    if (active) runningAgentThreads = { ...runningAgentThreads, [key]: true };
+    if (!agentThreads.some((item) => threadKey(item) === key)) return;
+    const { next, notify } = updateAttention(
+      threadAttention,
+      key,
+      status,
+      threadIsViewed(key),
+      notifyOnDone,
+    );
+    threadAttention = next;
+    attentionRevision++;
+    saveThreadAttention();
+    if (status === 'working' || status === 'waiting')
+      runningAgentThreads = { ...runningAgentThreads, [key]: true };
     else {
-      const next = { ...runningAgentThreads };
-      delete next[key];
-      runningAgentThreads = next;
+      const nextRunning = { ...runningAgentThreads };
+      delete nextRunning[key];
+      runningAgentThreads = nextRunning;
+    }
+    updateAttentionBadge();
+    if (notify) showThreadAttentionNotification(thread, status);
+  }
+
+  function showThreadAttentionNotification(thread: AgentThread, status: ThreadStatus) {
+    if (!notificationsEnabled || !isTauri()) return;
+    void invoke('show_attention_notification', {
+      threadKey: threadKey(thread),
+      title: thread.title,
+      body: status === 'waiting' ? 'Needs your input' : 'Finished',
+      sound: notificationSound,
+    }).catch(() => undefined);
+  }
+
+  function handleAgentEvent(event: AgentEvent) {
+    if (event.message.method === 'sail/prompt_finished') {
+      const sessionId = event.message.params?.sessionId;
+      const status = event.message.params?.status;
+      if (typeof sessionId !== 'string' || (status !== 'done' && status !== 'failed')) return;
+      for (const thread of agentThreads.filter(
+        (item) => item.agent === event.agent && item.sessionId === sessionId,
+      ))
+        updateAgentThreadStatus(thread, status, event.message.params?.notify !== false);
+    } else if (event.message.method === 'session/request_permission') {
+      const sessionId = event.message.params?.sessionId;
+      if (typeof sessionId !== 'string') return;
+      for (const thread of agentThreads.filter(
+        (item) => item.agent === event.agent && item.sessionId === sessionId,
+      ))
+        updateAgentThreadStatus(thread, 'waiting');
+    } else if (event.message.method === 'sail/disconnected') {
+      for (const thread of agentThreads.filter(
+        (item) =>
+          item.agent === event.agent &&
+          ['working', 'waiting'].includes(threadAttention[threadKey(item)]?.status ?? ''),
+      ))
+        updateAgentThreadStatus(thread, 'failed');
     }
   }
 
@@ -2538,6 +2742,7 @@
   }
 
   function focusWorkspace() {
+    for (const pane of leaves(paneLayout)) if (pane.thread) markThreadRead(pane.thread);
     if (acpAgent && agentChangesOpen) void refreshAgentDiff();
     else if (!acpAgent && detailsOpen && activeSideTab === 'changes') void refreshDiff();
   }
@@ -2629,6 +2834,10 @@
           {/each}
         </div>
         {#each agentThreads.filter((thread) => thread.directory === directory) as thread (`${thread.agent}:${thread.sessionId}`)}
+          {@const attention = threadAttention[threadKey(thread)] ?? {
+            status: 'done',
+            unread: false,
+          }}
           <div
             class:active={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId}
             class="session-row"
@@ -2643,11 +2852,20 @@
             >
               <span class="session-symbol">◇</span><span class="session-details"
                 ><strong>{thread.title}</strong><small
-                  >{thread.agent} · {runningAgentThreads[agentThreadKey(thread)]
-                    ? 'Running…'
-                    : new Date(thread.updated).toLocaleString()}</small
+                  ><span
+                    class="thread-status-dot"
+                    class:working={attention.status === 'working'}
+                    class:waiting={attention.status === 'waiting'}
+                    class:failed={attention.status === 'failed'}
+                  ></span>{thread.agent}
+                  · {attention.status === 'waiting' ? 'Waiting for input' : attention.status}</small
                 ></span
               >
+              {#if attention.unread}<span
+                  class="thread-unread"
+                  role="status"
+                  aria-label="Unread activity"
+                ></span>{/if}
             </button>
             <button
               class="session-action"

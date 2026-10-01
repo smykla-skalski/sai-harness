@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -59,6 +59,8 @@ struct Connection {
     input: Mutex<ChildStdin>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
     permissions: Mutex<HashMap<String, Value>>,
+    prompt_state: Mutex<PromptState>,
+    cancelled_prompts: Mutex<HashSet<String>>,
     next_id: AtomicU64,
     alive: AtomicBool,
     capabilities: Mutex<Value>,
@@ -143,6 +145,62 @@ impl Connection {
 
 #[derive(Clone, Default)]
 pub struct AgentManager(Arc<Mutex<HashMap<String, Arc<Connection>>>>);
+
+#[derive(Serialize)]
+pub struct AgentActivity {
+    alive: bool,
+    active: Vec<String>,
+    waiting: Vec<String>,
+    finished: HashMap<String, PromptOutcome>,
+}
+
+#[derive(Default)]
+struct PromptState {
+    active: HashMap<String, String>,
+    finished: HashMap<String, PromptOutcome>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct PromptOutcome {
+    status: &'static str,
+    notify: bool,
+}
+
+#[tauri::command]
+pub fn acp_activity(
+    manager: State<'_, AgentManager>,
+) -> Result<HashMap<String, AgentActivity>, String> {
+    let agents = manager.0.lock().map_err(|error| error.to_string())?;
+    agents
+        .iter()
+        .map(|(agent, runtime)| {
+            let alive = runtime.alive.load(Ordering::Acquire);
+            let prompts = runtime
+                .prompt_state
+                .lock()
+                .map_err(|error| error.to_string())?;
+            let active = prompts.active.keys().cloned().collect();
+            let finished = prompts.finished.clone();
+            let waiting = runtime
+                .permissions
+                .lock()
+                .map_err(|error| error.to_string())?
+                .values()
+                .filter_map(|message| message.pointer("/params/sessionId").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
+            Ok((
+                agent.clone(),
+                AgentActivity {
+                    alive,
+                    active,
+                    waiting,
+                    finished,
+                },
+            ))
+        })
+        .collect()
+}
 
 impl Drop for AgentManager {
     fn drop(&mut self) {
@@ -378,6 +436,8 @@ fn connect_blocking(
         input: Mutex::new(input),
         pending: Mutex::new(HashMap::new()),
         permissions: Mutex::new(HashMap::new()),
+        prompt_state: Mutex::new(PromptState::default()),
+        cancelled_prompts: Mutex::new(HashSet::new()),
         next_id: AtomicU64::new(1),
         alive: AtomicBool::new(true),
         capabilities: Mutex::new(Value::Null),
@@ -518,20 +578,61 @@ pub async fn acp_load_session(
 
 #[tauri::command]
 pub async fn acp_prompt(
+    app: AppHandle,
     manager: State<'_, AgentManager>,
     agent: String,
     session_id: String,
     text: String,
+    turn_id: String,
 ) -> Result<Value, String> {
     let runtime = connection(&manager, &agent)?;
+    {
+        let mut prompts = runtime
+            .prompt_state
+            .lock()
+            .map_err(|error| error.to_string())?;
+        prompts.finished.remove(&session_id);
+        prompts.active.insert(session_id.clone(), turn_id.clone());
+    }
     tauri::async_runtime::spawn_blocking(move || {
-        runtime.request(
+        let result = runtime.request(
             "session/prompt",
             json!({
                 "sessionId":session_id,"prompt":[{"type":"text","text":text}]
             }),
             Duration::from_secs(60 * 60 * 3),
-        )
+        );
+        let explicitly_cancelled = runtime
+            .cancelled_prompts
+            .lock()
+            .map(|mut cancelled| cancelled.remove(&turn_id))
+            .unwrap_or(false);
+        let status = if result.is_err() { "failed" } else { "done" };
+        let notify = !explicitly_cancelled
+            && result
+                .as_ref()
+                .ok()
+                .and_then(|value| value.get("stopReason"))
+                .and_then(Value::as_str)
+                != Some("cancelled");
+        if let Ok(mut prompts) = runtime.prompt_state.lock() {
+            if prompts.active.get(&session_id) == Some(&turn_id) {
+                prompts.active.remove(&session_id);
+            }
+            prompts
+                .finished
+                .insert(session_id.clone(), PromptOutcome { status, notify });
+        }
+        let _ = app.emit(
+            "acp-event",
+            AgentEvent {
+                agent,
+                message: json!({"method":"sail/prompt_finished","params":{
+                    "sessionId":session_id,"status":status,"notify":notify
+                }}),
+            },
+        );
+        result
     })
     .await
     .map_err(|error| error.to_string())?
@@ -542,8 +643,24 @@ pub fn acp_cancel(
     manager: State<'_, AgentManager>,
     agent: String,
     session_id: String,
+    turn_id: Option<String>,
 ) -> Result<(), String> {
-    connection(&manager, &agent)?.notify("session/cancel", json!({"sessionId":session_id}))
+    let runtime = connection(&manager, &agent)?;
+    let current_turn = runtime
+        .prompt_state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .active
+        .get(&session_id)
+        .cloned();
+    if let Some(turn_id) = turn_id.or(current_turn) {
+        runtime
+            .cancelled_prompts
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(turn_id);
+    }
+    runtime.notify("session/cancel", json!({"sessionId":session_id}))
 }
 
 #[tauri::command]

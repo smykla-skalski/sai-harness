@@ -435,6 +435,30 @@ button:disabled {
 .session-details small {
   font-size: 10px;
 }
+.thread-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--sui-muted);
+}
+.thread-status-dot.working {
+  background: var(--sui-primary);
+}
+.thread-status-dot.waiting {
+  background: var(--sui-warning);
+}
+.thread-status-dot.failed {
+  background: var(--sui-danger);
+}
+.thread-unread {
+  flex: 0 0 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--sui-primary);
+}
 .session-row:hover .session-item,
 .session-row.active .session-item {
   color: var(--shell-selected-ink);
@@ -650,6 +674,17 @@ button:disabled {
 .settings-card h2 {
   margin: 0 0 16px;
   font-size: 16px;
+}
+.settings-card .attention-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.settings-card .attention-setting input {
+  width: auto;
+  margin: 0;
+  padding: 0;
 }
 .settings-card p,
 .settings-card li {

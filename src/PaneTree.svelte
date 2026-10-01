@@ -7,6 +7,7 @@
   import DiffPanel from './DiffPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
+  import type { ThreadStatus } from './lib/attention';
   import { clampPaneRatio, paneRatioBounds, type Pane } from './lib/panes';
 
   type Props = {
@@ -26,7 +27,7 @@
     focusPromptPane: string | null;
     onpromptfocused: () => void;
     running: (thread: AgentThread | null) => boolean;
-    onstatus: (thread: AgentThread, running: boolean) => void;
+    onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
     onchanges: (id: string) => void;
   };
 

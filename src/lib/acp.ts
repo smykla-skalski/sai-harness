@@ -65,6 +65,13 @@ export interface AgentEvent {
   };
 }
 
+export interface AgentActivity {
+  alive: boolean;
+  active: string[];
+  waiting: string[];
+  finished: Record<string, { status: 'done' | 'failed'; notify: boolean }>;
+}
+
 const storageKey = 'sail-agent-threads';
 
 export function loadAgentThreads(): AgentThread[] {
@@ -161,13 +168,15 @@ export const acp = {
     }),
   load: (agent: AgentId, cwd: string, sessionId: string) =>
     invoke<Record<string, unknown>>('acp_load_session', { agent, cwd, sessionId }),
-  prompt: (agent: AgentId, sessionId: string, text: string) =>
-    invoke<{ stopReason: string }>('acp_prompt', { agent, sessionId, text }),
-  cancel: (agent: AgentId, sessionId: string) => invoke<void>('acp_cancel', { agent, sessionId }),
+  prompt: (agent: AgentId, sessionId: string, text: string, turnId: string) =>
+    invoke<{ stopReason: string }>('acp_prompt', { agent, sessionId, text, turnId }),
+  cancel: (agent: AgentId, sessionId: string, turnId: string | null) =>
+    invoke<void>('acp_cancel', { agent, sessionId, turnId }),
   permission: (agent: AgentId, requestId: string | number, optionId: string | null) =>
     invoke<void>('acp_permission', { agent, requestId, optionId }),
   pendingPermissions: (agent: AgentId, sessionId: string) =>
     invoke<AgentEvent['message'][]>('acp_pending_permissions', { agent, sessionId }),
+  activity: () => invoke<Record<AgentId, AgentActivity>>('acp_activity'),
   setConfig: (agent: AgentId, sessionId: string, configId: string, value: string) =>
     invoke<{ configOptions?: AgentConfigOption[] }>('acp_set_config', {
       agent,

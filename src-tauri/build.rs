@@ -18,8 +18,11 @@ fn main() {
             "acp_cancel",
             "acp_permission",
             "acp_pending_permissions",
+            "acp_activity",
             "acp_set_config",
             "acp_authenticate",
+            "show_attention_notification",
+            "set_attention_badge",
         ]),
     ))
     .expect("failed to build Tauri permissions")

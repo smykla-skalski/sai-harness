@@ -14,6 +14,7 @@
     type AgentPermission,
     type AgentThread,
   } from './lib/acp';
+  import type { ThreadStatus } from './lib/attention';
 
   interface Props {
     agent: AgentId;
@@ -26,7 +27,7 @@
     onpromptfocused?: () => void;
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
-    onstatus: (thread: AgentThread, running: boolean) => void;
+    onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
   }
   let {
     agent,
@@ -55,6 +56,7 @@
   let authenticating = $state(false);
   let activeSessionId: string | null = null;
   let stopRequested = false;
+  let activeTurnId: string | null = null;
   let selectedThreadId: string | null = null;
   let generation = 0;
   let scroll: HTMLDivElement;
@@ -117,13 +119,12 @@
         )
       : [];
     permissions = [...permissions, { id: message.id, sessionId: activeSessionId!, title, options }];
+    if (thread) onstatus(thread, 'waiting');
   }
 
   async function activate(id: string | null) {
     const current = ++generation;
-    const abandoned = permissions;
     permissions = [];
-    for (const permission of abandoned) void acp.permission(agent, permission.id, null);
     selectedThreadId = id;
     activeSessionId = id;
     entries = [];
@@ -131,6 +132,7 @@
     authNeeded = false;
     busy = false;
     stopRequested = false;
+    activeTurnId = null;
     error = '';
     ready = false;
     connecting = true;
@@ -156,6 +158,7 @@
       if (current === generation) {
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
+        if (thread) onstatus(thread, 'failed');
       }
     } finally {
       if (current === generation) connecting = false;
@@ -177,7 +180,7 @@
       if (message.method === 'sail/disconnected') {
         ready = false;
         busy = false;
-        if (thread) onstatus(thread, false);
+        if (thread) onstatus(thread, 'failed');
         error = `${name} stopped. Reopen the thread to reconnect.`;
         return;
       }
@@ -213,7 +216,6 @@
       disposed = true;
       generation++;
       unlisten?.();
-      for (const permission of permissions) void acp.permission(agent, permission.id, null);
     };
   });
 
@@ -221,9 +223,13 @@
     const text = draft.trim();
     if (!text || !ready || isBusy || !directory) return;
     const current = generation;
+    const turnId = crypto.randomUUID();
+    activeTurnId = turnId;
     let activityThread = thread;
+    let finalStatus: ThreadStatus = 'done';
+    let notifyOnDone = true;
     busy = true;
-    if (activityThread) onstatus(activityThread, true);
+    if (activityThread) onstatus(activityThread, 'working');
     stopRequested = false;
     error = '';
     draft = '';
@@ -243,16 +249,18 @@
         };
         activityThread = created;
         oncreated(created);
-        onstatus(created, true);
+        onstatus(created, 'working');
       }
       const id = activeSessionId;
       if (stopRequested) {
+        notifyOnDone = false;
         draft = text;
         return;
       }
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
       void follow();
-      const result = await acp.prompt(agent, id!, text);
+      const result = await acp.prompt(agent, id!, text, turnId);
+      if (result.stopReason === 'cancelled' || stopRequested) notifyOnDone = false;
       if (current === generation && stopRequested)
         markTools(result.stopReason === 'cancelled' ? 'cancelled' : 'status unconfirmed', [
           'pending',
@@ -261,6 +269,7 @@
         ]);
       if (activityThread) onactivity({ ...activityThread, updated: Date.now() });
     } catch (cause) {
+      finalStatus = 'failed';
       if (current === generation) {
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
@@ -268,7 +277,8 @@
         if (stopRequested) markTools('status unconfirmed', ['stopping']);
       }
     } finally {
-      if (activityThread) onstatus(activityThread, false);
+      if (activeTurnId === turnId) activeTurnId = null;
+      if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
     }
   }
@@ -280,7 +290,7 @@
     const sessionId = activeSessionId;
     const pending = permissions;
     try {
-      await acp.cancel(agent, sessionId);
+      await acp.cancel(agent, sessionId, activeTurnId);
       await Promise.all(pending.map((permission) => acp.permission(agent, permission.id, null)));
       if (current !== generation || activeSessionId !== sessionId) return;
       permissions = [];
@@ -294,6 +304,7 @@
     try {
       await acp.permission(agent, permission.id, optionId);
       permissions = permissions.filter((item) => item.id !== permission.id);
+      if (thread && permissions.length === 0) onstatus(thread, 'working');
     } catch (cause) {
       error = describe(cause);
     }

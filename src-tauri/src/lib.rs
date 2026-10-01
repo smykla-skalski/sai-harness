@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tauri::State;
 
 mod acp;
+mod attention;
 mod settings;
 
 #[derive(Clone, Serialize)]
@@ -684,8 +685,11 @@ pub fn run() {
             acp::acp_cancel,
             acp::acp_permission,
             acp::acp_pending_permissions,
+            acp::acp_activity,
             acp::acp_set_config,
-            acp::acp_authenticate
+            acp::acp_authenticate,
+            attention::show_attention_notification,
+            attention::set_attention_badge
         ]);
     #[cfg(feature = "e2e")]
     let builder = builder

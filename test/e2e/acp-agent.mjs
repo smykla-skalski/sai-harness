@@ -120,9 +120,13 @@ for await (const line of createInterface({ input: process.stdin })) {
           ? Array.from({ length: 100 }, (_, index) => `Answer line ${index}`).join('\n')
           : `Done: ${pending.text}`
         : 'Rejected';
-    const reply = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } };
-    sessions.get(pending.sessionId).push(reply);
-    update(pending.sessionId, reply);
-    send({ id: pending.promptId, result: { stopReason: 'end_turn' } });
+    const finish = () => {
+      const reply = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } };
+      sessions.get(pending.sessionId).push(reply);
+      update(pending.sessionId, reply);
+      send({ id: pending.promptId, result: { stopReason: 'end_turn' } });
+    };
+    if (pending.text === 'Delayed completion') setTimeout(finish, 1000);
+    else finish();
   }
 }

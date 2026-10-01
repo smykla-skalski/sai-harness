@@ -18,10 +18,14 @@ export type SettingsSnapshot = {
   busy: boolean;
   agents: AgentAvailability[];
   agentsError: string;
+  notificationsEnabled: boolean;
+  notificationSound: boolean;
 };
 
 export type SettingsAction =
   | { type: 'theme'; value: 'light' | 'dark' }
   | { type: 'binary'; value: string }
+  | { type: 'notifications'; value: boolean }
+  | { type: 'notification-sound'; value: boolean }
   | { type: 'detect-agents' }
   | { type: 'restart-setup' };

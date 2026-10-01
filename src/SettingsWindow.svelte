@@ -207,6 +207,28 @@
           </p>{/each}
         <Button size="sm" onclick={() => send({ type: 'detect-agents' })}>Detect again</Button>
       </section>
+      <section class="settings-card">
+        <h2>Notifications</h2>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
+            checked={snapshot?.notificationsEnabled ?? true}
+            onchange={(event) =>
+              send({ type: 'notifications', value: event.currentTarget.checked })}
+          />
+          OS notifications
+        </label>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
+            checked={snapshot?.notificationSound ?? true}
+            disabled={!snapshot?.notificationsEnabled}
+            onchange={(event) =>
+              send({ type: 'notification-sound', value: event.currentTarget.checked })}
+          />
+          Notification sound
+        </label>
+      </section>
     {/if}
   </main>
 </div>

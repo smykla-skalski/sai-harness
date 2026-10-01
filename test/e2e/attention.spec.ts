@@ -1,0 +1,108 @@
+import { browser, $, expect } from '@wdio/globals';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const waitForComposer = () =>
+  browser.waitUntil(
+    () =>
+      browser.execute(() =>
+        Boolean(document.querySelector('.agent-composer textarea:not([disabled])')),
+      ),
+    { timeout: 15000, timeoutMsg: 'Agent composer did not become ready' },
+  );
+
+describe('agent thread attention', () => {
+  const repository = mkdtempSync(join(tmpdir(), 'sail-attention-'));
+
+  before(() => execFileSync('git', ['init', '-q', repository]));
+  after(() => rmSync(repository, { recursive: true, force: true }));
+
+  it('tracks hidden permissions and completion until a thread is opened', async () => {
+    await browser.execute((path) => {
+      sessionStorage.removeItem('sail-e2e-settings');
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [], worktrees: {} }),
+      );
+      localStorage.removeItem('sail-agent-threads');
+      localStorage.removeItem('sai-thread-attention');
+      localStorage.removeItem('sai-pane-layouts');
+      localStorage.setItem('sai-notifications-enabled', 'false');
+      localStorage.setItem('sai-notification-sound', 'true');
+    }, realpathSync(repository));
+    await browser.refresh();
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          (name) => document.querySelector('.breadcrumb-project')?.textContent?.includes(name),
+          repository.split('/').at(-1) ?? '',
+        ),
+      { timeout: 15000, timeoutMsg: 'Test repository did not load' },
+    );
+    await expect($('.agent-launches button')).toBeEnabled();
+
+    await $('.agent-launches button').click();
+    await waitForComposer();
+    await $('.agent-composer textarea').setValue('Delayed approval');
+    await $('.agent-actions button').click();
+    const row = $('.session-item[title="Delayed approval"]');
+    await expect(row).toBeDisplayed();
+    await $('.agent-launches button').click();
+    await expect(row).toHaveText(expect.stringContaining('Waiting for input'));
+    await expect(row.$('.thread-unread')).toBeDisplayed();
+    await browser.refresh();
+    await expect(row).toHaveText(expect.stringContaining('Waiting for input'));
+    await expect(row.$('.thread-unread')).toBeDisplayed();
+
+    await row.click();
+    await expect($('.agent-permission')).toBeDisplayed();
+    await expect(row.$('.thread-unread')).not.toExist();
+    await $('.agent-permission button').click();
+    await expect(row).toHaveText(expect.stringContaining('done'));
+    if (!(await browser.execute(() => document.hasFocus()))) {
+      await expect(row.$('.thread-unread')).toBeDisplayed();
+      await row.click();
+    }
+    await expect(row.$('.thread-unread')).not.toExist();
+
+    await waitForComposer();
+    await $('.agent-composer textarea').setValue('Delayed completion');
+    await $('.agent-actions button').click();
+    await expect($('.agent-permission')).toBeDisplayed();
+    await $('.agent-permission button').click();
+    await $('.agent-launches button').click();
+    await expect(row).toHaveText(expect.stringContaining('done'));
+    await expect(row.$('.thread-unread')).toBeDisplayed();
+    await row.click();
+    await expect(row.$('.thread-unread')).not.toExist();
+
+    await $('.agent-launches button').click();
+    await waitForComposer();
+    await $('.agent-composer textarea').setValue('Slow cancel');
+    await $('.agent-actions button').click();
+    const cancelled = $('.session-item[title="Slow cancel"]');
+    await expect($('.agent-permission')).toBeDisplayed();
+    await browser.refresh();
+    await expect($('.agent-permission')).toBeDisplayed();
+    await expect($('.agent-busy button')).toBeDisplayed();
+    await $('.agent-busy button').click();
+    await $('.agent-launches button').click();
+    await expect(cancelled).toHaveText(expect.stringContaining('done'));
+    await expect(cancelled.$('.thread-unread')).not.toExist();
+
+    await $$('.runtime-settings summary')[1].click();
+    const options = await $$('.attention-setting input');
+    await options[0].click();
+    await expect(options[1]).toBeEnabled();
+    await options[1].click();
+    expect(await browser.execute(() => localStorage.getItem('sai-notifications-enabled'))).toBe(
+      'true',
+    );
+    expect(await browser.execute(() => localStorage.getItem('sai-notification-sound'))).toBe(
+      'false',
+    );
+  });
+});
