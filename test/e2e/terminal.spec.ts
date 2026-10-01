@@ -4,6 +4,28 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+async function sendCommand(command: string) {
+  await browser.execute(async (value) => {
+    const id = document.querySelector('.pane-leaf.focused')?.getAttribute('data-pane-id');
+    if (!id) throw new Error('No focused terminal pane');
+    const bridge: unknown = Reflect.get(window, '__TAURI__');
+    if (!bridge || typeof bridge !== 'object' || !('core' in bridge))
+      throw new Error('Tauri bridge unavailable');
+    const core = bridge.core;
+    if (
+      !core ||
+      typeof core !== 'object' ||
+      !('invoke' in core) ||
+      typeof core.invoke !== 'function'
+    )
+      throw new Error('Tauri invoke unavailable');
+    await core.invoke('terminal_write', {
+      id,
+      data: [...new TextEncoder().encode(`${value}\n`)],
+    });
+  }, command);
+}
+
 describe('shell terminal panes', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sail-terminal-repo-'));
   const other = mkdtempSync(join(tmpdir(), 'sail-terminal-other-'));
@@ -21,6 +43,7 @@ describe('shell terminal panes', () => {
     const paths = [realpathSync(repository), realpathSync(other)];
     await browser.execute(([first, second]) => {
       sessionStorage.removeItem('sail-e2e-settings');
+      localStorage.removeItem('sai-pane-layouts');
       localStorage.setItem('sai-directory', first);
       localStorage.setItem(
         'sai-project-catalog',
@@ -34,17 +57,29 @@ describe('shell terminal panes', () => {
     await browser.waitUntil(() =>
       browser.execute(() => document.activeElement?.classList.contains('xterm-helper-textarea')),
     );
-    await browser.keys(`printf 'terminal-ready:%s\\n' "$PWD"\n`);
+    await sendCommand('pwd');
     await browser.waitUntil(() =>
       browser.execute(
         (path) =>
           document
             .querySelector('.terminal-screen .xterm-accessibility-tree')
-            ?.textContent?.includes(`terminal-ready:${path}`) ?? false,
+            ?.textContent?.includes(path) ?? false,
         paths[0],
       ),
     );
     await $(`.project-repository-select[title="${paths[1]}"]`).click();
+    await browser.keys(['Meta', 't']);
+    await expect($('.terminal-screen .xterm')).toBeDisplayed();
+    await sendCommand('pwd');
+    await browser.waitUntil(() =>
+      browser.execute(
+        (path) =>
+          document
+            .querySelector('.terminal-screen .xterm-accessibility-tree')
+            ?.textContent?.includes(path) ?? false,
+        paths[1],
+      ),
+    );
     await $(`.project-repository-select[title="${paths[0]}"]`).click();
     await expect($('.terminal-screen .xterm')).toBeDisplayed();
     await browser.waitUntil(() =>
@@ -52,15 +87,26 @@ describe('shell terminal panes', () => {
         (path) =>
           document
             .querySelector('.terminal-screen .xterm-accessibility-tree')
-            ?.textContent?.includes(`terminal-ready:${path}`) ?? false,
+            ?.textContent?.includes(path) ?? false,
         paths[0],
       ),
     );
-    await browser.keys('exit 7\n');
+    await $(`.project-repository-select[title="${paths[1]}"]`).click();
+    await browser.waitUntil(() =>
+      browser.execute(
+        (path) =>
+          document
+            .querySelector('.terminal-screen .xterm-accessibility-tree')
+            ?.textContent?.includes(path) ?? false,
+        paths[1],
+      ),
+    );
+    await $(`.project-repository-select[title="${paths[0]}"]`).click();
+    await sendCommand('exit 7');
     await expect($('.terminal-exit')).toHaveText(expect.stringContaining('code 7'));
     await $('.terminal-exit button').click();
     await expect($('.terminal-exit')).not.toExist();
-    await browser.keys('echo restarted\n');
+    await sendCommand('echo restarted');
     await browser.waitUntil(() =>
       browser.execute(() =>
         document

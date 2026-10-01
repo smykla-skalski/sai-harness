@@ -8,7 +8,17 @@
 
   type TerminalEvent = { kind: 'output'; data: number[] } | { kind: 'exit'; code: number };
 
-  let { id, directory, focused }: { id: string; directory: string; focused: boolean } = $props();
+  let {
+    id,
+    directory,
+    focused,
+    onshortcut,
+  }: {
+    id: string;
+    directory: string;
+    focused: boolean;
+    onshortcut: (event: KeyboardEvent) => void;
+  } = $props();
   let container: HTMLDivElement;
   let terminal: Terminal;
   let fit: FitAddon;
@@ -83,6 +93,18 @@
     fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(container);
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+      const key = event.key.toLowerCase();
+      const appShortcut =
+        (event.metaKey || event.ctrlKey) &&
+        ((!event.altKey && ['w', 'd', 't', 'k'].includes(key)) ||
+          (event.altKey && key.startsWith('arrow')));
+      if (!appShortcut && event.key !== 'F6') return true;
+      onshortcut(event);
+      event.stopPropagation();
+      return false;
+    });
     terminal.onData((data) => {
       void invoke('terminal_write', { id, data: [...new TextEncoder().encode(data)] }).catch(
         (cause) => (error = String(cause)),
@@ -107,7 +129,7 @@
             },
             activate: () =>
               void invoke('terminal_open_file', {
-                directory,
+                id,
                 path: link.path,
                 line: link.line,
               }).catch((cause) => (error = String(cause))),

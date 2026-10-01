@@ -1,4 +1,4 @@
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -25,22 +25,38 @@ struct TerminalOutput {
 
 struct TerminalSession {
     directory: PathBuf,
-    master: Box<dyn MasterPty + Send>,
+    process_id: Option<u32>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     output: Arc<Mutex<TerminalOutput>>,
 }
 
 impl TerminalSession {
     fn stop(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
+        #[cfg(unix)]
+        if self
+            .output
+            .lock()
+            .is_ok_and(|output| output.exit_code.is_none())
+        {
+            if let Ok(master) = self.master.lock() {
+                if let Some(group) = master.process_group_leader() {
+                    let group = nix::unistd::Pid::from_raw(group);
+                    if group.as_raw() > 0 && group != nix::unistd::getpgrp() {
+                        let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGTERM);
+                    }
+                }
+            }
+        }
+        if let Ok(mut killer) = self.killer.lock() {
+            let _ = killer.kill();
         }
     }
 }
 
 #[derive(Default)]
-pub struct TerminalManager(Mutex<HashMap<String, TerminalSession>>);
+pub struct TerminalManager(Mutex<HashMap<String, Arc<TerminalSession>>>);
 
 impl Drop for TerminalManager {
     fn drop(&mut self) {
@@ -96,6 +112,8 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
         exit_code: None,
         subscriber: None,
     }));
+    let process_id = child.process_id();
+    let killer = child.clone_killer();
     let child = Arc::new(Mutex::new(child));
     let background_output = Arc::clone(&output);
     let background_child = Arc::clone(&child);
@@ -135,9 +153,10 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
     });
     Ok(TerminalSession {
         directory,
-        master: pair.master,
+        process_id,
+        master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
-        child,
+        killer: Mutex::new(killer),
         output,
     })
 }
@@ -162,17 +181,21 @@ pub fn terminal_open(
         return Err("Terminal directory is not a folder".to_string());
     }
     let mut sessions = manager.0.lock().map_err(|error| error.to_string())?;
-    let session = if let Some(session) = sessions.get_mut(&id) {
+    let session = if let Some(session) = sessions.get(&id) {
         if session.directory != directory {
             return Err("Terminal belongs to another directory".to_string());
         }
-        session
+        Arc::clone(session)
     } else {
-        sessions.insert(id.clone(), spawn(directory, cols, rows)?);
-        sessions.get_mut(&id).expect("terminal was inserted")
+        let session = Arc::new(spawn(directory, cols, rows)?);
+        sessions.insert(id, Arc::clone(&session));
+        session
     };
+    drop(sessions);
     session
         .master
+        .lock()
+        .map_err(|error| error.to_string())?
         .resize(PtySize {
             rows: rows.max(1),
             cols: cols.max(1),
@@ -203,8 +226,13 @@ pub fn terminal_detach(
     id: String,
     attachment: String,
 ) -> Result<(), String> {
-    let sessions = manager.0.lock().map_err(|error| error.to_string())?;
-    if let Some(session) = sessions.get(&id) {
+    let session = manager
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&id)
+        .cloned();
+    if let Some(session) = session {
         let mut output = session.output.lock().map_err(|error| error.to_string())?;
         if output
             .subscriber
@@ -223,8 +251,13 @@ pub fn terminal_write(
     id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let sessions = manager.0.lock().map_err(|error| error.to_string())?;
-    let session = sessions.get(&id).ok_or("Terminal is closed")?;
+    let session = manager
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&id)
+        .cloned()
+        .ok_or("Terminal is closed")?;
     let result = session
         .writer
         .lock()
@@ -241,37 +274,84 @@ pub fn terminal_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let sessions = manager.0.lock().map_err(|error| error.to_string())?;
-    sessions
+    let session = manager
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
         .get(&id)
-        .ok_or("Terminal is closed")?
+        .cloned()
+        .ok_or("Terminal is closed")?;
+    let result = session
         .master
+        .lock()
+        .map_err(|error| error.to_string())?
         .resize(PtySize {
             rows: rows.max(1),
             cols: cols.max(1),
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    result
 }
 
 #[tauri::command]
 pub fn terminal_close(manager: State<'_, TerminalManager>, id: String) -> Result<(), String> {
-    let mut sessions = manager.0.lock().map_err(|error| error.to_string())?;
-    if let Some(session) = sessions.remove(&id) {
+    let session = manager
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&id);
+    if let Some(session) = session {
         session.stop();
     }
     Ok(())
 }
 
+fn shell_directory(session: &TerminalSession) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(pid) = session.process_id {
+        if let Ok(directory) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+            return directory;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(pid) = session.process_id {
+        if let Ok(output) = Command::new("/usr/sbin/lsof")
+            .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+            .output()
+        {
+            if output.status.success() {
+                if let Some(directory) = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find_map(|line| line.strip_prefix('n'))
+                {
+                    return PathBuf::from(directory);
+                }
+            }
+        }
+    }
+    session.directory.clone()
+}
+
 #[tauri::command]
-pub fn terminal_open_file(directory: String, path: String, line: u32) -> Result<(), String> {
+pub fn terminal_open_file(
+    manager: State<'_, TerminalManager>,
+    id: String,
+    path: String,
+    line: u32,
+) -> Result<(), String> {
     if line == 0 {
         return Err("Line number must be positive".to_string());
     }
-    let directory = Path::new(&directory)
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
+    let session = manager
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&id)
+        .cloned()
+        .ok_or("Terminal is closed")?;
+    let directory = shell_directory(&session);
     let candidate = Path::new(&path);
     let file = if candidate.is_absolute() {
         candidate.to_path_buf()
@@ -293,12 +373,62 @@ pub fn terminal_open_file(directory: String, path: String, line: u32) -> Result<
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(program);
-    let mut command = Command::new(program);
+    let terminal_editor = ["vim", "nvim", "vi", "nano", "emacs"].contains(&name);
+    let mut command = if terminal_editor {
+        #[cfg(target_os = "macos")]
+        {
+            let ghostty = Path::new("/Applications/Ghostty.app/Contents/MacOS/ghostty");
+            if ghostty.is_file() {
+                let mut command = Command::new(ghostty);
+                command.arg("-e").arg(program);
+                command
+            } else {
+                let invocation = std::iter::once(program.as_str())
+                    .chain(arguments.iter().map(String::as_str))
+                    .chain(
+                        [format!("+{line}"), file.to_string_lossy().into_owned()]
+                            .iter()
+                            .map(String::as_str),
+                    )
+                    .map(shell_words::quote)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Command::new("/usr/bin/osascript")
+                    .args([
+                        "-e",
+                        "on run argv",
+                        "-e",
+                        "tell application \"Terminal\" to do script (item 1 of argv)",
+                        "-e",
+                        "end run",
+                        "--",
+                        &invocation,
+                    ])
+                    .spawn()
+                    .map_err(|error| error.to_string())?;
+                return Ok(());
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let mut command = Command::new("x-terminal-emulator");
+            command.arg("-e").arg(program);
+            command
+        }
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("wt.exe");
+            command.arg(program);
+            command
+        }
+    } else {
+        Command::new(program)
+    };
     command.args(arguments);
     if ["code", "codium", "cursor"].contains(&name) {
         command.arg("--goto");
         command.arg(format!("{}:{line}", file.display()));
-    } else if ["vim", "nvim", "vi", "nano", "emacs"].contains(&name) {
+    } else if terminal_editor {
         command.arg(format!("+{line}"));
         command.arg(file);
     } else {

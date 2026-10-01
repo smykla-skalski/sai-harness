@@ -25,6 +25,7 @@
     oncreated: (id: string, thread: AgentThread) => void;
     onchooseagent: (id: string, agent: string) => void;
     onchooseterminal: (id: string) => void;
+    onshortcut: (event: KeyboardEvent) => void;
     onactivity: (thread: AgentThread) => void;
     focusPromptPane: string | null;
     onpromptfocused: () => void;
@@ -47,6 +48,7 @@
     oncreated,
     onchooseagent,
     onchooseterminal,
+    onshortcut,
     onactivity,
     focusPromptPane,
     onpromptfocused,
@@ -150,6 +152,7 @@
       {oncreated}
       {onchooseagent}
       {onchooseterminal}
+      {onshortcut}
       {onactivity}
       {focusPromptPane}
       {onpromptfocused}
@@ -199,6 +202,7 @@
       {oncreated}
       {onchooseagent}
       {onchooseterminal}
+      {onshortcut}
       {onactivity}
       {focusPromptPane}
       {onpromptfocused}
@@ -262,7 +266,9 @@
     {#if pane.id === 'main'}
       {@render main()}
     {:else if pane.kind === 'terminal'}
-      <TerminalPane id={pane.id} {directory} focused={focused === pane.id} />
+      {#key `${directory}:${pane.id}`}
+        <TerminalPane id={pane.id} {directory} focused={focused === pane.id} {onshortcut} />
+      {/key}
     {:else if pane.agent}
       {#key `${pane.id}:${pane.agent}`}
         <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>

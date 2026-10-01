@@ -3605,6 +3605,7 @@
       oncreated={createPaneThread}
       onchooseagent={choosePaneAgent}
       onchooseterminal={choosePaneTerminal}
+      onshortcut={keydownWorkspace}
       onactivity={saveAgentThread}
       focusPromptPane={promptFocusPane}
       onpromptfocused={() => (promptFocusPane = null)}
