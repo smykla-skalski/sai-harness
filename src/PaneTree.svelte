@@ -5,8 +5,9 @@
   import PaneTree from './PaneTree.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import DiffPanel from './DiffPanel.svelte';
+  import EmptyPanePicker from './EmptyPanePicker.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
-  import type { Pane } from './lib/panes';
+  import { clampPaneRatio, paneRatioBounds, type Pane } from './lib/panes';
 
   type Props = {
     pane: Pane;
@@ -20,6 +21,7 @@
     onclose: (id: string) => void;
     onratio: (id: string, ratio: number) => void;
     oncreated: (id: string, thread: AgentThread) => void;
+    onchooseagent: (id: string, agent: string) => void;
     onactivity: (thread: AgentThread) => void;
     focusPromptPane: string | null;
     onpromptfocused: () => void;
@@ -40,6 +42,7 @@
     onclose,
     onratio,
     oncreated,
+    onchooseagent,
     onactivity,
     focusPromptPane,
     onpromptfocused,
@@ -48,8 +51,17 @@
     onchanges,
   }: Props = $props();
   let container = $state<HTMLDivElement>();
+  let splitWidth = $state(0);
+  let splitHeight = $state(0);
   let dragging = false;
   let previewRatio = $state<number | null>(null);
+  const splitSpan = $derived(
+    'direction' in pane ? (pane.direction === 'row' ? splitWidth : splitHeight) : 0,
+  );
+  const ratioBounds = $derived(paneRatioBounds(splitSpan));
+  const visibleRatio = $derived(
+    clampPaneRatio(previewRatio ?? ('direction' in pane ? pane.ratio : 0.5), splitSpan),
+  );
   let diffs = $state<FileDiffInfo[]>([]);
   let diffLoading = $state(false);
   let diffError = $state('');
@@ -86,7 +98,7 @@
       pane && 'direction' in pane && pane.direction === 'row'
         ? event.clientX - bounds.left
         : event.clientY - bounds.top;
-    return Math.max(0.1, Math.min(0.9, offset / span));
+    return clampPaneRatio(offset / span, span);
   }
 
   function resizeKey(event: KeyboardEvent) {
@@ -106,7 +118,7 @@
             : 0;
     if (!change) return;
     event.preventDefault();
-    onratio(pane.id, Math.max(0.1, Math.min(0.9, pane.ratio + change)));
+    onratio(pane.id, clampPaneRatio(visibleRatio + change, splitSpan));
   }
 </script>
 
@@ -115,8 +127,10 @@
     class="pane-split"
     class:row={pane.direction === 'row'}
     class:column={pane.direction === 'column'}
-    style={`--pane-ratio: ${(previewRatio ?? pane.ratio) * 100}%`}
+    style={`--pane-ratio: ${visibleRatio * 100}%`}
     bind:this={container}
+    bind:clientWidth={splitWidth}
+    bind:clientHeight={splitHeight}
   >
     <PaneTree
       pane={pane.first}
@@ -130,6 +144,7 @@
       {onclose}
       {onratio}
       {oncreated}
+      {onchooseagent}
       {onactivity}
       {focusPromptPane}
       {onpromptfocused}
@@ -143,9 +158,9 @@
       tabindex="0"
       aria-label="Split pane divider"
       aria-orientation={pane.direction === 'row' ? 'vertical' : 'horizontal'}
-      aria-valuemin="10"
-      aria-valuemax="90"
-      aria-valuenow={Math.round(pane.ratio * 100)}
+      aria-valuemin={Math.round(ratioBounds.min * 100)}
+      aria-valuemax={Math.round(ratioBounds.max * 100)}
+      aria-valuenow={Math.round(visibleRatio * 100)}
       onpointerdown={(event) => {
         if (event.button !== 0) return;
         dragging = true;
@@ -177,6 +192,7 @@
       {onclose}
       {onratio}
       {oncreated}
+      {onchooseagent}
       {onactivity}
       {focusPromptPane}
       {onpromptfocused}
@@ -191,16 +207,27 @@
     class:focused={focused === pane.id}
     data-pane-id={pane.id}
     aria-keyshortcuts="Meta+Alt+ArrowLeft Meta+Alt+ArrowRight Meta+Alt+ArrowUp Meta+Alt+ArrowDown F6 Shift+F6"
-    aria-label={pane.agent ? `${pane.agent} pane` : 'Main pane'}
+    aria-label={pane.id === 'main' ? 'Main pane' : pane.agent ? `${pane.agent} pane` : 'Empty pane'}
     tabindex="-1"
     onfocusin={() => onfocus(pane.id)}
-    onpointerdown={() => onfocus(pane.id)}
+    onpointerdown={(event) => {
+      onfocus(pane.id);
+      if (pane.id === 'main' || pane.agent || !(event.target instanceof Element)) return;
+      if (event.target.closest('button, input, textarea, select')) return;
+      (
+        event.currentTarget.querySelector<HTMLButtonElement>(
+          '[data-agent-choice]:not(:disabled), [data-pane-picker]',
+        ) ?? event.currentTarget
+      ).focus();
+    }}
   >
     {#if pane.id !== 'main'}
       <div class="pane-heading">
-        <span>{pane.thread?.title ?? `New ${pane.agent} thread`}</span><small
-          >⌘⌥ + arrow to switch</small
-        ><button aria-label="Close pane" onclick={() => onclose(pane.id)}>×</button>
+        <span>{pane.thread?.title ?? (pane.agent ? `New ${pane.agent} thread` : 'Empty pane')}</span
+        ><small>⌘⌥ + arrow to switch</small><button
+          aria-label="Close pane"
+          onclick={() => onclose(pane.id)}>×</button
+        >
       </div>
     {:else if canClose}
       <div class="pane-heading">
@@ -242,6 +269,12 @@
           {/if}
         </div>
       {/key}
+    {:else}
+      <EmptyPanePicker
+        {agents}
+        focused={focused === pane.id}
+        onselect={(agent) => onchooseagent(pane.id, agent)}
+      />
     {/if}
   </section>
 {/if}

@@ -6,6 +6,25 @@ export type Pane =
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
 
+export const minPaneSpan = 120;
+
+export function paneRatioBounds(span: number): { min: number; max: number } {
+  if (!Number.isFinite(span) || span <= 8) return { min: 0.5, max: 0.5 };
+  if (span < 2 * minPaneSpan + 8) {
+    const midpoint = (span - 8) / (2 * span);
+    return { min: midpoint, max: midpoint };
+  }
+  return {
+    min: Math.max(0.1, minPaneSpan / span),
+    max: Math.min(0.9, (span - 8 - minPaneSpan) / span),
+  };
+}
+
+export function clampPaneRatio(ratio: number, span: number): number {
+  const { min, max } = paneRatioBounds(span);
+  return Math.max(min, Math.min(max, ratio));
+}
+
 export type PaneBounds = {
   id: string;
   left: number;
@@ -50,17 +69,12 @@ export function leaves(pane: Pane): Extract<Pane, { agent: AgentId | null }>[] {
   return 'direction' in pane ? [...leaves(pane.first), ...leaves(pane.second)] : [pane];
 }
 
-export function splitPane(
-  pane: Pane,
-  id: string,
-  direction: 'row' | 'column',
-  agent: AgentId,
-): Pane {
+export function splitPane(pane: Pane, id: string, direction: 'row' | 'column'): Pane {
   if ('direction' in pane)
     return {
       ...pane,
-      first: splitPane(pane.first, id, direction, agent),
-      second: splitPane(pane.second, id, direction, agent),
+      first: splitPane(pane.first, id, direction),
+      second: splitPane(pane.second, id, direction),
     };
   if (pane.id !== id) return pane;
   return {
@@ -68,7 +82,7 @@ export function splitPane(
     direction,
     ratio: 0.5,
     first: pane,
-    second: { id: crypto.randomUUID(), agent, thread: null },
+    second: { id: crypto.randomUUID(), agent: null, thread: null },
   };
 }
 
