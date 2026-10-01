@@ -358,7 +358,9 @@
 <svelte:window onkeydown={keydownWorkspace} />
 <div class="agent-workspace">
   <div class="agent-header">
-    <div><strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span></div>
+    <div class="agent-heading">
+      <strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span>
+    </div>
     <div class="agent-config">
       {#each configOptions.filter((option) => option.type === 'select' && Array.isArray(option.options)) as option (option.id)}
         <label
@@ -496,8 +498,18 @@
     gap: 12px;
     align-items: baseline;
   }
+  .agent-header .agent-heading {
+    min-width: 0;
+    flex: 1;
+  }
+  .agent-heading strong {
+    flex: none;
+  }
   .agent-header span {
     opacity: 0.65;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .agent-header .agent-config {
     display: flex;

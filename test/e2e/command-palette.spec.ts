@@ -1,6 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,12 @@ describe('command palette', () => {
   });
 
   it('jumps to the newest thread and starts an agent in an empty project', async () => {
+    const output = process.env.SAIL_VISUAL_AUDIT_DIR;
+    async function capture(name: string) {
+      if (!output) return;
+      mkdirSync(output, { recursive: true });
+      await browser.saveScreenshot(join(output, `${name}.png`));
+    }
     const firstPath = realpathSync(first);
     const secondPath = realpathSync(second);
     await browser.execute(
@@ -55,6 +61,7 @@ describe('command palette', () => {
     await $('[aria-label="Search projects, worktrees, and threads"]').setValue(
       secondPath.split('/').at(-1)!,
     );
+    await capture('desktop-command-palette-results');
     await browser.keys('Enter');
     await browser.waitUntil(
       async () =>
@@ -76,6 +83,7 @@ describe('command palette', () => {
     await browser.keys(['Meta', 'k']);
     await $('[aria-label="Search projects, worktrees, and threads"]').setValue('no-such-project');
     await expect($('.palette-empty')).toHaveText(expect.stringContaining('No matches'));
+    await capture('desktop-command-palette-empty');
     await browser.keys('Escape');
     await expect($('.command-palette[open]')).not.toExist();
     expect(await browser.execute(() => localStorage.getItem('sai-directory'))).toBe(firstPath);

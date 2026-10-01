@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { SvelteMap } from 'svelte/reactivity';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
@@ -109,7 +109,10 @@
   let setup = $state<SetupReport | null>(null);
   let setupError = $state('');
   let setupLoading = $state(false);
-  let setupOpen = $state(true);
+  let setupOpen = $state(false);
+  const setupRestarted = new SvelteSet<string>();
+  let lastSetupProbe = 0;
+  let setupProbeCount = 0;
   let sessions = $state<SessionInfo[]>([]);
   let selectedSession = $state<SessionInfo | null>(null);
   let sessionSearch = $state('');
@@ -628,6 +631,31 @@
       await client.server.info({ signal: AbortSignal.timeout(3000) });
     } catch {
       await recoverRuntime();
+      return;
+    }
+    if (!directory || planReady || setupLoading) return;
+    const now = Date.now();
+    if (now - lastSetupProbe < (setupProbeCount < 12 ? 5000 : 30000)) return;
+    lastSetupProbe = now;
+    setupProbeCount++;
+    const path = directory;
+    await refreshSetup(path);
+    if (
+      path !== directory ||
+      !setup?.pluginConfigured ||
+      setup.plugin.state === 'ready' ||
+      setupRestarted.has(path) ||
+      sending ||
+      running
+    )
+      return;
+    try {
+      const active = await client.session.active();
+      if (path !== directory || Object.values(active).some((session) => session.type === 'running'))
+        return;
+      if ((await restartSetup()) && path === directory) setupRestarted.add(path);
+    } catch (cause) {
+      if (path === directory) setupError = describe(cause);
     }
   }
 
@@ -804,6 +832,8 @@
     directory = path;
     focusedPane = leaves(paneLayouts[path] ?? mainPane())[0]?.id ?? 'main';
     setSetting('sai-directory', path);
+    lastSetupProbe = 0;
+    setupProbeCount = 0;
     const savedMain = leaves(paneLayouts[path] ?? mainPane()).find((leaf) => leaf.id === 'main');
     acpAgent = savedMain?.agent ?? null;
     acpThread = savedMain?.thread ?? null;
@@ -814,7 +844,7 @@
     selectedAgentID = '';
     selectedModelKey = '';
     attachedFiles = [];
-    setupOpen = true;
+    setupOpen = false;
     sessionID = null;
     mobileView = 'chat';
     newSessionMode = null;
@@ -894,12 +924,10 @@
           report.agents.find((agent) => agent.id !== 'architect')?.id ?? report.agents[0]?.id ?? '';
       if (!selectedModelKey || !report.models.some((model) => modelKey(model) === selectedModelKey))
         selectedModelKey = report.defaultModel ? modelKey(report.defaultModel) : '';
-      setupOpen = !report.workReady;
       return true;
     } catch (cause) {
       if (current !== selection) return false;
       setupError = describe(cause);
-      setupOpen = true;
       workReady = false;
       planReady = false;
       return false;
@@ -909,7 +937,7 @@
   }
 
   async function restartSetup() {
-    if (connecting || !client) return;
+    if (connecting || !client) return false;
     connecting = true;
     setupLoading = true;
     setupError = '';
@@ -918,16 +946,17 @@
       const active = await client.session.active();
       if (sending || Object.values(active).some((session) => session.type === 'running')) {
         setupError = 'Wait for active OpenCode sessions to finish before restarting.';
-        return;
+        return false;
       }
       const info = await invoke<RuntimeInfo>('start_runtime', {
         binaryPath: appliedBinaryPath || null,
         restart: true,
       });
       await activateRuntime(info);
-      setupOpen = true;
+      return true;
     } catch (cause) {
       setupError = describe(cause);
+      return false;
     } finally {
       connecting = false;
       setupLoading = false;
@@ -2246,146 +2275,154 @@
     bind:this={sidebarElement}
   >
     <div class="brand"><span class="brand-mark">S.</span><span>Sail</span></div>
-    <ProjectSidebar
-      catalog={projectCatalog}
-      {directory}
-      disabled={runtimeState !== 'connected' && !agentAvailability.some((agent) => agent.available)}
-      agents={agentAvailability}
-      openCodeAvailable={runtimeState === 'connected'}
-      onselect={(path) => {
-        if (path !== directory) void loadProject(path);
-      }}
-      onaddrepository={(groupID) => void chooseProject(groupID)}
-      onaddgroup={addProjectGroup}
-      onrenamegroup={renameProjectGroup}
-      ondeletegroup={deleteProjectGroup}
-      ontogglegroup={toggleProjectGroup}
-      onmoverepository={moveProjectRepository}
-      onremoverepository={removeProjectRepository}
-      oncreateworktree={createProjectWorktree}
-      ondeleteworktree={deleteProjectWorktree}
-    />
-    <div class="session-heading">
-      <span class="label">SESSIONS</span><Button
-        size="sm"
-        variant="ghost"
-        onclick={newWork}
-        disabled={!workReady || switching || sending}
-        aria-label="New work">New work</Button
-      >
-      <Button
-        size="sm"
-        variant="ghost"
-        onclick={newPlan}
-        disabled={!planReady || switching || sending}
-        title={planReady
-          ? 'Start an Architect plan'
-          : 'Complete Architect setup in Repository setup'}
-        aria-label="New plan">New plan</Button
-      >
-    </div>
-    <div class="session-heading"><span class="label">OTHER AGENTS</span></div>
-    <div class="agent-launches">
-      {#each agentAvailability as agent (agent.id)}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!directory || !agent.available}
-          title={agent.reason ?? `New ${agent.name} thread`}
-          onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
-        >
-      {/each}
-    </div>
-    {#each agentThreads.filter((thread) => thread.directory === directory) as thread (`${thread.agent}:${thread.sessionId}`)}
-      <div
-        class:active={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId}
-        class="session-row"
-      >
-        <button
-          class="session-item"
-          aria-current={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId
-            ? 'page'
-            : undefined}
-          onclick={() => openAgent(thread.agent, thread)}
-          title={thread.title}
-        >
-          <span class="session-symbol">◇</span><span class="session-details"
-            ><strong>{thread.title}</strong><small
-              >{thread.agent} · {runningAgentThreads[agentThreadKey(thread)]
-                ? 'Running…'
-                : new Date(thread.updated).toLocaleString()}</small
-            ></span
+    <div class="sidebar-content">
+      <ProjectSidebar
+        catalog={projectCatalog}
+        {directory}
+        disabled={runtimeState !== 'connected' &&
+          !agentAvailability.some((agent) => agent.available)}
+        agents={agentAvailability}
+        openCodeAvailable={runtimeState === 'connected'}
+        onselect={(path) => {
+          if (path !== directory) void loadProject(path);
+        }}
+        onaddrepository={(groupID) => void chooseProject(groupID)}
+        onaddgroup={addProjectGroup}
+        onrenamegroup={renameProjectGroup}
+        ondeletegroup={deleteProjectGroup}
+        ontogglegroup={toggleProjectGroup}
+        onmoverepository={moveProjectRepository}
+        onremoverepository={removeProjectRepository}
+        oncreateworktree={createProjectWorktree}
+        ondeleteworktree={deleteProjectWorktree}
+      />
+      <div class="sidebar-sessions">
+        <div class="session-heading">
+          <span class="label">SESSIONS</span><Button
+            size="sm"
+            variant="ghost"
+            onclick={newWork}
+            disabled={!workReady || switching || sending}
+            aria-label="New work">New work</Button
           >
-        </button>
-        <button
-          class="session-action"
-          aria-label={`Remove ${thread.title} from Sail`}
-          onclick={() => removeAgentThread(thread)}>×</button
-        >
-      </div>
-    {/each}
-    {#if directory}<input
-        class="session-search"
-        aria-label="Search sessions"
-        placeholder="Search sessions"
-        bind:value={sessionSearch}
-        oninput={changeSearch}
-      />{/if}
-    <nav class="session-list" aria-label="Sessions">
-      {#each visibleSessions as session (session.id)}<div
-          class:active={!acpAgent && session.id === sessionID}
-          class="session-row"
-        >
-          {#if editingSessionID === session.id}<div class="session-edit">
-              <input
-                aria-label="Session title"
-                bind:value={editedTitle}
-                onkeydown={(event) => {
-                  if (event.key === 'Enter') void saveRename();
-                  if (event.key === 'Escape') {
-                    event.preventDefault();
-                    editingSessionID = null;
-                  }
-                }}
-              />
-              <button aria-label="Save title" onclick={saveRename}>✓</button>
-              <button aria-label="Cancel rename" onclick={() => (editingSessionID = null)}>×</button
-              >
-            </div>{:else}<button
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={newPlan}
+            disabled={!planReady || switching || sending}
+            title={planReady
+              ? 'Start an Architect plan'
+              : 'Complete Architect setup in OpenCode settings'}
+            aria-label="New plan">New plan</Button
+          >
+        </div>
+        <div class="session-heading"><span class="label">OTHER AGENTS</span></div>
+        <div class="agent-launches">
+          {#each agentAvailability as agent (agent.id)}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!directory || !agent.available}
+              title={agent.reason ?? `New ${agent.name} thread`}
+              onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
+            >
+          {/each}
+        </div>
+        {#each agentThreads.filter((thread) => thread.directory === directory) as thread (`${thread.agent}:${thread.sessionId}`)}
+          <div
+            class:active={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId}
+            class="session-row"
+          >
+            <button
               class="session-item"
-              aria-current={!acpAgent && session.id === sessionID ? 'page' : undefined}
-              onclick={() => selectSession(session.id)}
-              title={session.title ?? 'Untitled session'}
-              ><span class="session-symbol">◇</span><span class="session-details"
-                ><strong>{session.title ?? 'Untitled session'}</strong><small
-                  >{session.agent ?? 'Unknown'} · {activeSessionIDs.includes(session.id)
-                    ? 'Running'
-                    : (session.outcome ?? 'Idle')}</small
-                ><small>Updated {new Date(session.time.updated).toLocaleString()}</small></span
-              ></button
-            ><button
+              aria-current={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId
+                ? 'page'
+                : undefined}
+              onclick={() => openAgent(thread.agent, thread)}
+              title={thread.title}
+            >
+              <span class="session-symbol">◇</span><span class="session-details"
+                ><strong>{thread.title}</strong><small
+                  >{thread.agent} · {runningAgentThreads[agentThreadKey(thread)]
+                    ? 'Running…'
+                    : new Date(thread.updated).toLocaleString()}</small
+                ></span
+              >
+            </button>
+            <button
               class="session-action"
-              aria-label={`Rename ${session.title ?? 'session'}`}
-              onclick={() => startRename(session)}>✎</button
-            ><button
-              class="session-action"
-              aria-label={`Delete ${session.title ?? 'session'}`}
-              onclick={() => removeSession(session)}>×</button
-            >{/if}
-        </div>{:else}<p class="session-empty">
-          {sessionLoading
-            ? 'Loading sessions…'
-            : directory
-              ? 'No OpenCode sessions found'
-              : 'Choose a repository to begin'}
-        </p>{/each}
-    </nav>
-    {#if directory && (sessionPageHistory.length || nextSessionCursor)}<div class="session-pages">
-        <button disabled={!sessionPageHistory.length || sessionLoading} onclick={previousPage}
-          >Previous</button
-        >
-        <button disabled={!nextSessionCursor || sessionLoading} onclick={nextPage}>Next</button>
-      </div>{/if}
+              aria-label={`Remove ${thread.title} from Sail`}
+              onclick={() => removeAgentThread(thread)}>×</button
+            >
+          </div>
+        {/each}
+        {#if directory}<input
+            class="session-search"
+            aria-label="Search sessions"
+            placeholder="Search sessions"
+            bind:value={sessionSearch}
+            oninput={changeSearch}
+          />{/if}
+        <nav class="session-list" aria-label="Sessions">
+          {#each visibleSessions as session (session.id)}<div
+              class:active={!acpAgent && session.id === sessionID}
+              class="session-row"
+            >
+              {#if editingSessionID === session.id}<div class="session-edit">
+                  <input
+                    aria-label="Session title"
+                    bind:value={editedTitle}
+                    onkeydown={(event) => {
+                      if (event.key === 'Enter') void saveRename();
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        editingSessionID = null;
+                      }
+                    }}
+                  />
+                  <button aria-label="Save title" onclick={saveRename}>✓</button>
+                  <button aria-label="Cancel rename" onclick={() => (editingSessionID = null)}
+                    >×</button
+                  >
+                </div>{:else}<button
+                  class="session-item"
+                  aria-current={!acpAgent && session.id === sessionID ? 'page' : undefined}
+                  onclick={() => selectSession(session.id)}
+                  title={session.title ?? 'Untitled session'}
+                  ><span class="session-symbol">◇</span><span class="session-details"
+                    ><strong>{session.title ?? 'Untitled session'}</strong><small
+                      >{session.agent ?? 'Unknown'} · {activeSessionIDs.includes(session.id)
+                        ? 'Running'
+                        : (session.outcome ?? 'Idle')}</small
+                    ><small>Updated {new Date(session.time.updated).toLocaleString()}</small></span
+                  ></button
+                ><button
+                  class="session-action"
+                  aria-label={`Rename ${session.title ?? 'session'}`}
+                  onclick={() => startRename(session)}>✎</button
+                ><button
+                  class="session-action"
+                  aria-label={`Delete ${session.title ?? 'session'}`}
+                  onclick={() => removeSession(session)}>×</button
+                >{/if}
+            </div>{:else}<p class="session-empty">
+              {sessionLoading
+                ? 'Loading sessions…'
+                : directory
+                  ? 'No OpenCode sessions found'
+                  : 'Choose a repository to begin'}
+            </p>{/each}
+        </nav>
+        {#if directory && (sessionPageHistory.length || nextSessionCursor)}<div
+            class="session-pages"
+          >
+            <button disabled={!sessionPageHistory.length || sessionLoading} onclick={previousPage}
+              >Previous</button
+            >
+            <button disabled={!nextSessionCursor || sessionLoading} onclick={nextPage}>Next</button>
+          </div>{/if}
+      </div>
+    </div>
     <div class="sidebar-footer" role="status">
       <span class:connected={runtimeState === 'connected'} class="status-dot" aria-hidden="true"
       ></span><span>OpenCode {runtimeState}</span>
@@ -2433,11 +2470,8 @@
                 : detailsOpen && activeSideTab === 'changes'}
             title="Toggle Changes (⌘L)">Changes</Button
           >{/if}
-        {#if directory}<Button variant="ghost" size="sm" onclick={() => (setupOpen = !setupOpen)}
-            >Repository setup</Button
-          >{/if}
         <details class="runtime-settings" bind:open={runtimeSettingsOpen}>
-          <summary>OpenCode settings</summary>
+          <summary>OpenCode<span class="compact-hidden"> settings</span></summary>
           <div class="runtime-settings-panel">
             {#if runtimeError}<p class="runtime-diagnostic" role="alert">{runtimeError}</p>{/if}
             {#if activeBinary}<p class="runtime-binary" title={activeBinary}>
@@ -2451,10 +2485,43 @@
               placeholder="Automatic detection"
             />
             <Button size="sm" onclick={retryRuntime}>Save and reconnect</Button>
+            {#if directory}<details class="repository-diagnostics" bind:open={setupOpen}>
+                <summary>Repository diagnostics</summary>
+                <p class="runtime-binary" title={directory}>{directory}</p>
+                {#if setupLoading}<p role="status">Checking repository…</p>{/if}
+                {#if setupError}<p class="runtime-diagnostic" role="alert">{setupError}</p>{/if}
+                {#if setup}<ul>
+                    {#each setupRows(setup) as [label, item] (label)}<li>
+                        <strong>{label}:</strong>
+                        {item.detail}
+                      </li>{/each}
+                  </ul>{/if}
+                {#if setup?.plugin.state === 'action'}<p>
+                    Install the tested plugin in OpenCode:
+                    <code
+                      >opencode plugin add
+                      github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5</code
+                    >
+                  </p>{/if}
+                {#if setup?.model.state === 'action' || setup?.planModel.state === 'action'}<p>
+                    In OpenCode, run <code>/connect</code> to connect a provider and
+                    <code>/models</code> to enable a model.
+                  </p>{/if}
+                {#if setup?.architect.state === 'action' && setup?.plugin.state === 'ready'}<p>
+                    Configure an Architect agent in OpenCode.
+                  </p>{/if}
+                {#if !planReady}<p>Sail checks again automatically after setup changes.</p>{/if}
+                <Button
+                  size="sm"
+                  onclick={restartSetup}
+                  disabled={setupLoading || connecting || running || sending}
+                  >Restart and check</Button
+                >
+              </details>{/if}
           </div>
         </details>
         <details class="runtime-settings">
-          <summary>Agent settings</summary>
+          <summary>Agent<span class="compact-hidden"> settings</span></summary>
           <div class="runtime-settings-panel">
             {#each agentAvailability as agent (agent.id)}
               <p class="runtime-binary">
@@ -2470,63 +2537,28 @@
         </details>
         {#if !acpAgent}<span role="status"
             ><Badge tone={workReady ? 'success' : 'neutral'}
-              >{running ? 'Running' : workReady ? 'Ready' : 'Setup needed'}</Badge
+              >{running
+                ? 'Running'
+                : workReady
+                  ? 'Ready'
+                  : setupLoading
+                    ? 'Checking'
+                    : setup?.model.state === 'action'
+                      ? 'Model needed'
+                      : 'Unavailable'}</Badge
             ></span
-          >{/if}<Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
-          >{dark ? 'Light' : 'Dark'} theme</Button
+          >{/if}<Button
+          variant="ghost"
+          size="sm"
+          aria-label={`${dark ? 'Light' : 'Dark'} theme`}
+          onclick={() => setTheme(!dark)}
+          >{dark ? 'Light' : 'Dark'}<span class="compact-hidden"> theme</span></Button
         >
       </div>
     </header>
     {#if $settingsError}<p class="notice error" role="alert">{$settingsError}</p>{/if}
-    {#if !acpAgent && setupOpen && (directory || setupError)}<section
-        class="setup-panel"
-        aria-label="Repository setup"
-      >
-        <div class="setup-heading">
-          <div>
-            <p class="eyebrow">REPOSITORY SETUP</p>
-            <h2>{directory || 'Choose a repository'}</h2>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onclick={restartSetup}
-            disabled={setupLoading || running || sending}
-            >{setupLoading ? 'Checking…' : 'Restart and check'}</Button
-          >
-        </div>
-        {#if setupError}<p class="notice error" role="alert">{setupError}</p>{/if}
-        {#if setup && !setupError}<div class="setup-checks">
-            {#each setupRows(setup) as [label, item] (label)}
-              <div class="setup-check">
-                <span class:ready={item.state === 'ready'} class="setup-indicator"
-                  >{item.state === 'ready' ? '✓' : '!'}</span
-                ><strong>{label}</strong><span>{item.detail}</span>
-              </div>
-            {/each}
-          </div>{/if}
-        {#if !planReady}<div class="setup-steps">
-            <strong>To start planning</strong>
-            {#if workReady}<p>
-                General agent work is ready. Planning needs the Architect and plan-review plugin.
-              </p>{/if}
-            <p>
-              Install OpenCode v2, then choose a Git repository. In OpenCode, run
-              <code>/connect</code> to connect a provider and <code>/models</code> to select a model.
-            </p>
-            <p>
-              Install the tested plugin revision with <code
-                >opencode plugin add
-                github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5</code
-              >, or add a local checkout path to <code>opencode.jsonc</code>:
-            </p>
-            <pre>{'{ "plugins": ["/absolute/path/to/opencode-plugin-plan-review"] }'}</pre>
-            <p>
-              Choose <strong>Restart and check</strong> after changing plugin configuration. This app
-              does not change your repository.
-            </p>
-          </div>{/if}
-      </section>{/if}
+    {#if setupError}<p class="notice error" role="alert">{setupError}</p>{/if}
+    {#if error}<p class="notice error" role="alert">{error}</p>{/if}
     {#snippet mainPaneContent()}
       <div
         class:single={acpAgent ? !agentChangesOpen : !sessionID || !detailsOpen}
@@ -2573,16 +2605,27 @@
                 </button>{/if}
               {#if !sessionID && messages.length === 0}<div class="welcome">
                   <div class="welcome-mark">◇</div>
-                  <p class="eyebrow">PLAN WITH ARCHITECT</p>
+                  <p class="eyebrow">{planReady ? 'PLAN WITH ARCHITECT' : 'START WORK'}</p>
                   <h1>What are we working on?</h1>
                   <p>
-                    Choose an agent and model, then describe the work. Use New plan for
-                    Architect-first planning.
+                    {planReady
+                      ? 'Choose an agent and model, then describe the work. Use New plan for Architect-first planning.'
+                      : workReady
+                        ? 'Choose an OpenCode agent and describe the work.'
+                        : agentAvailability.some((agent) => agent.available)
+                          ? 'Choose an available agent to start in this repository.'
+                          : 'Connect a model in OpenCode settings to start.'}
                   </p>
                   {#if !directory}<Button
                       onclick={() => chooseProject()}
                       disabled={runtimeState !== 'connected'}>Select repository</Button
                     >{/if}
+                  {#if directory && !workReady}<div class="welcome-agents">
+                      {#each agentAvailability.filter((agent) => agent.available) as agent (agent.id)}<Button
+                          variant="secondary"
+                          onclick={() => openAgent(agent.id)}>Start with {agent.name}</Button
+                        >{/each}
+                    </div>{/if}
                 </div>{/if}
               {#each chatMessages as message (message.id)}
                 {#if message.type === 'user'}<article
@@ -2656,70 +2699,69 @@
                   <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
                 </div>{/if}
             </div>
-            <div class="composer-wrap">
-              {#if error}<p class="notice error" role="alert">{error}</p>{/if}
-              <PromptPanel
-                {pendingPermissions}
-                {pendingForms}
-                client={connecting ? null : client}
-                {sessionID}
-                onchanged={() => refreshPrompts()}
-              />
-              <div class="composer">
-                <div class="work-controls">
-                  <label
-                    >Agent<select
-                      value={selectedAgentID}
-                      disabled={running || sending || switching || !workReady}
-                      onchange={(event) => void chooseAgent(event.currentTarget.value)}
+            {#if workReady || sessionID}<div class="composer-wrap">
+                <PromptPanel
+                  {pendingPermissions}
+                  {pendingForms}
+                  client={connecting ? null : client}
+                  {sessionID}
+                  onchanged={() => refreshPrompts()}
+                />
+                <div class="composer">
+                  <div class="work-controls">
+                    <label
+                      >Agent<select
+                        value={selectedAgentID}
+                        disabled={running || sending || switching || !workReady}
+                        onchange={(event) => void chooseAgent(event.currentTarget.value)}
+                      >
+                        {#each setup?.agents ?? [] as agent (agent.id)}<option value={agent.id}
+                            >{agent.name}</option
+                          >{/each}
+                      </select></label
                     >
-                      {#each setup?.agents ?? [] as agent (agent.id)}<option value={agent.id}
-                          >{agent.name}</option
-                        >{/each}
-                    </select></label
-                  >
-                  <label
-                    >Model<select
-                      value={selectedModelKey}
-                      disabled={running || sending || switching || !workReady}
-                      onchange={(event) => void chooseModel(event.currentTarget.value)}
+                    <label
+                      >Model<select
+                        value={selectedModelKey}
+                        disabled={running || sending || switching || !workReady}
+                        onchange={(event) => void chooseModel(event.currentTarget.value)}
+                      >
+                        {#each setup?.models ?? [] as model (modelKey(model))}<option
+                            value={modelKey(model)}>{model.providerID} / {model.name}</option
+                          >{/each}
+                      </select></label
                     >
-                      {#each setup?.models ?? [] as model (modelKey(model))}<option
-                          value={modelKey(model)}>{model.providerID} / {model.name}</option
+                  </div>
+                  {#if attachedFiles.length}<div class="attachments">
+                      {#each attachedFiles as path (path)}<span
+                          >{path.split(/[\\/]/).at(-1)}<button
+                            aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
+                            onclick={() =>
+                              (attachedFiles = attachedFiles.filter((item) => item !== path))}
+                            >×</button
+                          ></span
                         >{/each}
-                    </select></label
-                  >
+                    </div>{/if}
+                  <textarea
+                    data-pane-prompt
+                    aria-label="Message"
+                    bind:value={draft}
+                    onkeydown={keydown}
+                    rows="3"
+                    placeholder={inputReady
+                      ? 'Describe the work or ask a question…'
+                      : 'OpenCode needs a connected model…'}
+                    disabled={!inputReady || sending}></textarea>
+                  <div class="composer-bottom">
+                    <span>Enter to send · Shift+Enter for newline</span><Button
+                      variant="ghost"
+                      size="sm"
+                      onclick={attachFiles}
+                      disabled={!inputReady || sending}>Attach files</Button
+                    ><Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
+                  </div>
                 </div>
-                {#if attachedFiles.length}<div class="attachments">
-                    {#each attachedFiles as path (path)}<span
-                        >{path.split(/[\\/]/).at(-1)}<button
-                          aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
-                          onclick={() =>
-                            (attachedFiles = attachedFiles.filter((item) => item !== path))}
-                          >×</button
-                        ></span
-                      >{/each}
-                  </div>{/if}
-                <textarea
-                  data-pane-prompt
-                  aria-label="Message"
-                  bind:value={draft}
-                  onkeydown={keydown}
-                  rows="3"
-                  placeholder={inputReady
-                    ? 'Describe the work or ask a question…'
-                    : 'Complete repository setup before planning…'}
-                  disabled={!inputReady || sending}></textarea>
-                <div class="composer-bottom">
-                  <span>Enter to send · Shift+Enter for newline</span><Button
-                    variant="ghost"
-                    size="sm"
-                    onclick={attachFiles}
-                    disabled={!inputReady || sending}>Attach files</Button
-                  ><Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
-                </div>
-              </div>
-            </div>
+              </div>{/if}
           {/if}
         </main>
         {#if sessionID || acpAgent}<div

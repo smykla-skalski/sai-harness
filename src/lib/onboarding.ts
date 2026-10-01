@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AgentInfo, ModelInfo, ModelRef, OpenCodeClient, PluginInfo } from '@opencode/client';
+import type {
+  AgentInfo,
+  ConfigGetOutput,
+  ModelInfo,
+  ModelRef,
+  OpenCodeClient,
+  PluginInfo,
+} from '@opencode/client';
 
 export type SetupCheck = { state: 'ready' | 'action'; detail: string };
 export type SetupReport = {
@@ -13,6 +20,7 @@ export type SetupReport = {
   agents: AgentInfo[];
   models: ModelInfo[];
   defaultModel: ModelRef | null;
+  pluginConfigured: boolean;
   workReady: boolean;
   planReady: boolean;
   ready: boolean;
@@ -36,6 +44,18 @@ function planPlugin(plugin: PluginInfo): boolean {
   );
 }
 
+export function planPluginConfigured(entries: ConfigGetOutput): boolean {
+  return entries.some(
+    (entry) =>
+      entry.type === 'document' &&
+      entry.info.plugins?.some((plugin) =>
+        (typeof plugin === 'string' ? plugin : plugin.package).includes(
+          'opencode-plugin-plan-review',
+        ),
+      ),
+  );
+}
+
 export async function inspectRepository(
   client: OpenCodeClient,
   selected: string,
@@ -51,6 +71,7 @@ export async function inspectRepository(
     foundProviders,
     foundIntegrations,
     foundRpc,
+    foundConfig,
   ] = await Promise.allSettled([
     client.location.get({ location }),
     client.plugin.list({ location }),
@@ -65,7 +86,11 @@ export async function inspectRepository(
       location,
       input: { sessionID: '__sai_setup_probe__' },
     }),
+    client.config.get({ location }),
   ]);
+
+  const pluginConfigured =
+    foundConfig.status === 'fulfilled' && planPluginConfigured(foundConfig.value);
 
   const locationCheck =
     foundLocation.status === 'fulfilled'
@@ -188,6 +213,7 @@ export async function inspectRepository(
     defaultModel: defaultModel
       ? { id: defaultModel.id, providerID: defaultModel.providerID }
       : null,
+    pluginConfigured,
     workReady,
     planReady,
     ready: planReady,

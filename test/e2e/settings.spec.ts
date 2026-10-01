@@ -56,7 +56,7 @@ describe('disk-backed settings', () => {
     await expect($(`.project-repository-select[title="${other}"]`)).toBeDisplayed();
     await expect($(`.project-repository-select[title="${path}"]`)).toBeDisplayed();
 
-    await $('button=Dark theme').click();
+    await $('button[aria-label="Dark theme"]').click();
     await browser.waitUntil(async () => (await read())['sai-theme'] === 'dark');
     await browser.execute(() => localStorage.clear());
     await browser.refresh();
@@ -78,6 +78,6 @@ describe('disk-backed settings', () => {
     }
     await expect($(`.project-repository-select[title="${path}"]`)).toBeDisplayed();
     await expect($(`.project-repository-select[title="${other}"]`)).toBeDisplayed();
-    await expect($('button=Light theme')).toBeDisplayed();
+    await expect($('button[aria-label="Light theme"]')).toBeDisplayed();
   });
 });

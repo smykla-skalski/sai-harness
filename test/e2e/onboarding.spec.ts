@@ -4,6 +4,16 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+async function openDiagnostics() {
+  const settings = $('details.runtime-settings');
+  if ((await settings.getAttribute('open')) === null)
+    await $('details.runtime-settings summary').click();
+  const diagnostics = $('.repository-diagnostics');
+  if ((await diagnostics.getAttribute('open')) === null)
+    await $('.repository-diagnostics summary').click();
+  return diagnostics;
+}
+
 describe('repository setup', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sai-onboarding-'));
   const secondRepository = mkdtempSync(join(tmpdir(), 'sai-onboarding-second-'));
@@ -92,36 +102,35 @@ describe('repository setup', () => {
     expect(result).toContain('not inside a Git repository');
   });
 
-  it('shows setup guidance for a fresh repository without the plugin', async () => {
+  it('keeps setup diagnostics in settings for a repository without the plugin', async () => {
     await $(
       `.project-repository-select[title="${repository}"], .project-repository-select[title="${realpathSync(repository)}"]`,
     ).click();
     try {
       await browser.waitUntil(
-        async () => (await $('.setup-panel').getText()).includes(realpathSync(repository)),
+        async () => (await (await openDiagnostics()).getText()).includes(realpathSync(repository)),
         { timeout: 20_000, timeoutMsg: 'App did not inspect the selected repository' },
       );
     } catch (cause) {
       console.error('Repository setup diagnostic', {
         savedDirectory: await browser.execute(() => localStorage.getItem('sai-directory')),
-        setup: await $('.setup-panel').getText(),
+        setup: await $('.repository-diagnostics').getText(),
         sidebar: await $('.sidebar').getText(),
       });
       throw cause;
     }
-    await expect($('.setup-panel')).toHaveText(expect.stringContaining(realpathSync(repository)));
-    await expect($('.setup-panel')).toHaveText(
-      expect.stringContaining('Plan-review plugin not loaded'),
-    );
-    await expect($('.setup-panel')).toHaveText(
-      expect.stringContaining(
-        'github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5',
-      ),
+    const diagnostics = await openDiagnostics();
+    await expect($('.setup-panel')).not.toExist();
+    await expect(diagnostics).toHaveText(expect.stringContaining(realpathSync(repository)));
+    await expect(diagnostics).toHaveText(expect.stringContaining('Plan-review plugin not loaded'));
+    await expect(diagnostics).toHaveText(
+      expect.stringContaining('github:smykla-skalski/opencode-plugin-plan-review'),
     );
     await expect($('[aria-label="New plan"]')).toBeDisabled();
-    if ((await $('.topbar-actions').getText()).includes('Setup needed'))
-      await expect($('.composer textarea')).toBeDisabled();
-    else await expect($('.composer textarea')).toBeEnabled();
+    if ((await $('.topbar-actions').getText()).includes('Ready'))
+      await expect($('.composer textarea')).toBeEnabled();
+    else await expect($('.composer textarea')).not.toExist();
+    await $('details.runtime-settings summary').click();
   });
 
   it('creates and opens a worktree in the Sail workspace', async () => {
@@ -167,11 +176,10 @@ describe('repository setup', () => {
       'aria-current',
       'page',
     );
-    if (!(await $('.setup-panel').isExisting()))
-      await $('.topbar-actions button=Repository setup').click();
-    await expect($('.setup-panel')).toHaveText(
+    await expect(await openDiagnostics()).toHaveText(
       expect.stringContaining('Plan-review plugin not loaded'),
     );
+    await $('details.runtime-settings summary').click();
   });
 
   it('creates a worktree from an explicitly selected base branch', async () => {
@@ -284,9 +292,9 @@ describe('repository setup', () => {
       join(repository, 'gone'),
     );
     await browser.refresh();
-    await expect($('.setup-panel [role="alert"]')).toHaveText(
+    await expect($('.main-area > [role="alert"]')).toHaveText(
       'Repository path does not exist. Choose an existing directory.',
     );
-    await expect($('.composer textarea')).toBeDisabled();
+    await expect($('.composer textarea')).not.toExist();
   });
 });

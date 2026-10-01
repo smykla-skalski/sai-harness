@@ -29,9 +29,9 @@ The macOS development DMGs use ad-hoc signing when no Developer ID credentials w
 
 ## First project
 
-1. Open the app. In **OpenCode settings**, confirm the detected OpenCode v2.0.19 path. If detection fails, select its absolute executable path and retry.
-2. Select an existing Git repository. The app reports missing setup in the project panel.
-3. Install the tested plan-review plugin revision in OpenCode, then choose **Restart and check** in the app:
+1. Open the app. Sail detects an installed OpenCode automatically. If detection fails, select its absolute executable path in **OpenCode settings** and retry.
+2. Select an existing Git repository. Sail checks its setup automatically; details are in **OpenCode settings → Repository diagnostics**.
+3. Install the tested plan-review plugin revision in OpenCode. Sail rechecks it automatically:
 
    ```sh
    opencode plugin add github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5
@@ -47,7 +47,7 @@ The plugin package published as `0.2.0` does not contain the history RPC needed 
 ## Troubleshooting and updates
 
 - **OpenCode not found:** Run `opencode --version` in a terminal; select the native executable in OpenCode settings. GUI apps may not inherit your shell's `PATH`.
-- **Plugin or Architect missing:** Check the repository's `opencode.jsonc` or global OpenCode plugin list, then use **Restart and check**. Confirm the exact plugin revision above.
+- **Plugin or Architect missing:** Check the repository's `opencode.jsonc` or global OpenCode plugin list. Sail rechecks automatically; **OpenCode settings → Repository diagnostics** has a manual **Restart and check** control if needed.
 - **Provider missing:** Connect a provider and enable a model in OpenCode. The desktop app does not store provider credentials.
 - **Server stopped:** The app reconnects to its owned OpenCode process; reopen the app if it cannot recover. Existing sessions are stored by OpenCode.
 - **Windows installer fails:** Ensure WebView2 is installed or allow the installer to download its bootstrapper.

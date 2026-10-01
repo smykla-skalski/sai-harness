@@ -1,8 +1,15 @@
 import { browser, $, $$, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+async function capture(name: string) {
+  const output = process.env.SAIL_VISUAL_AUDIT_DIR;
+  if (!output) return;
+  mkdirSync(output, { recursive: true });
+  await browser.saveScreenshot(join(output, `${name}.png`));
+}
 
 describe('split agent panes', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sail-panes-e2e-'));
@@ -56,6 +63,20 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'd']);
     await expect($('.pane-split.row')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(2);
+    const header = await browser.execute(() => ({
+      right: document.querySelector('.topbar-actions')!.getBoundingClientRect().right,
+      themeRight: document.querySelector('button[aria-label$=" theme"]')!.getBoundingClientRect()
+        .right,
+      themeScrollWidth: document.querySelector<HTMLElement>('button[aria-label$=" theme"]')!
+        .scrollWidth,
+      themeClientWidth: document.querySelector<HTMLElement>('button[aria-label$=" theme"]')!
+        .clientWidth,
+      viewport: innerWidth,
+    }));
+    expect(header.right).toBeLessThanOrEqual(header.viewport + 1);
+    expect(header.themeRight).toBeLessThanOrEqual(header.viewport + 1);
+    expect(header.themeScrollWidth).toBeLessThanOrEqual(header.themeClientWidth + 1);
+    await capture('desktop-agent-two-panes');
     await $('.pane-divider').click();
     await browser.keys('ArrowRight');
     const ratio = await browser.execute((path) => {
@@ -66,6 +87,7 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'Shift', 'd']);
     await expect($('.pane-split.column')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(3);
+    await capture('desktop-agent-three-panes');
     const focusedBefore = await $('.pane-leaf.focused').getAttribute('data-pane-id');
     await browser.keys('F6');
     const focusedAfter = await $('.pane-leaf.focused').getAttribute('data-pane-id');
@@ -75,6 +97,7 @@ describe('split agent panes', () => {
     await browser.refresh();
     await expect($('.pane-split.column')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(3);
+    await capture('desktop-agent-restored-panes');
     await $(`.project-worktree-select[title="${realpathSync(worktree)}"]`).click();
     await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 1);
     await expect($('.agent-launches button')).toBeDisplayed();
