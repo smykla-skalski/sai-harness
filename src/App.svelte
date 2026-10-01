@@ -899,6 +899,19 @@
           persistPaneLayouts();
         }
         saveProjectCatalog(replaceRepositoryPath(projectCatalog, path, report.repository));
+        if (recentCycleKeys) {
+          const selectedKey = recentCycleKeys[recentCycleIndex];
+          const migratedSelected = selectedKey
+            ? migrateRecentThreadKeys([selectedKey], agentThreads, path, report.repository)[0]
+            : null;
+          recentCycleKeys = migrateRecentThreadKeys(
+            recentCycleKeys,
+            agentThreads,
+            path,
+            report.repository,
+          );
+          recentCycleIndex = migratedSelected ? recentCycleKeys.indexOf(migratedSelected) : -1;
+        }
         recentThreadKeys = migrateRecentThreadKeys(
           recentThreadKeys,
           agentThreads,
@@ -1113,6 +1126,7 @@
 
   function openCommandPalette() {
     if (paletteDialog.open || document.querySelector('dialog[open]')) return;
+    ++recentJumpGeneration;
     palettePreviousFocus = document.activeElement as HTMLElement | null;
     restorePaletteFocus = true;
     paletteQuery = '';
@@ -1270,7 +1284,12 @@
       return;
     const jump = ++recentJumpGeneration;
     let expectedProjectLoad = projectLoadGeneration;
-    if (thread.directory !== directory) {
+    const target = await invoke<string>('validate_repository', { path: thread.directory }).catch(
+      () => null,
+    );
+    if (!target || jump !== recentJumpGeneration || expectedProjectLoad !== projectLoadGeneration)
+      return;
+    if (thread.directory !== directory || target !== directory) {
       const pending = loadProject(thread.directory, false);
       expectedProjectLoad = projectLoadGeneration;
       await pending;
@@ -1308,6 +1327,7 @@
 
   function splitFocusedPane(direction: 'row' | 'column') {
     if (!directory) return;
+    ++recentJumpGeneration;
     const agent =
       (focusedPane === 'main'
         ? acpAgent
@@ -1336,6 +1356,7 @@
 
   function focusPane(id: string) {
     if (focusedPane === id) return;
+    ++recentJumpGeneration;
     focusedPane = id;
     const thread =
       id === 'main' ? acpThread : leaves(paneLayout).find((pane) => pane.id === id)?.thread;
@@ -1363,6 +1384,7 @@
   }
 
   function closeFocusedPane(id: string) {
+    ++recentJumpGeneration;
     let layout = closePane(paneLayout, id);
     if (!('direction' in layout) && layout.id === 'main')
       layout = { ...layout, agent: acpAgent, thread: acpThread };
@@ -1372,6 +1394,7 @@
   }
 
   function closeCurrentPane() {
+    ++recentJumpGeneration;
     if (leaves(paneLayout).length > 1) {
       closeFocusedPane(focusedPane);
       return;
@@ -2325,7 +2348,10 @@
               focusedPane,
               event.key.slice(5).toLowerCase() as 'left' | 'right' | 'up' | 'down',
             );
-      if (next) focusPaneForTyping(next);
+      if (next) {
+        ++recentJumpGeneration;
+        focusPaneForTyping(next);
+      }
       return;
     }
     if (
@@ -2390,6 +2416,7 @@
 <svelte:window
   onkeydown={keydownWorkspace}
   onkeyup={keyupWorkspace}
+  onblur={() => (recentCycleKeys = null)}
   onfocus={focusWorkspace}
   onfocusin={cancelPendingPromptFocus}
 />
