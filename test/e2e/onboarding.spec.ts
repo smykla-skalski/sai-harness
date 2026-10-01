@@ -121,6 +121,12 @@ describe('repository setup', () => {
     const name = 'sidebar-task';
     const repositoryName = realpathSync(repository).split('/').at(-1);
     await $(`[aria-label="Create worktree for ${repositoryName}"]`).click();
+    await expect($('.worktree-dialog')).toBeDisplayed();
+    await expect($('.worktree-dialog')).toHaveAttribute('open');
+    await expect($('.worktree-dialog')).toHaveText(expect.stringContaining(repositoryName!));
+    await $('.worktree-dialog .worktree-cancel').click();
+    await expect($('.worktree-dialog')).not.toBeDisplayed();
+    await $(`[aria-label="Create worktree for ${repositoryName}"]`).click();
     await $(`[aria-label="Worktree name for ${repositoryName}"]`).setValue(name);
     await $('.worktree-form button[type="submit"]').click();
     try {
@@ -142,6 +148,7 @@ describe('repository setup', () => {
       throw cause;
     }
     const worktree = await browser.execute(() => localStorage.getItem('sai-directory'));
+    await expect($('.worktree-dialog')).not.toBeDisplayed();
     expect(worktree).toContain(realpathSync(process.env.SAIL_WORKTREE_ROOT!));
     expect(
       execFileSync('git', ['-C', worktree!, 'branch', '--show-current'], {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import type { ProjectCatalog } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
@@ -43,6 +44,8 @@
   let menuGroupID = $state<string | null>(null);
   let menuRepository = $state<string | null>(null);
   let creatingWorktreeFor = $state<string | null>(null);
+  let worktreeDialog: HTMLDialogElement;
+  let worktreeNameInput = $state<HTMLInputElement>();
   let worktreeName = $state('');
   let worktreeDestination = $state<string | null>(null);
   let worktreeBase = $state('');
@@ -81,13 +84,16 @@
     groupName = '';
   }
 
-  function startWorktree(path: string) {
+  async function startWorktree(path: string) {
     creatingWorktreeFor = path;
     worktreeName = '';
     worktreeDestination = null;
     worktreeBase = '';
     worktreeError = '';
     menuRepository = null;
+    await tick();
+    worktreeDialog.showModal();
+    worktreeNameInput?.focus();
   }
 
   async function chooseWorktreeDestination() {
@@ -110,12 +116,16 @@
         worktreeDestination,
         worktreeBase.trim() || null,
       );
-      creatingWorktreeFor = null;
+      worktreeDialog.close();
     } catch (cause) {
       worktreeError = cause instanceof Error ? cause.message : String(cause);
     } finally {
       worktreeBusy = false;
     }
+  }
+
+  function closeWorktreeDialog() {
+    if (!worktreeBusy) worktreeDialog.close();
   }
 </script>
 
@@ -252,43 +262,6 @@
                       : 'Remove from sidebar'}>Remove from sidebar</button
                   >
                 </div>{/if}
-              {#if creatingWorktreeFor === path}<form
-                  class="worktree-form"
-                  onsubmit={(event) => {
-                    event.preventDefault();
-                    void createWorktree(path);
-                  }}
-                >
-                  <input
-                    aria-label={`Worktree name for ${repositoryName(path)}`}
-                    placeholder="New branch name"
-                    bind:value={worktreeName}
-                    disabled={worktreeBusy}
-                  />
-                  <input
-                    aria-label={`Base branch for ${repositoryName(path)}`}
-                    placeholder="Base branch (auto)"
-                    bind:value={worktreeBase}
-                    disabled={worktreeBusy}
-                  />
-                  <button
-                    type="button"
-                    onclick={chooseWorktreeDestination}
-                    disabled={worktreeBusy}
-                    title={worktreeDestination ?? 'Default: ~/sail/worktrees'}
-                    >{worktreeDestination ? 'Custom folder' : 'Sail folder'}</button
-                  >
-                  <div class="worktree-form-actions">
-                    <button type="submit" disabled={worktreeBusy || !worktreeName.trim()}
-                      >{worktreeBusy ? 'Creating…' : 'Create'}</button
-                    ><button
-                      type="button"
-                      disabled={worktreeBusy}
-                      onclick={() => (creatingWorktreeFor = null)}>Cancel</button
-                    >
-                  </div>
-                  {#if worktreeError}<p role="alert">{worktreeError}</p>{/if}
-                </form>{/if}
               {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
                   class:active={worktree.path === directory}
                   class="project-worktree-row"
@@ -363,43 +336,6 @@
                     : 'Remove from sidebar'}>Remove from sidebar</button
                 >
               </div>{/if}
-            {#if creatingWorktreeFor === path}<form
-                class="worktree-form"
-                onsubmit={(event) => {
-                  event.preventDefault();
-                  void createWorktree(path);
-                }}
-              >
-                <input
-                  aria-label={`Worktree name for ${repositoryName(path)}`}
-                  placeholder="New branch name"
-                  bind:value={worktreeName}
-                  disabled={worktreeBusy}
-                />
-                <input
-                  aria-label={`Base branch for ${repositoryName(path)}`}
-                  placeholder="Base branch (auto)"
-                  bind:value={worktreeBase}
-                  disabled={worktreeBusy}
-                />
-                <button
-                  type="button"
-                  onclick={chooseWorktreeDestination}
-                  disabled={worktreeBusy}
-                  title={worktreeDestination ?? 'Default: ~/sail/worktrees'}
-                  >{worktreeDestination ? 'Custom folder' : 'Sail folder'}</button
-                >
-                <div class="worktree-form-actions">
-                  <button type="submit" disabled={worktreeBusy || !worktreeName.trim()}
-                    >{worktreeBusy ? 'Creating…' : 'Create'}</button
-                  ><button
-                    type="button"
-                    disabled={worktreeBusy}
-                    onclick={() => (creatingWorktreeFor = null)}>Cancel</button
-                  >
-                </div>
-                {#if worktreeError}<p role="alert">{worktreeError}</p>{/if}
-              </form>{/if}
             {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
                 class:active={worktree.path === directory}
                 class="project-worktree-row"
@@ -418,3 +354,79 @@
       </div>{/if}
   </nav>
 </section>
+
+<dialog
+  class="worktree-dialog"
+  aria-labelledby="worktree-dialog-title"
+  bind:this={worktreeDialog}
+  oncancel={(event) => {
+    if (worktreeBusy) event.preventDefault();
+  }}
+  onclose={() => (creatingWorktreeFor = null)}
+>
+  {#if creatingWorktreeFor}<form
+      class="worktree-form"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void createWorktree(creatingWorktreeFor!);
+      }}
+    >
+      <div class="worktree-dialog-heading">
+        <div>
+          <h2 id="worktree-dialog-title">Create worktree</h2>
+          <p title={creatingWorktreeFor}>For {repositoryName(creatingWorktreeFor)}</p>
+        </div>
+        <button
+          type="button"
+          class="worktree-dialog-close"
+          aria-label="Close worktree dialog"
+          onclick={closeWorktreeDialog}
+          disabled={worktreeBusy}>×</button
+        >
+      </div>
+      <label
+        >New branch name
+        <input
+          aria-label={`Worktree name for ${repositoryName(creatingWorktreeFor)}`}
+          placeholder="e.g. my-feature"
+          bind:value={worktreeName}
+          bind:this={worktreeNameInput}
+          disabled={worktreeBusy}
+        />
+      </label>
+      <label
+        >Base branch <span>(optional)</span>
+        <input
+          aria-label={`Base branch for ${repositoryName(creatingWorktreeFor)}`}
+          placeholder="Auto-detect"
+          bind:value={worktreeBase}
+          disabled={worktreeBusy}
+        />
+      </label>
+      <div class="worktree-destination">
+        <div>
+          <strong>Location</strong><span title={worktreeDestination ?? '~/sail/worktrees'}
+            >{worktreeDestination ?? 'Sail worktrees folder'}</span
+          >
+        </div>
+        <button type="button" onclick={chooseWorktreeDestination} disabled={worktreeBusy}
+          >Choose folder…</button
+        >
+      </div>
+      {#if worktreeError}<p class="worktree-error" role="alert">{worktreeError}</p>{/if}
+      <div class="worktree-form-actions">
+        <button
+          type="button"
+          class="worktree-cancel"
+          disabled={worktreeBusy}
+          onclick={closeWorktreeDialog}>Cancel</button
+        >
+        <button
+          type="submit"
+          class="worktree-create"
+          disabled={worktreeBusy || !worktreeName.trim()}
+          >{worktreeBusy ? 'Creating…' : 'Create worktree'}</button
+        >
+      </div>
+    </form>{/if}
+</dialog>

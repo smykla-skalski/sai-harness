@@ -230,8 +230,7 @@ button:disabled {
   gap: 3px;
 }
 .project-menu select,
-.project-form input,
-.worktree-form input {
+.project-form input {
   min-width: 0;
   border: 1px solid var(--shell-divider);
   border-radius: 5px;
@@ -259,36 +258,107 @@ button:disabled {
   color: var(--shell-muted);
   font-size: 11px;
 }
+.worktree-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 24px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 12px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+  box-shadow: 0 24px 64px #0004;
+}
+.worktree-dialog::backdrop {
+  background: #07131099;
+}
 .worktree-form {
   display: grid;
-  gap: 5px;
-  padding: 6px 8px 8px 18px;
+  gap: 18px;
+  margin: 0;
+}
+.worktree-dialog-heading,
+.worktree-destination,
+.worktree-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.worktree-dialog-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.worktree-dialog-heading p {
+  overflow: hidden;
+  max-width: 340px;
+  margin: 5px 0 0;
+  color: var(--sui-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worktree-dialog-close {
+  align-self: flex-start;
+  padding: 0 4px;
+  border: 0;
+  color: var(--sui-muted);
+  background: transparent;
+  font-size: 24px;
+}
+.worktree-form label,
+.worktree-destination > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+.worktree-form label span,
+.worktree-destination span {
+  color: var(--sui-muted);
+  font-weight: 400;
 }
 .worktree-form input {
   width: 100%;
-  padding: 6px;
-  font-size: 11px;
-}
-.worktree-form button {
-  border: 0;
-  border-radius: 5px;
-  color: var(--sui-muted);
-  background: var(--sui-surface);
-  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 7px;
+  color: var(--sui-foreground);
+  background: var(--sui-canvas);
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 400;
+}
+.worktree-destination span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worktree-destination button,
+.worktree-form-actions button {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 7px;
+  color: var(--sui-foreground);
+  background: var(--sui-canvas);
+  font: inherit;
+  font-size: 12px;
 }
 .worktree-form-actions {
-  display: flex;
-  gap: 7px;
+  justify-content: flex-end;
+  padding-top: 6px;
+  border-top: 1px solid var(--shell-divider);
 }
-.worktree-form-actions button {
-  padding: 5px 7px;
+.worktree-form-actions .worktree-create {
+  border-color: var(--sui-primary);
+  color: var(--sui-primary-foreground);
+  background: var(--sui-primary);
 }
-.worktree-form p {
+.worktree-error {
   margin: 0;
   color: var(--sui-danger);
-  font-size: 11px;
+  font-size: 12px;
 }
 .session-heading {
   display: flex;
