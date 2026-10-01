@@ -72,6 +72,21 @@ try {
   const marker = randomUUID();
   writeFileSync(join(repository, '.sai-contract-marker'), marker);
   writeFileSync(join(repository, 'opencode.jsonc'), JSON.stringify({ plugins: [plugin] }));
+  execFileSync('git', ['-C', repository, 'add', '.']);
+  execFileSync('git', [
+    '-C',
+    repository,
+    '-c',
+    'user.name=SAI Contract',
+    '-c',
+    'user.email=sai@example.invalid',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '-q',
+    '-m',
+    'baseline',
+  ]);
   const version = execFileSync(cli, ['--version'], { env, encoding: 'utf8' }).trim();
   assert.match(version, /^opencode v2\.0\.19$/);
   const port = await freePort();
@@ -102,6 +117,12 @@ try {
   assert(Array.isArray((await client.session.list({ location })).data));
   assert(Array.isArray((await client.message.list({ sessionID: created.id, location })).data));
   assert(Array.isArray(await client.session.diff({ sessionID: created.id, location })));
+  writeFileSync(join(repository, '.sai-contract-marker'), `${marker}-edited`);
+  const edited = (await client.vcs.diff({ location, mode: 'working' })).data;
+  assert(edited.some((file) => file.file.endsWith('.sai-contract-marker')));
+  writeFileSync(join(repository, '.sai-contract-marker'), marker);
+  const reverted = (await client.vcs.diff({ location, mode: 'working' })).data;
+  assert(!reverted.some((file) => file.file.endsWith('.sai-contract-marker')));
   assert(Array.isArray(await client.permission.list({ sessionID: created.id, location })));
   assert(Array.isArray(await client.session.form.list({ sessionID: created.id, location })));
 

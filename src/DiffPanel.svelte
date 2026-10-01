@@ -12,9 +12,11 @@
     error: string;
     onselect: (file: string) => void;
     onrefresh: () => void;
+    onclose: () => void;
   }
 
-  let { files, annotations, selected, loading, error, onselect, onrefresh }: Props = $props();
+  let { files, annotations, selected, loading, error, onselect, onrefresh, onclose }: Props =
+    $props();
   let current = $derived(files.find((file) => file.file === selected));
   let lines = $derived(current ? parsePatch(current.patch) : null);
   let unavailable = $derived(current ? patchUnavailableReason(current.patch) : null);
@@ -34,15 +36,18 @@
   });
 </script>
 
-<aside class="diff-panel" aria-label="Session changes">
+<aside class="diff-panel" aria-label="Working tree changes">
   <header class="diff-heading">
     <div>
-      <p class="eyebrow">SESSION DIFF</p>
+      <p class="eyebrow">WORKING TREE</p>
       <h2>Changes</h2>
     </div>
-    <Button size="sm" variant="ghost" onclick={onrefresh} disabled={loading}
-      >{loading ? 'Refreshing…' : 'Refresh'}</Button
-    >
+    <div class="diff-actions">
+      <Button size="sm" variant="ghost" onclick={onrefresh} disabled={loading}
+        >{loading ? 'Refreshing…' : 'Refresh'}</Button
+      >
+      <Button size="sm" variant="ghost" onclick={onclose} aria-label="Close Changes">Close</Button>
+    </div>
   </header>
   {#if error}<p class="diff-error" role="alert">{error}</p>{/if}
   <div class="diff-files" aria-label="Changed files">
@@ -60,7 +65,7 @@
           >{/if}
       </button>
     {:else}
-      <p class="diff-empty">{loading ? 'Loading changes…' : 'No session changes reported.'}</p>
+      <p class="diff-empty">{loading ? 'Loading changes…' : 'No working tree changes.'}</p>
     {/each}
   </div>
   <div class="diff-content">
@@ -93,7 +98,7 @@
               ? 'Binary change: no readable text patch is available.'
               : 'No text patch is available. This may be a binary or metadata-only change.'}
         </p>{/if}
-    {:else if selected}<p class="diff-fallback">No session diff entry for {selected}.</p>
+    {:else if selected}<p class="diff-fallback">No working tree diff for {selected}.</p>
     {:else}<p class="diff-fallback">Select a changed file to inspect its patch.</p>{/if}
   </div>
 </aside>
@@ -113,6 +118,10 @@
     gap: 8px;
     padding: 16px 20px;
     border-bottom: 1px solid var(--shell-divider);
+  }
+  .diff-actions {
+    display: flex;
+    gap: 4px;
   }
   .eyebrow {
     margin: 0 0 3px;

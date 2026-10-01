@@ -393,6 +393,10 @@ button:disabled {
 .workspace.single {
   grid-template-columns: minmax(0, 1fr);
 }
+.workspace.closed .details-resizer,
+.workspace.closed .side-area {
+  display: none;
+}
 .details-resizer {
   position: relative;
   width: 8px;
@@ -877,7 +881,7 @@ button:disabled {
     display: none;
   }
   .app-shell[data-mobile-view='chat'] .chat-area,
-  .app-shell[data-mobile-view='details'] .side-area {
+  .app-shell[data-mobile-view='details'] .workspace:not(.closed) .side-area {
     display: flex;
   }
   .app-shell[data-mobile-view='sessions'] .workspace {

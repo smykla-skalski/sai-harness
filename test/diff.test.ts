@@ -66,6 +66,7 @@ await test('annotate session diff with touched steps and drift', () => {
   });
   assert.equal(selectedDiffFile(files, '/repo/src/b.ts', '/repo'), 'src/b.ts');
   assert.equal(selectedDiffFile(files, 'src/b.ts', '/repo'), 'src/b.ts');
+  assert.equal(selectedDiffFile([], 'src/b.ts', '/repo'), null);
 });
 
 await test('parse only a selected readable patch and reject huge or empty patches', () => {

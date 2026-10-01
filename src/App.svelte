@@ -78,6 +78,7 @@
   let selectedFilePath = $state<string | null>(null);
   type SideTab = 'plan' | 'changes' | 'history';
   let sideTab = $state<SideTab>('plan');
+  let detailsOpen = $state(true);
   let diffRefresh = 0;
   let historyRefresh = 0;
   let draft = $state('');
@@ -116,6 +117,7 @@
 
   async function showMobileView(view: 'sessions' | 'chat' | 'details') {
     saveViewState();
+    if (view === 'details') detailsOpen = true;
     mobileView = view;
     await tick();
     if (window.matchMedia('(max-width: 850px)').matches)
@@ -127,6 +129,29 @@
     sideTab = tab;
     await tick();
     restoreSideScroll(viewStates.get(viewKey())?.sideScroll[activeSideTab as SideTab]);
+    if (tab === 'changes') void refreshDiff();
+  }
+
+  async function toggleChanges() {
+    if (!sessionID) return;
+    const narrow = window.matchMedia('(max-width: 850px)').matches;
+    const visible =
+      detailsOpen && activeSideTab === 'changes' && (!narrow || mobileView === 'details');
+    saveViewState();
+    if (visible) {
+      detailsOpen = false;
+      if (narrow) mobileView = 'chat';
+      await tick();
+      if (narrow) chatArea?.focus();
+      return;
+    }
+    detailsOpen = true;
+    sideTab = 'changes';
+    if (narrow) mobileView = 'details';
+    await tick();
+    restoreSideScroll(viewStates.get(viewKey())?.sideScroll.changes);
+    if (narrow) detailsArea?.focus();
+    void refreshDiff();
   }
 
   function restoreSideScroll(positions?: number[]) {
@@ -228,6 +253,7 @@
   let client = $state<OpenCodeClient | null>(null);
   let eventController: AbortController | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let diffTimer: ReturnType<typeof setTimeout> | undefined;
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   let healthTimer: ReturnType<typeof setInterval> | undefined;
   let connecting = $state(false);
@@ -285,6 +311,7 @@
       localStorage.getItem(planExpandedKey())
     )
       return;
+    detailsOpen = true;
     detailsWidth = Math.min(maxDetailsWidth, Math.round(workspaceWidth * 0.65));
     localStorage.setItem('sai-details-width', String(detailsWidth));
     localStorage.setItem(planExpandedKey(), '1');
@@ -377,6 +404,7 @@
       observer.disconnect();
       eventController?.abort();
       clearTimeout(refreshTimer);
+      clearTimeout(diffTimer);
       clearTimeout(recoveryTimer);
       clearInterval(healthTimer);
       cancelAnimationFrame(followFrame);
@@ -758,6 +786,7 @@
       return;
     }
     sessionID = id;
+    detailsOpen = true;
     selectedSession = info;
     syncSessionChoice(info);
     newSessionMode = null;
@@ -1152,7 +1181,7 @@
     const generation = ++diffRefresh;
     diffLoading = true;
     try {
-      const next = await source.session.diff({ sessionID: id });
+      const next = (await source.vcs.diff({ location: { directory: path }, mode: 'working' })).data;
       if (
         generation !== diffRefresh ||
         current !== selection ||
@@ -1205,6 +1234,7 @@
 
   function selectDiffPath(path: string) {
     saveViewState();
+    detailsOpen = true;
     sideTab = 'changes';
     mobileView = 'details';
     void focusDiffDetails();
@@ -1263,6 +1293,11 @@
     refreshTimer = setTimeout(() => void refreshSidePanels(), 120);
   }
 
+  function scheduleDiffRefresh() {
+    clearTimeout(diffTimer);
+    diffTimer = setTimeout(() => void refreshDiff(), 120);
+  }
+
   function applyTextDelta(messageID: string, ordinal: number, delta: string) {
     const existing = messages.find((message) => message.id === messageID);
     const part = existing?.type === 'assistant' ? existing.content[ordinal] : undefined;
@@ -1281,6 +1316,8 @@
     try {
       for await (const event of source.event.subscribe({ signal })) {
         if (signal.aborted) return;
+        if (event.type === 'filesystem.changed' && event.location?.directory === directory)
+          scheduleDiffRefresh();
         if (event.type === 'server.connected') {
           void resync().catch((cause) => {
             error = describe(cause);
@@ -1352,6 +1389,7 @@
           if (event.type === 'session.tool.success' || event.type === 'session.tool.failed') {
             activity = 'Thinking';
             activityTool = '';
+            scheduleDiffRefresh();
           }
           if (event.type === 'session.compaction.started') activity = 'Organizing context';
           if (event.type === 'session.retry.scheduled') activity = 'Retrying';
@@ -1490,6 +1528,25 @@
     }
   }
 
+  function keydownWorkspace(event: KeyboardEvent) {
+    if (
+      !sessionID ||
+      event.repeat ||
+      event.key.toLowerCase() !== 'l' ||
+      !(event.metaKey || event.ctrlKey) ||
+      event.altKey ||
+      event.shiftKey ||
+      document.querySelector('dialog[open]')
+    )
+      return;
+    event.preventDefault();
+    void toggleChanges();
+  }
+
+  function focusWorkspace() {
+    if (detailsOpen && activeSideTab === 'changes') void refreshDiff();
+  }
+
   function describe(cause: unknown): string {
     if (cause instanceof Error) return cause.message;
     if (typeof cause === 'object' && cause && 'message' in cause) return String(cause.message);
@@ -1508,6 +1565,7 @@
 </script>
 
 <svelte:head><title>SAI Harness · Plan workspace</title></svelte:head>
+<svelte:window onkeydown={keydownWorkspace} onfocus={focusWorkspace} />
 <div class="app-shell" data-mobile-view={mobileView}>
   <aside class="sidebar" aria-label="Sessions" tabindex="-1" bind:this={sidebarElement}>
     <div class="brand"><span class="brand-mark">S.</span><span>SAI Harness</span></div>
@@ -1632,6 +1690,14 @@
         >
       </div>
       <div class="topbar-actions">
+        {#if sessionID}<Button
+            variant="ghost"
+            size="sm"
+            onclick={toggleChanges}
+            aria-controls="session-details"
+            aria-expanded={detailsOpen && activeSideTab === 'changes'}
+            title="Toggle Changes (⌘L)">Changes</Button
+          >{/if}
         {#if directory}<Button variant="ghost" size="sm" onclick={() => (setupOpen = !setupOpen)}
             >Repository setup</Button
           >{/if}
@@ -1711,7 +1777,8 @@
           </div>{/if}
       </section>{/if}
     <div
-      class:single={!sessionID}
+      class:single={!sessionID || !detailsOpen}
+      class:closed={!detailsOpen}
       class="workspace"
       style={`--details-width: ${visibleDetailsWidth}px`}
       bind:this={workspaceElement}
@@ -1910,7 +1977,7 @@
               >{/if}<button
               class:active={activeSideTab === 'changes'}
               aria-current={activeSideTab === 'changes' ? 'page' : undefined}
-              onclick={() => switchSideTab('changes')}>Changes ({diffs.length})</button
+              onclick={toggleChanges}>Changes ({diffs.length})</button
             ><button
               class:active={activeSideTab === 'history'}
               aria-current={activeSideTab === 'history' ? 'page' : undefined}
@@ -1938,6 +2005,7 @@
                 error={diffError}
                 onselect={(file) => (selectedFilePath = file)}
                 onrefresh={() => refreshDiff()}
+                onclose={toggleChanges}
               />
             </div>
             <div class:inactive={activeSideTab !== 'history'} class="side-view">

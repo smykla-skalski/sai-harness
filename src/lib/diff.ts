@@ -38,7 +38,7 @@ export function selectedDiffFile(
   return (
     (key ? files.find((file) => repoPath(file.file, directory) === key)?.file : undefined) ??
     files[0]?.file ??
-    selected
+    null
   );
 }
 
