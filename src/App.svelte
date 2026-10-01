@@ -20,7 +20,13 @@
   import AgentWorkspace from './AgentWorkspace.svelte';
   import PaneTree from './PaneTree.svelte';
   import InboxPanel from './InboxPanel.svelte';
-  import { inboxLocations, loadInboxSeen, sortInbox, type InboxItem } from './lib/inbox';
+  import {
+    inboxLocations,
+    loadInboxSeen,
+    openCodeRequestTime,
+    sortInbox,
+    type InboxItem,
+  } from './lib/inbox';
   import {
     newestAvailableThread,
     searchCommandPalette,
@@ -955,7 +961,7 @@
           sessionId,
           requestId,
           text: title,
-          receivedAt: inboxTime(key, pending.receivedAt),
+          receivedAt: pending.receivedAt,
           options,
         });
       }
@@ -975,7 +981,7 @@
           text:
             request.message?.trim() ||
             `Allow ${request.action} on ${request.resources.join(', ')}?`,
-          receivedAt: inboxTime(key),
+          receivedAt: openCodeRequestTime(request.id) ?? inboxTime(key),
         });
       }
       for (const form of forms) {
@@ -988,7 +994,7 @@
           sessionId: form.sessionID,
           requestId: form.id,
           text: [form.title, ...form.fields.map((field) => field.title ?? field.key)].join(' · '),
-          receivedAt: inboxTime(key),
+          receivedAt: openCodeRequestTime(form.id) ?? inboxTime(key),
         });
       }
     }
@@ -1656,11 +1662,14 @@
     scheduleInboxRefresh();
   }
 
-  async function focusInboxRequest(requestId: string | number, attempts = 40): Promise<void> {
+  async function focusInboxRequest(item: InboxItem, attempts = 40): Promise<void> {
     await tick();
     const request = [...document.querySelectorAll<HTMLElement>('[data-request-id]')].find(
       (element) =>
-        element.dataset.requestId === String(requestId) && element.getClientRects().length,
+        element.dataset.requestId === String(item.requestId) &&
+        element.dataset.sessionId === item.sessionId &&
+        (item.kind !== 'acp-permission' || element.dataset.agentId === item.agentId) &&
+        element.getClientRects().length,
     );
     if (request) {
       request.scrollIntoView({ block: 'center' });
@@ -1669,21 +1678,24 @@
     }
     if (attempts === 0) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
-    return focusInboxRequest(requestId, attempts - 1);
+    return focusInboxRequest(item, attempts - 1);
   }
 
   async function openInboxItem(item: InboxItem) {
     inboxDialog.close();
     if (item.kind === 'acp-permission') {
       const thread = agentThreads.find(
-        (entry) => entry.agent === item.agentId && entry.sessionId === item.sessionId,
+        (entry) =>
+          entry.agent === item.agentId &&
+          entry.sessionId === item.sessionId &&
+          entry.directory === item.directory,
       );
       if (thread) await jumpToRecentThread(threadKey(thread));
     } else {
       if (directory !== item.directory) await loadProject(item.directory, false);
       if (directory === item.directory) await selectSession(item.sessionId);
     }
-    await focusInboxRequest(item.requestId);
+    await focusInboxRequest(item);
   }
 
   async function decideInbox(item: InboxItem, optionId: string | null) {

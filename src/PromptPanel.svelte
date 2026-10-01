@@ -221,7 +221,12 @@
     {#if error}<p class="notice error" role="alert">{error}</p>{/if}
     {#if status}<p class="notice" role="status">{status}</p>{/if}
     {#each pendingPermissions as request (request.id)}
-      <article class="prompt-card" data-request-id={request.id} tabindex="-1">
+      <article
+        class="prompt-card"
+        data-request-id={request.id}
+        data-session-id={request.sessionID}
+        tabindex="-1"
+      >
         <h3>Allow {request.action}?</h3>
         {#if request.message}<p>{request.message}</p>{/if}
         <ul>
@@ -252,7 +257,12 @@
       </article>
     {/each}
     {#each pendingForms as form (form.id)}
-      <article class="prompt-card" data-request-id={form.id} tabindex="-1">
+      <article
+        class="prompt-card"
+        data-request-id={form.id}
+        data-session-id={form.sessionID}
+        tabindex="-1"
+      >
         <h3>{form.title}</h3>
         {#each form.fields as field (field.key)}
           {#if visible(form, field)}

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { inboxLocations, loadInboxSeen, sortInbox, type InboxItem } from '../src/lib/inbox.ts';
+import {
+  inboxLocations,
+  loadInboxSeen,
+  openCodeRequestTime,
+  sortInbox,
+  type InboxItem,
+} from '../src/lib/inbox.ts';
 
 const item = (key: string, receivedAt: number): InboxItem => ({
   key,
@@ -14,6 +20,9 @@ const item = (key: string, receivedAt: number): InboxItem => ({
   requestId: key,
   text: key,
 });
+
+const id = (prefix: string, timestamp: number) =>
+  `${prefix}_${((BigInt(timestamp) * 4096n) % (1n << 48n)).toString(16).padStart(12, '0')}${'a'.repeat(14)}`;
 
 void test('inbox covers repositories and worktrees with their parent project', () => {
   assert.deepEqual(
@@ -37,4 +46,20 @@ void test('inbox orders requests by arrival then stable key', () => {
   );
   assert.deepEqual(loadInboxSeen('{"a":10,"b":"bad"}'), { a: 10 });
   assert.deepEqual(loadInboxSeen('{broken'), {});
+});
+
+void test('OpenCode request IDs preserve creation order across projects and timestamp wrap', () => {
+  const cycle = 2 ** 36;
+  const beforeWrap = cycle - 100;
+  const afterWrap = cycle + 100;
+  assert.equal(openCodeRequestTime(id('per', beforeWrap), afterWrap + 50), beforeWrap);
+  assert.equal(openCodeRequestTime(id('frm', afterWrap), afterWrap + 50), afterWrap);
+  assert.deepEqual(
+    sortInbox([
+      item('new project', openCodeRequestTime(id('frm', afterWrap), afterWrap + 50)!),
+      item('old project', openCodeRequestTime(id('per', beforeWrap), afterWrap + 50)!),
+    ]).map((entry) => entry.key),
+    ['old project', 'new project'],
+  );
+  assert.equal(openCodeRequestTime('custom-id', afterWrap + 50), null);
 });

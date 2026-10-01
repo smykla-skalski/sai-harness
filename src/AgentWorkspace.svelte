@@ -474,6 +474,8 @@
           role="group"
           aria-label="Agent permission request"
           data-request-id={permission.id}
+          data-session-id={permission.sessionId}
+          data-agent-id={agent}
           tabindex="-1"
         >
           <strong>{permission.title}</strong>

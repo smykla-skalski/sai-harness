@@ -227,6 +227,9 @@ pub fn acp_pending_inbox(
     let agents = manager.0.lock().map_err(|error| error.to_string())?;
     let mut pending = Vec::new();
     for (agent, runtime) in agents.iter() {
+        if !runtime.alive.load(Ordering::Acquire) {
+            continue;
+        }
         for permission in runtime
             .permissions
             .lock()
@@ -533,6 +536,9 @@ fn connect_blocking(
         }
         reader.alive.store(false, Ordering::Release);
         reader.ready.notify_all();
+        if let Ok(mut permissions) = reader.permissions.lock() {
+            permissions.clear();
+        }
         if let Ok(mut pending) = reader.pending.lock() {
             for (_, sender) in pending.drain() {
                 let _ = sender.send(json!({"error":{"message":"Agent process exited."}}));

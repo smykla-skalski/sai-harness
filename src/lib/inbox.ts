@@ -39,6 +39,16 @@ export function sortInbox(items: InboxItem[]): InboxItem[] {
   );
 }
 
+export function openCodeRequestTime(id: string, now = Date.now()): number | null {
+  const match = /^(?:per|frm)_([0-9a-f]{12})[0-9A-Za-z]{14}$/.exec(id);
+  if (!match) return null;
+  const cycle = 2 ** 36;
+  const timeInCycle = Math.floor(Number.parseInt(match[1], 16) / 4096);
+  let timestamp = Math.floor(now / cycle) * cycle + timeInCycle;
+  if (timestamp > now) timestamp -= cycle;
+  return timestamp;
+}
+
 export function loadInboxSeen(raw: string | null): Record<string, number> {
   try {
     const parsed: unknown = JSON.parse(raw ?? '{}');
