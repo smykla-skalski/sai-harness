@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getSetting, removeSetting, setSetting } from './lib/settings';
   import { Badge, Button } from '@smykla-skalski/sui';
   import { tick } from 'svelte';
   import Diagram from './Diagram.svelte';
@@ -62,7 +63,7 @@
 
   function savePlanDraft() {
     if (!currentPlan) return;
-    localStorage.setItem(
+    setSetting(
       planDraftKey(currentPlan),
       JSON.stringify({
         decisions: Object.fromEntries(
@@ -81,7 +82,7 @@
 
   function loadPlanDraft(key: string) {
     try {
-      const raw: unknown = JSON.parse(localStorage.getItem(planDraftKey(key)) ?? '{}');
+      const raw: unknown = JSON.parse(getSetting(planDraftKey(key)) ?? '{}');
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
       const saved = raw as { decisions?: Record<string, PlanDecision>; note?: string };
       if (
@@ -131,7 +132,7 @@
 
   function loadAnswers(scope: string, id: string): Record<string, string[]> {
     try {
-      const stored: unknown = JSON.parse(localStorage.getItem(draftKey(scope, id)) ?? '{}');
+      const stored: unknown = JSON.parse(getSetting(draftKey(scope, id)) ?? '{}');
       if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
       return Object.fromEntries(
         Object.entries(stored).filter(
@@ -145,7 +146,7 @@
   }
 
   function saveDraft(scope: string, id: string, draft: Record<string, string[]>) {
-    localStorage.setItem(draftKey(scope, id), JSON.stringify(draft));
+    setSetting(draftKey(scope, id), JSON.stringify(draft));
   }
 
   function saveOutcome(
@@ -155,10 +156,10 @@
     status: 'answered' | 'superseded',
   ) {
     const outcome = { status, id: batch.id };
-    localStorage.setItem(`sai-questions-outcome:${scope}`, JSON.stringify(outcome));
+    setSetting(`sai-questions-outcome:${scope}`, JSON.stringify(outcome));
     if (status === 'superseded') {
       const preserved = { questions: batch.questions, answers: draft };
-      localStorage.setItem(`sai-questions-stale:${scope}`, JSON.stringify(preserved));
+      setSetting(`sai-questions-stale:${scope}`, JSON.stringify(preserved));
       if (scope === currentScope) staleDraft = preserved;
     }
     if (scope === currentScope) lastOutcome = outcome;
@@ -173,8 +174,8 @@
       questionErrors = {};
       error = '';
       try {
-        lastOutcome = JSON.parse(localStorage.getItem(`sai-questions-outcome:${scope}`) ?? 'null');
-        staleDraft = JSON.parse(localStorage.getItem(`sai-questions-stale:${scope}`) ?? 'null');
+        lastOutcome = JSON.parse(getSetting(`sai-questions-outcome:${scope}`) ?? 'null');
+        staleDraft = JSON.parse(getSetting(`sai-questions-stale:${scope}`) ?? 'null');
       } catch {
         lastOutcome = null;
         staleDraft = null;
@@ -373,7 +374,7 @@
       await reviewPlan(client, path, submitted, action, draft, submittedNote);
       if (currentPlan === key)
         reviewStatus = action === 'execute' ? 'Execution approved.' : 'Changes requested.';
-      localStorage.removeItem(planDraftKey(key));
+      removeSetting(planDraftKey(key));
       if (currentPlan === key) {
         decisions = {};
         note = '';

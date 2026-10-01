@@ -1,6 +1,9 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "load_settings",
+            "migrate_settings",
+            "save_setting",
             "start_runtime",
             "validate_repository",
             "working_tree_diff",

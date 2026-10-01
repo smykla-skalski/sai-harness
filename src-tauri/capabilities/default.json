@@ -4,6 +4,9 @@
   "description": "Permissions for the main desktop window",
   "windows": ["main"],
   "permissions": [
+    "allow-load-settings",
+    "allow-migrate-settings",
+    "allow-save-setting",
     "allow-start-runtime",
     "allow-validate-repository",
     "allow-working-tree-diff",

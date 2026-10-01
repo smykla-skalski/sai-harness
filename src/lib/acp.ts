@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getSetting, setSetting } from './settings.ts';
 
 export type AgentId = string;
 
@@ -68,7 +69,7 @@ const storageKey = 'sail-agent-threads';
 
 export function loadAgentThreads(): AgentThread[] {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '[]');
+    const value: unknown = JSON.parse(getSetting(storageKey) ?? '[]');
     if (!Array.isArray(value)) return [];
     return value.filter(
       (item): item is AgentThread =>
@@ -87,7 +88,7 @@ export function loadAgentThreads(): AgentThread[] {
 }
 
 export function saveAgentThreads(threads: AgentThread[]): void {
-  localStorage.setItem(storageKey, JSON.stringify(threads));
+  setSetting(storageKey, JSON.stringify(threads));
 }
 
 export function updateEntries(

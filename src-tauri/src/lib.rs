@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tauri::State;
 
 mod acp;
+mod settings;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -666,6 +667,9 @@ pub fn run() {
         .manage(acp::AgentManager::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            settings::load_settings,
+            settings::migrate_settings,
+            settings::save_setting,
             start_runtime,
             validate_repository,
             working_tree_diff,

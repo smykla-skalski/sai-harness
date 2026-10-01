@@ -33,6 +33,7 @@
   import { getHistory, getPlan, type HistoryEntry, type PlanSnapshot } from './lib/plan';
   import { mergeMessages, nearBottom } from './lib/timeline';
   import { fileUri } from './lib/attachments';
+  import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
   import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
   import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
   import {
@@ -45,16 +46,15 @@
     type ProjectCatalog,
   } from './lib/projects';
 
-  let dark = $state(localStorage.getItem('sai-theme') === 'dark');
+  let dark = $state(getSetting('sai-theme') === 'dark');
   const savedAgentThreads = loadAgentThreads();
-  const savedDirectory =
-    localStorage.getItem('sai-directory') ?? savedAgentThreads[0]?.directory ?? '';
+  const savedDirectory = getSetting('sai-directory') ?? savedAgentThreads[0]?.directory ?? '';
   let directory = $state(savedDirectory);
   let projectCatalog = $state<ProjectCatalog>(
-    loadProjectCatalog(localStorage.getItem('sai-project-catalog'), savedDirectory),
+    loadProjectCatalog(getSetting('sai-project-catalog'), savedDirectory),
   );
-  let binaryPath = $state(localStorage.getItem('sai-opencode-bin') ?? '');
-  let appliedBinaryPath = localStorage.getItem('sai-opencode-bin') ?? '';
+  let binaryPath = $state(getSetting('sai-opencode-bin') ?? '');
+  let appliedBinaryPath = getSetting('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
   let runtimeSettingsOpen = $state(false);
   let agentAvailability = $state<AgentAvailability[]>([]);
@@ -132,7 +132,7 @@
   let running = $state(false);
   let activity = $state('Thinking');
   let activityTool = '';
-  const savedDetailsWidth = Number(localStorage.getItem('sai-details-width'));
+  const savedDetailsWidth = Number(getSetting('sai-details-width'));
   let detailsWidth = $state(
     Number.isFinite(savedDetailsWidth) && savedDetailsWidth >= 320 ? savedDetailsWidth : 420,
   );
@@ -370,19 +370,19 @@
       plan.version !== 1 ||
       running ||
       workspaceWidth === 0 ||
-      localStorage.getItem(planExpandedKey())
+      getSetting(planExpandedKey())
     )
       return;
     detailsOpen = true;
     detailsWidth = Math.min(maxDetailsWidth, Math.round(workspaceWidth * 0.65));
-    localStorage.setItem('sai-details-width', String(detailsWidth));
-    localStorage.setItem(planExpandedKey(), '1');
+    setSetting('sai-details-width', String(detailsWidth));
+    setSetting(planExpandedKey(), '1');
   });
 
   function setDetailsWidth(width: number) {
     detailsWidth = Math.min(maxDetailsWidth, Math.max(320, Math.round(width)));
-    localStorage.setItem('sai-details-width', String(detailsWidth));
-    if (sessionID) localStorage.setItem(planExpandedKey(), '1');
+    setSetting('sai-details-width', String(detailsWidth));
+    if (sessionID) setSetting(planExpandedKey(), '1');
   }
 
   function startDetailsResize(event: PointerEvent) {
@@ -406,8 +406,8 @@
   function endDetailsResize() {
     if (!resizeStart) return;
     resizeStart = null;
-    localStorage.setItem('sai-details-width', String(detailsWidth));
-    if (sessionID) localStorage.setItem(planExpandedKey(), '1');
+    setSetting('sai-details-width', String(detailsWidth));
+    if (sessionID) setSetting(planExpandedKey(), '1');
   }
 
   function keydownDetailsResize(event: KeyboardEvent) {
@@ -452,7 +452,7 @@
   function setTheme(value: boolean) {
     dark = value;
     document.documentElement.dataset.suiTheme = value ? 'dark' : 'light';
-    localStorage.setItem('sai-theme', value ? 'dark' : 'light');
+    setSetting('sai-theme', value ? 'dark' : 'light');
   }
 
   onMount(() => {
@@ -563,7 +563,7 @@
       });
       await activateRuntime(info);
       appliedBinaryPath = candidate;
-      localStorage.setItem('sai-opencode-bin', candidate);
+      setSetting('sai-opencode-bin', candidate);
     } catch (cause) {
       runtimeError = describe(cause);
       runtimeSettingsOpen = true;
@@ -593,12 +593,12 @@
     const path = directory;
     await refreshSessions();
     if (current !== selection || path !== directory) return;
-    const saved = localStorage.getItem(`sai-session:${path}`);
+    const saved = getSetting(`sai-session:${path}`);
     const initial = sessionID ?? saved ?? sessions[0]?.id;
     if (initial && initial !== sessionID) {
       if (!(await restoreSession(initial))) {
         if (current !== selection || path !== directory) return;
-        localStorage.removeItem(`sai-session:${path}`);
+        removeSetting(`sai-session:${path}`);
         if (sessions[0]) await selectSession(sessions[0].id);
       }
     } else if (initial) {
@@ -611,7 +611,7 @@
 
   function saveProjectCatalog(next: ProjectCatalog) {
     projectCatalog = next;
-    localStorage.setItem('sai-project-catalog', JSON.stringify(next));
+    setSetting('sai-project-catalog', JSON.stringify(next));
   }
 
   function addProjectGroup(name: string) {
@@ -711,7 +711,7 @@
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
       saveAgentThreads(agentThreads);
-      localStorage.removeItem(`sai-session:${path}`);
+      removeSetting(`sai-session:${path}`);
     } catch (cause) {
       if (wasSelected) await loadProject(path);
       error = describe(cause);
@@ -741,7 +741,7 @@
     error = '';
     const current = ++selection;
     directory = path;
-    localStorage.setItem('sai-directory', path);
+    setSetting('sai-directory', path);
     acpAgent = null;
     acpThread = null;
     ++sessionRefresh;
@@ -783,10 +783,10 @@
     try {
       await refreshSessions();
       if (current !== selection) return;
-      const saved = localStorage.getItem(`sai-session:${directory}`);
+      const saved = getSetting(`sai-session:${directory}`);
       if (saved && (await restoreSession(saved))) return;
       if (current !== selection) return;
-      if (saved) localStorage.removeItem(`sai-session:${directory}`);
+      if (saved) removeSetting(`sai-session:${directory}`);
       if (sessions[0]) await selectSession(sessions[0].id);
     } catch (cause) {
       error = describe(cause);
@@ -813,7 +813,7 @@
           acpThread = Object.assign({}, acpThread, { directory: report.repository });
       }
       directory = report.repository;
-      localStorage.setItem('sai-directory', report.repository);
+      setSetting('sai-directory', report.repository);
       setup = report;
       workReady = report.workReady;
       planReady = report.planReady;
@@ -986,7 +986,7 @@
     running = false;
     pendingPermissions = [];
     pendingForms = [];
-    localStorage.removeItem(`sai-session:${directory}`);
+    removeSetting(`sai-session:${directory}`);
   }
 
   function openAgent(agent: AgentId, thread: AgentThread | null = null) {
@@ -1069,7 +1069,7 @@
     selectedFilePath = viewStates.get(viewKey())?.selectedFilePath ?? null;
     mobileView = 'chat';
     error = '';
-    localStorage.setItem(`sai-session:${directory}`, id);
+    setSetting(`sai-session:${directory}`, id);
     await refreshSession(id, current);
     if (current === selection) {
       await restoreViewState();
@@ -2072,6 +2072,7 @@
         >
       </div>
     </header>
+    {#if $settingsError}<p class="notice error" role="alert">{$settingsError}</p>{/if}
     {#if !acpAgent && setupOpen && (directory || setupError)}<section
         class="setup-panel"
         aria-label="Repository setup"
