@@ -811,7 +811,7 @@
     }
   }
 
-  async function loadProject(path: string) {
+  async function loadProject(path: string, recordRestoredThread = true) {
     ++projectLoadGeneration;
     saveViewState();
     error = '';
@@ -822,6 +822,15 @@
     const savedMain = leaves(paneLayouts[path] ?? mainPane()).find((leaf) => leaf.id === 'main');
     acpAgent = savedMain?.agent ?? null;
     acpThread = savedMain?.thread ?? null;
+    const restoredThread = leaves(paneLayouts[path] ?? mainPane()).find(
+      (leaf) => leaf.id === focusedPane,
+    )?.thread;
+    if (
+      recordRestoredThread &&
+      restoredThread &&
+      agentThreads.some((thread) => threadKey(thread) === threadKey(restoredThread))
+    )
+      rememberRecentThread(restoredThread);
     ++sessionRefresh;
     workReady = false;
     planReady = false;
@@ -1085,7 +1094,10 @@
 
   function openAgent(agent: AgentId, thread: AgentThread | null = null, preserveCycle = false) {
     if (!directory) return;
-    if (!preserveCycle) recentCycleKeys = null;
+    if (!preserveCycle) {
+      recentCycleKeys = null;
+      ++recentJumpGeneration;
+    }
     if (thread) rememberRecentThread(thread);
     if (focusedPane !== 'main' && leaves(paneLayout).some((leaf) => leaf.id === focusedPane)) {
       savePaneLayout(updatePane(paneLayout, focusedPane, { agent, thread }));
@@ -1140,7 +1152,7 @@
     closeCommandPalette(false);
     let expectedProjectLoad = projectLoadGeneration;
     if (target !== directory) {
-      const pending = loadProject(target);
+      const pending = loadProject(target, false);
       expectedProjectLoad = projectLoadGeneration;
       await pending;
     }
@@ -1259,7 +1271,7 @@
     const jump = ++recentJumpGeneration;
     let expectedProjectLoad = projectLoadGeneration;
     if (thread.directory !== directory) {
-      const pending = loadProject(thread.directory);
+      const pending = loadProject(thread.directory, false);
       expectedProjectLoad = projectLoadGeneration;
       await pending;
     }
