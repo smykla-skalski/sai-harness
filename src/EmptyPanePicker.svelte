@@ -57,7 +57,13 @@
       event.preventDefault();
       const current = choices.indexOf(document.activeElement as HTMLButtonElement);
       const step = event.key === 'ArrowDown' ? 1 : -1;
-      choices[(current + step + choices.length) % choices.length]?.focus();
+      const next =
+        current < 0
+          ? step > 0
+            ? 0
+            : choices.length - 1
+          : (current + step + choices.length) % choices.length;
+      choices[next]?.focus();
     }
   }
 </script>

@@ -72,9 +72,9 @@ describe('split agent panes', () => {
     await browser.keys('ArrowUp');
     await expect($('.pane-leaf.focused [data-agent-choice]:first-child')).toBeFocused();
     await browser.execute(() => document.querySelector<HTMLElement>('.sidebar')?.focus());
-    await browser.keys('ArrowDown');
-    await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
     await browser.keys('ArrowUp');
+    await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
+    await browser.keys('ArrowDown');
     await expect($('.pane-leaf.focused [data-agent-choice]:first-child')).toBeFocused();
     await browser.keys('Enter');
     await expect($('.pane-leaf.focused textarea[data-pane-prompt]')).toBeFocused();
