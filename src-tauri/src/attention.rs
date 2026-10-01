@@ -19,9 +19,7 @@ pub fn show_attention_notification(
 
     #[cfg(target_os = "macos")]
     {
-        if !notify_rust::request_auth_blocking().map_err(|error| error.to_string())? {
-            return Err("Notification permission is denied for Sail.".into());
-        }
+        let _ = notify_rust::set_application(&app.config().identifier);
         if sound {
             notification.sound_name("Ping");
         }
