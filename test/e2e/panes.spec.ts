@@ -36,6 +36,7 @@ describe('split agent panes', () => {
   it('splits in both directions, restores the worktree layout, and closes panes', async () => {
     await browser.execute(
       (path, worktreePath) => {
+        sessionStorage.removeItem('sail-e2e-settings');
         localStorage.setItem('sai-directory', path);
         localStorage.setItem(
           'sai-project-catalog',
