@@ -6,6 +6,46 @@ export type Pane =
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
 
+export type PaneBounds = {
+  id: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+export function adjacentPaneId(
+  panes: PaneBounds[],
+  focused: string,
+  direction: 'left' | 'right' | 'up' | 'down',
+): string | null {
+  const current = panes.find((pane) => pane.id === focused);
+  if (!current) return null;
+  const horizontal = direction === 'left' || direction === 'right';
+  const candidates = panes
+    .filter((pane) => pane.id !== focused)
+    .map((pane) => {
+      const gap =
+        direction === 'left'
+          ? current.left - pane.right
+          : direction === 'right'
+            ? pane.left - current.right
+            : direction === 'up'
+              ? current.top - pane.bottom
+              : pane.top - current.bottom;
+      const overlap = horizontal
+        ? Math.min(current.bottom, pane.bottom) - Math.max(current.top, pane.top)
+        : Math.min(current.right, pane.right) - Math.max(current.left, pane.left);
+      const centerDistance = horizontal
+        ? Math.abs((current.top + current.bottom - pane.top - pane.bottom) / 2)
+        : Math.abs((current.left + current.right - pane.left - pane.right) / 2);
+      return { id: pane.id, gap, overlap, centerDistance };
+    })
+    .filter((pane) => pane.gap >= -1 && pane.overlap > 0)
+    .toSorted((a, b) => a.gap - b.gap || a.centerDistance - b.centerDistance);
+  return candidates[0]?.id ?? null;
+}
+
 export function leaves(pane: Pane): Extract<Pane, { agent: AgentId | null }>[] {
   return 'direction' in pane ? [...leaves(pane.first), ...leaves(pane.second)] : [pane];
 }
