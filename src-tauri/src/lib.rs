@@ -580,6 +580,65 @@ fn create_worktree(
 }
 
 #[tauri::command]
+fn delete_worktree(repository: String, worktree: String) -> Result<(), String> {
+    let repository = PathBuf::from(validate_repository(repository)?)
+        .canonicalize()
+        .map_err(|_| "Repository folder no longer exists.".to_string())?;
+    let worktree = Path::new(&worktree)
+        .canonicalize()
+        .map_err(|_| "Worktree folder no longer exists.".to_string())?;
+    if worktree == repository {
+        return Err("Cannot delete the main repository.".to_string());
+    }
+    let listed = git_reference(&repository, &["worktree", "list", "--porcelain"])
+        .ok_or("Cannot inspect repository worktrees.")?;
+    let registered = listed
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "));
+    if !registered.into_iter().any(|path| {
+        Path::new(path)
+            .canonicalize()
+            .is_ok_and(|registered| registered == worktree)
+    }) {
+        return Err("This folder is not a worktree of the selected repository.".to_string());
+    }
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&worktree)
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--ignored",
+            "--untracked-files=all",
+        ])
+        .output()
+        .map_err(|error| format!("Cannot start Git: {error}"))?;
+    if !status.status.success() {
+        return Err("Cannot inspect worktree files before deletion.".to_string());
+    }
+    if String::from_utf8_lossy(&status.stdout)
+        .lines()
+        .any(|line| line.starts_with("!! "))
+    {
+        return Err("Worktree has ignored files. Move or remove them before deleting.".to_string());
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repository)
+        .args(["worktree", "remove"])
+        .arg(&worktree)
+        .output()
+        .map_err(|error| format!("Cannot start Git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cannot delete worktree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn local_plugin_version(path: String) -> Option<String> {
     let source = Path::new(&path);
     let directory = if source.is_dir() {
@@ -611,6 +670,7 @@ pub fn run() {
             validate_repository,
             working_tree_diff,
             create_worktree,
+            delete_worktree,
             local_plugin_version,
             acp::acp_agents,
             acp::acp_connect,

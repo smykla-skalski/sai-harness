@@ -8,6 +8,7 @@
     "allow-validate-repository",
     "allow-working-tree-diff",
     "allow-create-worktree",
+    "allow-delete-worktree",
     "allow-local-plugin-version",
     "allow-acp-agents",
     "allow-acp-connect",

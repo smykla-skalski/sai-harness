@@ -5,6 +5,7 @@ fn main() {
             "validate_repository",
             "working_tree_diff",
             "create_worktree",
+            "delete_worktree",
             "local_plugin_version",
             "acp_agents",
             "acp_connect",

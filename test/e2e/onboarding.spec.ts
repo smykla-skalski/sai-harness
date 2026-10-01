@@ -1,6 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -186,6 +186,63 @@ describe('repository setup', () => {
     expect(
       execFileSync('git', ['-C', created.path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     ).toBe(baseCommit);
+  });
+
+  it('deletes a worktree from its right-click menu and protects dirty files', async () => {
+    const worktree = await browser.execute(() => localStorage.getItem('sai-directory'));
+    if (!worktree) throw new Error('Expected the created worktree to remain selected');
+    const row = $(`.project-worktree-select[title="${worktree}"]`);
+
+    await row.click({ button: 'right' });
+    try {
+      await expect($('.worktree-menu')).toBeDisplayed();
+    } catch (cause) {
+      console.error('Worktree context menu diagnostic', {
+        sidebar: await $('.sidebar').getText(),
+        row: await row.getHTML(),
+        menus: await browser.execute(() =>
+          [...document.querySelectorAll('.worktree-menu')].map((menu) => menu.outerHTML),
+        ),
+      });
+      throw cause;
+    }
+    await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'No'));
+    await $('.worktree-menu button').click();
+    await expect(row).toBeDisplayed();
+
+    const dirty = join(worktree, 'keep-me.txt');
+    writeFileSync(dirty, 'unsaved work\n');
+    await row.click({ button: 'right' });
+    await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
+    await $('.worktree-menu button').click();
+    await expect($('.app-shell [role="alert"]')).toHaveText(
+      expect.stringContaining('Cannot delete worktree'),
+    );
+    expect(existsSync(dirty)).toBe(true);
+    await expect(row).toHaveAttribute('aria-current', 'page');
+
+    rmSync(dirty);
+    const ignored = join(worktree, 'ignored-secret.txt');
+    writeFileSync(join(repository, '.git', 'info', 'exclude'), 'ignored-secret.txt\n');
+    writeFileSync(ignored, 'local secret\n');
+    await row.click({ button: 'right' });
+    await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
+    await $('.worktree-menu button').click();
+    await expect($('.app-shell [role="alert"]')).toHaveText(
+      expect.stringContaining('Worktree has ignored files'),
+    );
+    expect(existsSync(ignored)).toBe(true);
+    await expect(row).toHaveAttribute('aria-current', 'page');
+
+    rmSync(ignored);
+    await row.click({ button: 'right' });
+    await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
+    await $('.worktree-menu button').click();
+    await expect(row).not.toExist();
+    expect(existsSync(worktree)).toBe(false);
+    expect(
+      execFileSync('git', ['-C', repository, 'worktree', 'list'], { encoding: 'utf8' }),
+    ).not.toContain(worktree);
   });
 
   it('shows an actionable error for a saved invalid path', async () => {

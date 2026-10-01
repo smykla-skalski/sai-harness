@@ -122,6 +122,20 @@ export function addWorktree(
   };
 }
 
+export function removeWorktree(
+  catalog: ProjectCatalog,
+  repository: string,
+  path: string,
+): ProjectCatalog {
+  return {
+    ...catalog,
+    worktrees: {
+      ...catalog.worktrees,
+      [repository]: (catalog.worktrees[repository] ?? []).filter((item) => item.path !== path),
+    },
+  };
+}
+
 export function replaceRepositoryPath(
   catalog: ProjectCatalog,
   oldPath: string,

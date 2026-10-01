@@ -40,6 +40,7 @@
     assignRepository,
     loadProjectCatalog,
     removeRepository,
+    removeWorktree,
     replaceRepositoryPath,
     type ProjectCatalog,
   } from './lib/projects';
@@ -687,6 +688,34 @@
     );
     saveProjectCatalog(addWorktree(projectCatalog, path, created));
     await loadProject(created.path);
+  }
+
+  async function deleteProjectWorktree(repository: string, path: string, branch: string) {
+    const e2eAnswer =
+      import.meta.env.MODE === 'e2e' ? sessionStorage.getItem('sai-e2e-delete-worktree') : null;
+    if (e2eAnswer) sessionStorage.removeItem('sai-e2e-delete-worktree');
+    const confirmed =
+      e2eAnswer === 'Yes'
+        ? true
+        : e2eAnswer === 'No'
+          ? false
+          : await ask(
+              `Delete worktree “${branch}” at ${path}? Uncommitted and ignored files block deletion. The branch will remain.`,
+              { title: 'Delete worktree', kind: 'warning' },
+            );
+    if (!confirmed) return;
+    const wasSelected = directory === path;
+    try {
+      if (wasSelected) await loadProject(repository);
+      await invoke('delete_worktree', { repository, worktree: path });
+      saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
+      agentThreads = agentThreads.filter((thread) => thread.directory !== path);
+      saveAgentThreads(agentThreads);
+      localStorage.removeItem(`sai-session:${path}`);
+    } catch (cause) {
+      if (wasSelected) await loadProject(path);
+      error = describe(cause);
+    }
   }
 
   async function chooseProject(groupID: string | null = null) {
@@ -1823,6 +1852,7 @@
       onmoverepository={moveProjectRepository}
       onremoverepository={removeProjectRepository}
       oncreateworktree={createProjectWorktree}
+      ondeleteworktree={deleteProjectWorktree}
     />
     <div class="session-heading">
       <span class="label">SESSIONS</span><Button

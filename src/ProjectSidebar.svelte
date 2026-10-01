@@ -22,6 +22,7 @@
       destinationParent: string | null,
       baseRef: string | null,
     ) => Promise<void>;
+    ondeleteworktree: (repository: string, path: string, branch: string) => Promise<void>;
   };
 
   let {
@@ -37,12 +38,14 @@
     onmoverepository,
     onremoverepository,
     oncreateworktree,
+    ondeleteworktree,
   }: Props = $props();
   let creatingGroup = $state(false);
   let editingGroupID = $state<string | null>(null);
   let groupName = $state('');
   let menuGroupID = $state<string | null>(null);
   let menuRepository = $state<string | null>(null);
+  let menuWorktree = $state<string | null>(null);
   let creatingWorktreeFor = $state<string | null>(null);
   let worktreeDialog: HTMLDialogElement;
   let worktreeNameInput = $state<HTMLInputElement>();
@@ -129,6 +132,11 @@
   }
 </script>
 
+<svelte:window
+  onclick={(event) => {
+    if (event.button === 0) menuWorktree = null;
+  }}
+/>
 <section class="projects" aria-label="Projects and repositories">
   <div class="projects-heading">
     <span class="label">PROJECTS</span>
@@ -271,10 +279,26 @@
                     aria-current={worktree.path === directory ? 'page' : undefined}
                     title={worktree.path}
                     {disabled}
+                    onmousedown={(event) => {
+                      if (event.button === 2) menuWorktree = worktree.path;
+                    }}
+                    oncontextmenu={(event) => {
+                      event.preventDefault();
+                      menuWorktree = worktree.path;
+                    }}
                     onclick={() => onselect(worktree.path)}
                     ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                   >
-                </div>{/each}
+                </div>
+                {#if menuWorktree === worktree.path}<div class="project-menu worktree-menu">
+                    <button
+                      aria-label={`Delete worktree ${worktree.branch}`}
+                      onclick={() => {
+                        menuWorktree = null;
+                        void ondeleteworktree(path, worktree.path, worktree.branch);
+                      }}>Delete worktree…</button
+                    >
+                  </div>{/if}{/each}
             </div>
           {:else}<p class="project-empty">No repositories</p>{/each}
         {/if}
@@ -345,10 +369,26 @@
                   aria-current={worktree.path === directory ? 'page' : undefined}
                   title={worktree.path}
                   {disabled}
+                  onmousedown={(event) => {
+                    if (event.button === 2) menuWorktree = worktree.path;
+                  }}
+                  oncontextmenu={(event) => {
+                    event.preventDefault();
+                    menuWorktree = worktree.path;
+                  }}
                   onclick={() => onselect(worktree.path)}
                   ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                 >
-              </div>{/each}
+              </div>
+              {#if menuWorktree === worktree.path}<div class="project-menu worktree-menu">
+                  <button
+                    aria-label={`Delete worktree ${worktree.branch}`}
+                    onclick={() => {
+                      menuWorktree = null;
+                      void ondeleteworktree(path, worktree.path, worktree.branch);
+                    }}>Delete worktree…</button
+                  >
+                </div>{/if}{/each}
           </div>
         {:else}<p class="project-empty">Add a repository to switch between projects.</p>{/each}
       </div>{/if}
