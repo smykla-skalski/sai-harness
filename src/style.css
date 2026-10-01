@@ -703,6 +703,11 @@ button:disabled {
   color: inherit;
   font-size: 18px;
 }
+.pane-heading small {
+  margin-left: auto;
+  padding-right: 8px;
+  color: var(--sui-muted);
+}
 .pane-agent-content {
   display: flex;
   flex: 1;

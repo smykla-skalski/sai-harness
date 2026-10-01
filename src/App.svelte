@@ -1985,13 +1985,24 @@
       return;
     }
     if (
-      (event.metaKey || event.ctrlKey) &&
-      event.altKey &&
-      ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)
+      !event.repeat &&
+      !document.querySelector('dialog[open]') &&
+      ((event.key === 'F6' && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+        ((event.metaKey || event.ctrlKey) &&
+          event.altKey &&
+          ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)))
     ) {
       const panes = leaves(paneLayout);
+      if (panes.length < 2) return;
       const index = panes.findIndex((leaf) => leaf.id === focusedPane);
-      const step = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+      const step =
+        event.key === 'F6'
+          ? event.shiftKey
+            ? -1
+            : 1
+          : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+            ? -1
+            : 1;
       const next = panes[(index + step + panes.length) % panes.length];
       if (next) {
         event.preventDefault();

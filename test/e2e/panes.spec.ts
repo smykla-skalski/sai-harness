@@ -34,6 +34,10 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'Shift', 'd']);
     await expect($('.pane-split.column')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(3);
+    const focusedBefore = await $('.pane-leaf.focused').getAttribute('data-pane-id');
+    await browser.keys('F6');
+    const focusedAfter = await $('.pane-leaf.focused').getAttribute('data-pane-id');
+    expect(focusedAfter).not.toBe(focusedBefore);
 
     await browser.refresh();
     await expect($('.pane-split.column')).toBeDisplayed();

@@ -182,6 +182,7 @@
     class="pane-leaf"
     class:focused={focused === pane.id}
     data-pane-id={pane.id}
+    aria-keyshortcuts="F6 Shift+F6"
     aria-label={pane.agent ? `${pane.agent} pane` : 'Main pane'}
     tabindex="-1"
     onfocusin={() => onfocus(pane.id)}
@@ -189,14 +190,12 @@
   >
     {#if pane.id !== 'main'}
       <div class="pane-heading">
-        <span>{pane.thread?.title ?? `New ${pane.agent} thread`}</span><button
-          aria-label="Close pane"
-          onclick={() => onclose(pane.id)}>×</button
-        >
+        <span>{pane.thread?.title ?? `New ${pane.agent} thread`}</span><small>F6 to switch</small
+        ><button aria-label="Close pane" onclick={() => onclose(pane.id)}>×</button>
       </div>
     {:else if canClose}
       <div class="pane-heading">
-        <span>Main thread</span><button
+        <span>Main thread</span><small>F6 to switch</small><button
           aria-label="Close main pane"
           onclick={() => onclose(pane.id)}>×</button
         >
