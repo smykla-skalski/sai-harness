@@ -14,6 +14,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Rust change detection
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check Rust paths
+        id: detect
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if git diff --quiet "$BASE_SHA" HEAD -- src-tauri; then
+            echo 'rust=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'rust=true' >> "$GITHUB_OUTPUT"
+          fi
+
   frontend:
     name: Frontend
     runs-on: ubuntu-26.04
@@ -77,32 +100,44 @@ jobs:
 
   rust:
     name: Rust (${{ matrix.os }})
+    needs: changes
+    if: always() && !cancelled()
     runs-on: ${{ matrix.os }}
+    env:
+      RUN_RUST: ${{ github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2022]
 
     steps:
+      - name: Skip unchanged Rust
+        if: env.RUN_RUST != 'true'
+        run: echo 'No Rust changes in this pull request'
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_RUST == 'true'
 
       - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: env.RUN_RUST == 'true'
         with:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: env.RUN_RUST == 'true'
         with:
           workspaces: src-tauri -> target
 
       - name: Check Rust formatting
-        if: runner.os == 'Linux'
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux'
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
 
       - name: Lint Rust
+        if: env.RUN_RUST == 'true'
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
