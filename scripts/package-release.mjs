@@ -55,7 +55,7 @@ function stage(targetName) {
   const files = Object.entries(target.bundles).map(([directory, suffix]) => {
     const matches = filesIn(join('src-tauri', 'target', 'release', 'bundle', directory), suffix);
     assert.equal(matches.length, 1, `Expected one ${suffix} bundle for ${targetName}`);
-    const name = `SAI-Harness-v${appVersion}-${targetName}${suffix}`;
+    const name = `Sail-v${appVersion}-${targetName}${suffix}`;
     const destination = join('release-output', name);
     copyFileSync(matches[0], destination);
     return { name, bytes: statSync(destination).size, sha256: sha256(destination) };
@@ -64,7 +64,7 @@ function stage(targetName) {
     version: appVersion,
     target: targetName,
     sourceRevision: process.env.GITHUB_SHA ?? 'local',
-    signing: process.env.SAI_SIGNING_MODE ?? 'unsigned',
+    signing: process.env.SAIL_SIGNING_MODE ?? process.env.SAI_SIGNING_MODE ?? 'unsigned',
     opencode: '2.0.19 (external prerequisite)',
     files,
   };
@@ -85,7 +85,7 @@ function verify(root) {
     assert.equal(manifest.target, targetName);
     assert.equal(manifest.version, appVersion);
     const expectedNames = Object.values(targets[targetName].bundles).map(
-      (suffix) => `SAI-Harness-v${appVersion}-${targetName}${suffix}`,
+      (suffix) => `Sail-v${appVersion}-${targetName}${suffix}`,
     );
     assert.deepEqual(manifest.files.map((file) => file.name).toSorted(), expectedNames.toSorted());
     for (const file of manifest.files) {

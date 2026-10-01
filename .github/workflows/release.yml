@@ -72,7 +72,7 @@ jobs:
         run: |
           if [[ -z "$APPLE_CERTIFICATE" ]]; then
             echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
-            echo 'SAI_SIGNING_MODE=ad-hoc' >> "$GITHUB_ENV"
+            echo 'SAIL_SIGNING_MODE=ad-hoc' >> "$GITHUB_ENV"
           else
             test -n "$APPLE_CERTIFICATE_PASSWORD"
             test -n "$APPLE_SIGNING_IDENTITY"
@@ -89,16 +89,16 @@ jobs:
             security set-keychain-settings -t 3600 -u "$keychain"
             security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
             security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
-            echo 'SAI_SIGNING_MODE=developer-id' >> "$GITHUB_ENV"
+            echo 'SAIL_SIGNING_MODE=developer-id' >> "$GITHUB_ENV"
             echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
           fi
 
       - name: Build development installer
-        if: runner.os != 'macOS' || env.SAI_SIGNING_MODE == 'ad-hoc'
+        if: runner.os != 'macOS' || env.SAIL_SIGNING_MODE == 'ad-hoc'
         run: npm run tauri build -- --bundles ${{ matrix.bundles }} --ci
 
       - name: Build and notarize Developer ID installer
-        if: runner.os == 'macOS' && env.SAI_SIGNING_MODE == 'developer-id'
+        if: runner.os == 'macOS' && env.SAIL_SIGNING_MODE == 'developer-id'
         run: npm run tauri build -- --bundles ${{ matrix.bundles }} --ci
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -137,7 +137,7 @@ jobs:
           chmod +x "${appimages[0]}"
           "${appimages[0]}" --appimage-extract >/dev/null
           set +e
-          timeout 10 xvfb-run -a /usr/bin/sai-harness
+          timeout 10 xvfb-run -a /usr/bin/sail
           exit_code=$?
           set -e
           test "$exit_code" -eq 124
@@ -150,7 +150,7 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'sai-installed'
           $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$destination" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "NSIS install failed: $($install.ExitCode)" }
-          $app = Get-ChildItem $destination -Recurse -Filter sai-harness.exe | Select-Object -First 1
+          $app = Get-ChildItem $destination -Recurse -Filter sail.exe | Select-Object -First 1
           if (-not $app) { throw 'Installed app executable missing' }
           $running = Start-Process -FilePath $app.FullName -PassThru
           Start-Sleep -Seconds 5
@@ -166,7 +166,7 @@ jobs:
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          subject-path: release-output/SAI-Harness-*
+          subject-path: release-output/Sail-*
 
   release:
     name: Development prerelease
@@ -195,5 +195,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --verify-tag --prerelease --title "SAI Harness $GITHUB_REF_NAME (development)" \
+            --verify-tag --prerelease --title "Sail $GITHUB_REF_NAME (development)" \
             --notes-file docs/release-notes.md

@@ -1,12 +1,12 @@
 [package]
-name = "sai-harness"
+name = "sail"
 version = "0.1.0"
-description = "Desktop workflow harness for OpenCode"
+description = "Desktop workflow workspace for OpenCode"
 authors = ["Marcin Skalski"]
 edition = "2021"
 
 [lib]
-name = "sai_harness_lib"
+name = "sail_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]

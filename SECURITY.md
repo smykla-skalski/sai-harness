@@ -52,7 +52,7 @@ When contributing to Smykla Skalski projects:
 
 ## Desktop trust boundary
 
-- SAI Harness starts its own OpenCode v2 server on `127.0.0.1` with an ephemeral port and a generated Basic auth password. It accepts requests from the packaged Tauri origin; development builds also allow the local Vite origin. The URL and password stay in process memory and are not stored in local storage or project files.
+- Sail starts its own OpenCode v2 server on `127.0.0.1` with an ephemeral port and a generated Basic auth password. It accepts requests from the packaged Tauri origin; development builds also allow the local Vite origin. The URL and password stay in process memory and are not stored in local storage or project files.
 - Restarting the owned server stops the previous child process. Closing the app stops the owned child. The app does not connect to an independently running OpenCode server or stop one.
 - The desktop window has a restrictive content security policy and only the dialog and app commands needed by the main window. Agent Markdown is rendered as text and safe links; raw HTML and image URLs are not inserted into the page. Mermaid runs in strict mode and its output is displayed as a data image.
 - Repository selection resolves to a Git root. Session selection checks that the session belongs to that root. Attachments can be selected outside the repository; selecting one deliberately sends that file to OpenCode with the prompt. The only direct external file read by the app is the bounded `package.json` version check for a locally configured plan-review plugin.

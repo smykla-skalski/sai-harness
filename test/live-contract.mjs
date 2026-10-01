@@ -10,8 +10,9 @@ import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenCode } from '@opencode/client';
 
-const cli = process.env.SAI_OPENCODE_BIN || 'opencode';
+const cli = process.env.SAIL_OPENCODE_BIN || process.env.SAI_OPENCODE_BIN || 'opencode';
 const plugin =
+  process.env.SAIL_PLUGIN_PATH ||
   process.env.SAI_PLUGIN_PATH ||
   'github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5';
 const root = mkdtempSync(join(tmpdir(), 'sai-contract-'));

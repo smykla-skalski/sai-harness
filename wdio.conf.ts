@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const state = mkdtempSync(join(tmpdir(), 'sai-harness-e2e-'));
+const state = mkdtempSync(join(tmpdir(), 'sail-e2e-'));
+process.env.SAIL_WORKTREE_ROOT ??= join(state, 'worktrees');
 for (const [name, directory] of Object.entries({
   XDG_CONFIG_HOME: 'config',
   XDG_DATA_HOME: 'data',
@@ -12,9 +13,7 @@ for (const [name, directory] of Object.entries({
   process.env[name] = join(state, directory);
 }
 
-const binary = resolve(
-  `src-tauri/target/debug/sai-harness${process.platform === 'win32' ? '.exe' : ''}`,
-);
+const binary = resolve(`src-tauri/target/debug/sail${process.platform === 'win32' ? '.exe' : ''}`);
 
 export const config = {
   runner: 'local',

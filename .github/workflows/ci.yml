@@ -68,12 +68,12 @@ jobs:
         shell: pwsh
         run: |
           $packageRoot = npm root --global
-          "SAI_OPENCODE_BIN=$packageRoot/@opencode/cli/bin/opencode.exe" >> $env:GITHUB_ENV
+          "SAIL_OPENCODE_BIN=$packageRoot/@opencode/cli/bin/opencode.exe" >> $env:GITHUB_ENV
 
       - name: Probe live server and plugin RPC
         run: npm run test:contract
         env:
-          SAI_PLUGIN_PATH: ${{ github.workspace }}/plugin-under-test
+          SAIL_PLUGIN_PATH: ${{ github.workspace }}/plugin-under-test
 
   rust:
     name: Rust (${{ matrix.os }})

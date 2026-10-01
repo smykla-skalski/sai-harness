@@ -13,6 +13,7 @@
   import DiffPanel from './DiffPanel.svelte';
   import HistoryPanel from './HistoryPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
+  import ProjectSidebar from './ProjectSidebar.svelte';
   import {
     connect,
     type OpenCodeClient,
@@ -25,9 +26,21 @@
   import { fileUri } from './lib/attachments';
   import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
   import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
+  import {
+    addWorktree,
+    assignRepository,
+    loadProjectCatalog,
+    removeRepository,
+    replaceRepositoryPath,
+    type ProjectCatalog,
+  } from './lib/projects';
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
-  let directory = $state(localStorage.getItem('sai-directory') ?? '');
+  const savedDirectory = localStorage.getItem('sai-directory') ?? '';
+  let directory = $state(savedDirectory);
+  let projectCatalog = $state<ProjectCatalog>(
+    loadProjectCatalog(localStorage.getItem('sai-project-catalog'), savedDirectory),
+  );
   let binaryPath = $state(localStorage.getItem('sai-opencode-bin') ?? '');
   let appliedBinaryPath = localStorage.getItem('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
@@ -537,9 +550,103 @@
     running = !!sessionID && active[sessionID]?.type === 'running';
   }
 
-  async function chooseProject() {
+  function saveProjectCatalog(next: ProjectCatalog) {
+    projectCatalog = next;
+    localStorage.setItem('sai-project-catalog', JSON.stringify(next));
+  }
+
+  function addProjectGroup(name: string) {
+    if (projectCatalog.groups.some((group) => group.name.toLowerCase() === name.toLowerCase())) {
+      error = `Project group “${name}” already exists.`;
+      return;
+    }
+    saveProjectCatalog({
+      ...projectCatalog,
+      groups: [
+        ...projectCatalog.groups,
+        { id: crypto.randomUUID(), name, collapsed: false, repositories: [] },
+      ],
+    });
+  }
+
+  function renameProjectGroup(id: string, name: string) {
+    if (
+      projectCatalog.groups.some(
+        (group) => group.id !== id && group.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      error = `Project group “${name}” already exists.`;
+      return;
+    }
+    saveProjectCatalog({
+      ...projectCatalog,
+      groups: projectCatalog.groups.map((group) => (group.id === id ? { ...group, name } : group)),
+    });
+  }
+
+  function deleteProjectGroup(id: string) {
+    saveProjectCatalog({
+      ...projectCatalog,
+      groups: projectCatalog.groups.filter((group) => group.id !== id),
+    });
+  }
+
+  function toggleProjectGroup(id: string) {
+    saveProjectCatalog({
+      ...projectCatalog,
+      groups: projectCatalog.groups.map((group) =>
+        group.id === id ? { ...group, collapsed: !group.collapsed } : group,
+      ),
+    });
+  }
+
+  function moveProjectRepository(path: string, groupID: string | null) {
+    saveProjectCatalog(assignRepository(projectCatalog, path, groupID));
+  }
+
+  function removeProjectRepository(path: string) {
+    if (
+      path !== directory &&
+      !(projectCatalog.worktrees[path] ?? []).some((worktree) => worktree.path === directory)
+    )
+      saveProjectCatalog(removeRepository(projectCatalog, path));
+  }
+
+  async function createProjectWorktree(
+    path: string,
+    name: string,
+    destinationParent: string | null,
+    baseRef: string | null,
+  ) {
+    const created = await invoke<{ path: string; branch: string; base: string }>(
+      'create_worktree',
+      {
+        repository: path,
+        name,
+        destinationParent,
+        baseRef,
+      },
+    );
+    saveProjectCatalog(addWorktree(projectCatalog, path, created));
+    await loadProject(created.path);
+  }
+
+  async function chooseProject(groupID: string | null = null) {
     const selected = await open({ directory: true, multiple: false, title: 'Choose a repository' });
-    if (typeof selected === 'string') await loadProject(selected);
+    if (typeof selected !== 'string') return;
+    try {
+      const path = await invoke<string>('validate_repository', { path: selected });
+      if (
+        !projectCatalog.repositories.includes(path) &&
+        !Object.values(projectCatalog.worktrees).some((worktrees) =>
+          worktrees.some((worktree) => worktree.path === path),
+        )
+      )
+        saveProjectCatalog(assignRepository(projectCatalog, path, groupID));
+      if (path !== directory) await loadProject(path);
+    } catch (cause) {
+      error = describe(cause);
+    }
   }
 
   async function loadProject(path: string) {
@@ -547,6 +654,7 @@
     saveViewState();
     error = '';
     const current = ++selection;
+    directory = path;
     ++sessionRefresh;
     workReady = false;
     planReady = false;
@@ -604,6 +712,8 @@
     try {
       const report = await inspectRepository(client, path);
       if (current !== selection) return false;
+      if (path !== report.repository)
+        saveProjectCatalog(replaceRepositoryPath(projectCatalog, path, report.repository));
       directory = report.repository;
       localStorage.setItem('sai-directory', report.repository);
       setup = report;
@@ -1576,22 +1686,32 @@
   }
 </script>
 
-<svelte:head><title>SAI Harness · Plan workspace</title></svelte:head>
+<svelte:head><title>Sail · Plan workspace</title></svelte:head>
 <svelte:window onkeydown={keydownWorkspace} onfocus={focusWorkspace} />
 <div class="app-shell" data-mobile-view={mobileView}>
-  <aside class="sidebar" aria-label="Sessions" tabindex="-1" bind:this={sidebarElement}>
-    <div class="brand"><span class="brand-mark">S.</span><span>SAI Harness</span></div>
-    <div class="project-switcher">
-      <span class="label">PROJECT</span><button
-        class="project-button"
-        onclick={chooseProject}
-        disabled={runtimeState !== 'connected'}
-        title={directory || 'Select repository'}
-        ><span class="project-icon">⌁</span><span class="project-name"
-          >{directory ? directory.split('/').filter(Boolean).at(-1) : 'Select repository'}</span
-        ><span>⌄</span></button
-      >
-    </div>
+  <aside
+    class="sidebar"
+    aria-label="Projects and sessions"
+    tabindex="-1"
+    bind:this={sidebarElement}
+  >
+    <div class="brand"><span class="brand-mark">S.</span><span>Sail</span></div>
+    <ProjectSidebar
+      catalog={projectCatalog}
+      {directory}
+      disabled={runtimeState !== 'connected'}
+      onselect={(path) => {
+        if (path !== directory) void loadProject(path);
+      }}
+      onaddrepository={(groupID) => void chooseProject(groupID)}
+      onaddgroup={addProjectGroup}
+      onrenamegroup={renameProjectGroup}
+      ondeletegroup={deleteProjectGroup}
+      ontogglegroup={toggleProjectGroup}
+      onmoverepository={moveProjectRepository}
+      onremoverepository={removeProjectRepository}
+      oncreateworktree={createProjectWorktree}
+    />
     <div class="session-heading">
       <span class="label">SESSIONS</span><Button
         size="sm"
@@ -1618,7 +1738,7 @@
         bind:value={sessionSearch}
         oninput={changeSearch}
       />{/if}
-    <nav aria-label="Sessions">
+    <nav class="session-list" aria-label="Sessions">
       {#each visibleSessions as session (session.id)}<div
           class:active={session.id === sessionID}
           class="session-row"
@@ -1693,7 +1813,7 @@
       <div class="breadcrumb">
         <button
           class="breadcrumb-project"
-          onclick={chooseProject}
+          onclick={() => chooseProject()}
           disabled={runtimeState !== 'connected'}
           >{directory ? directory.split('/').filter(Boolean).at(-1) : 'Workspace'} ⌄</button
         ><span class="slash">/</span><strong
@@ -1817,7 +1937,7 @@
                 planning.
               </p>
               {#if !directory}<Button
-                  onclick={chooseProject}
+                  onclick={() => chooseProject()}
                   disabled={runtimeState !== 'connected'}>Select repository</Button
                 >{/if}
             </div>{/if}

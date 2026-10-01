@@ -152,7 +152,9 @@ fn resolve_binary(binary_path: Option<String>) -> Result<OsString, String> {
         compatible_version(&binary)?;
         return Ok(binary.into_os_string());
     }
-    if let Some(path) = std::env::var_os("SAI_OPENCODE_BIN") {
+    if let Some(path) =
+        std::env::var_os("SAIL_OPENCODE_BIN").or_else(|| std::env::var_os("SAI_OPENCODE_BIN"))
+    {
         let binary = PathBuf::from(path);
         compatible_version(&binary)?;
         return Ok(binary.into_os_string());
@@ -342,6 +344,155 @@ fn validate_repository(path: String) -> Result<String, String> {
     Ok(root.trim().to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedWorktree {
+    path: String,
+    branch: String,
+    base: String,
+}
+
+fn git_reference(repository: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn worktree_base(repository: &Path) -> String {
+    if let Some(reference) = git_reference(
+        repository,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) {
+        return reference;
+    }
+    for reference in ["origin/main", "origin/master", "main", "master"] {
+        if git_reference(repository, &["rev-parse", "--verify", reference]).is_some() {
+            return reference.to_string();
+        }
+    }
+    if let Some(worktrees) = git_reference(repository, &["worktree", "list", "--porcelain"]) {
+        if let Some(branch) = worktrees.split("\n\n").next().and_then(|entry| {
+            entry
+                .lines()
+                .find_map(|line| line.strip_prefix("branch refs/heads/"))
+        }) {
+            return branch.to_string();
+        }
+    }
+    "HEAD".to_string()
+}
+
+fn repository_namespace(repository: &Path) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in repository.to_string_lossy().as_bytes() {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+    }
+    let name = repository.file_name().unwrap_or_default().to_string_lossy();
+    format!("{name}-{hash:016x}")
+}
+
+#[tauri::command]
+fn create_worktree(
+    repository: String,
+    name: String,
+    destination_parent: Option<String>,
+    base_ref: Option<String>,
+) -> Result<CreatedWorktree, String> {
+    let repository = validate_repository(repository)?;
+    let repository = Path::new(&repository);
+    let name = name.trim();
+    if name.is_empty()
+        || name.len() > 64
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err(
+            "Use 1–64 letters, numbers, dashes, or underscores for the worktree name.".to_string(),
+        );
+    }
+    let valid_branch = Command::new("git")
+        .args(["check-ref-format", "--branch", name])
+        .output()
+        .map_err(|_| "Git is unavailable. Install Git to create a worktree.".to_string())?;
+    if !valid_branch.status.success() {
+        return Err("This name is not a valid Git branch name.".to_string());
+    }
+    let parent = match destination_parent {
+        Some(path) => {
+            let parent = Path::new(&path)
+                .canonicalize()
+                .map_err(|_| "Worktree destination does not exist.".to_string())?;
+            if !parent.is_dir() {
+                return Err("Worktree destination is not a directory.".to_string());
+            }
+            parent
+        }
+        None => {
+            let root = if let Some(root) = std::env::var_os("SAIL_WORKTREE_ROOT") {
+                let root = PathBuf::from(root);
+                if !root.is_absolute() {
+                    return Err("SAIL_WORKTREE_ROOT must be an absolute path.".to_string());
+                }
+                root
+            } else {
+                let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                    .ok_or("Home directory is unavailable. Choose a worktree destination.")?;
+                Path::new(&home).join("sail").join("worktrees")
+            };
+            root.join(repository_namespace(repository))
+        }
+    };
+    let path = parent.join(name);
+    if path.exists() {
+        return Err("A folder with this worktree name already exists.".to_string());
+    }
+    std::fs::create_dir_all(&parent)
+        .map_err(|error| format!("Cannot create worktree folder: {error}"))?;
+    let base = if let Some(reference) = base_ref.filter(|value| !value.trim().is_empty()) {
+        let reference = reference.trim();
+        if reference.starts_with('-')
+            || git_reference(repository, &["rev-parse", "--verify", reference]).is_none()
+        {
+            return Err("Base branch or reference does not exist.".to_string());
+        }
+        reference.to_string()
+    } else {
+        worktree_base(repository)
+    };
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["worktree", "add", "-b", name])
+        .arg(&path)
+        .arg(&base)
+        .output()
+        .map_err(|error| format!("Cannot start Git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cannot create worktree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve new worktree: {error}"))?;
+    Ok(CreatedWorktree {
+        path: path.to_string_lossy().into_owned(),
+        branch: name.to_string(),
+        base,
+    })
+}
+
 #[tauri::command]
 fn local_plugin_version(path: String) -> Option<String> {
     let source = Path::new(&path);
@@ -371,6 +522,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_runtime,
             validate_repository,
+            create_worktree,
             local_plugin_version
         ]);
     #[cfg(feature = "e2e")]
@@ -379,12 +531,21 @@ pub fn run() {
         .plugin(tauri_plugin_wdio_webdriver::init());
     builder
         .run(tauri::generate_context!())
-        .expect("failed to run SAI Harness");
+        .expect("failed to run Sail");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{server_args, version_number};
+    use super::{repository_namespace, server_args, version_number};
+    use std::path::Path;
+
+    #[test]
+    fn same_named_repositories_have_distinct_worktree_folders() {
+        assert_ne!(
+            repository_namespace(Path::new("/first/service")),
+            repository_namespace(Path::new("/second/service"))
+        );
+    }
 
     #[test]
     fn accepts_real_opencode_version_output() {

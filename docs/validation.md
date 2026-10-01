@@ -23,7 +23,7 @@ The app accepts other OpenCode v2 revisions, but CI establishes compatibility on
 
 ## Automated checks
 
-Run `npm ci && npm run build:e2e && npm run test:e2e` on a desktop with OpenCode installed. WDIO launches the actual Tauri binary and checks fresh Git setup without the plugin, missing paths, binary discovery, invalid binary retention, and server death/reconnect. The CI contract job installs the pinned server and plugin in an isolated profile, starts a real loopback server, and checks location, plugin, agent, model, provider, integration, session, message, diff, permission, form, and plan-review RPC responses. Run the contract locally with `npm run test:contract`; set `SAI_PLUGIN_PATH` to a local checkout of the tested plugin revision to avoid package installation.
+Run `npm ci && npm run build:e2e && npm run test:e2e` on a desktop with OpenCode installed. WDIO launches the actual Tauri binary and checks fresh Git setup without the plugin, missing paths, binary discovery, invalid binary retention, and server death/reconnect. The CI contract job installs the pinned server and plugin in an isolated profile, starts a real loopback server, and checks location, plugin, agent, model, provider, integration, session, message, diff, permission, form, and plan-review RPC responses. Run the contract locally with `npm run test:contract`; set `SAIL_PLUGIN_PATH` to a local checkout of the tested plugin revision to avoid package installation.
 
 CI runs the contract and Rust checks on Ubuntu, macOS, and Windows. The desktop WDIO suite requires a graphical runner and is a release check on each supported platform until hosted graphical runners are configured.
 

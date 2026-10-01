@@ -59,7 +59,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 10px 30px;
+  padding: 0 10px 18px;
   font-size: 15px;
   font-weight: 700;
 }
@@ -82,33 +82,213 @@ button:disabled {
   font-weight: 700;
   letter-spacing: 0.09em;
 }
-.project-switcher {
-  padding: 0 8px 26px;
+.projects {
+  min-height: 0;
+  padding: 0 4px 14px;
+  border-bottom: 1px solid var(--shell-divider);
+  margin-bottom: 14px;
 }
-.project-button {
+.projects-heading,
+.project-group-heading,
+.project-repository-row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  margin-top: 9px;
-  padding: 10px;
-  border: 1px solid var(--shell-divider);
-  border-radius: 9px;
-  color: var(--sui-foreground);
-  background: var(--sui-surface);
-  text-align: left;
-  font-size: 13px;
+  min-width: 0;
 }
-.project-icon {
-  color: var(--sui-primary);
-  font-size: 18px;
+.projects-heading {
+  gap: 5px;
+  padding: 0 4px 8px;
 }
-.project-name {
+.projects-heading .label {
   flex: 1;
+}
+.project-control,
+.project-icon-button,
+.project-group-toggle,
+.project-repository-select,
+.project-menu button,
+.project-form button {
+  border: 0;
+  color: var(--sui-muted);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.project-control {
+  padding: 4px 2px;
+  font-size: 10px;
+}
+.project-list {
+  max-height: min(40vh, 340px);
+  overflow-y: auto;
+}
+.project-group + .project-group {
+  margin-top: 5px;
+}
+.project-group-heading {
+  gap: 2px;
+  min-height: 28px;
+}
+.project-group-toggle,
+.project-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px 4px;
+  color: var(--sui-foreground);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+.project-group-toggle span {
+  display: inline-block;
+  width: 16px;
+  color: var(--shell-muted);
+}
+.project-icon-button {
+  flex: 0 0 24px;
+  min-height: 24px;
+  border-radius: 5px;
+  font-size: 15px;
+}
+.project-repository-row {
+  border-radius: 7px;
+}
+.project-repository-row:hover,
+.project-repository-row.active,
+.project-worktree-row:hover,
+.project-worktree-row.active {
+  background: var(--shell-selected);
+}
+.project-repository-select {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 4px 6px 17px;
+  text-align: left;
+  font-size: 12px;
+}
+.project-repository-select span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+}
+.project-repository-select span:first-child {
+  color: var(--sui-primary);
+}
+.project-worktree-select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 4px 5px 32px;
+  border: 0;
+  color: var(--sui-muted);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 11px;
+}
+.project-worktree-select span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-worktree-row.active .project-worktree-select {
+  color: var(--shell-selected-ink);
+  font-weight: 700;
+}
+.project-repository-row.active .project-repository-select {
+  color: var(--shell-selected-ink);
+  font-weight: 700;
+}
+.project-control:hover,
+.project-icon-button:hover,
+.project-group-toggle:hover,
+.project-repository-select:hover,
+.project-menu button:hover {
+  color: var(--shell-selected-ink);
+}
+.project-menu {
+  display: grid;
+  gap: 3px;
+  padding: 5px 8px 7px 18px;
+  font-size: 11px;
+}
+.project-menu button {
+  padding: 4px;
+  text-align: left;
+  font-size: 11px;
+}
+.project-menu label {
+  display: grid;
+  gap: 3px;
+}
+.project-menu select,
+.project-form input,
+.worktree-form input {
+  min-width: 0;
+  border: 1px solid var(--shell-divider);
+  border-radius: 5px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+  font: inherit;
+}
+.project-menu select {
+  padding: 4px;
+}
+.project-form {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+}
+.project-form input {
+  flex: 1;
+  width: 0;
+  padding: 5px;
+  font-size: 12px;
+}
+.project-empty {
+  margin: 3px 0;
+  padding: 4px 9px 4px 17px;
+  color: var(--shell-muted);
+  font-size: 11px;
+}
+.worktree-form {
+  display: grid;
+  gap: 5px;
+  padding: 6px 8px 8px 18px;
+}
+.worktree-form input {
+  width: 100%;
+  padding: 6px;
+  font-size: 11px;
+}
+.worktree-form button {
+  border: 0;
+  border-radius: 5px;
+  color: var(--sui-muted);
+  background: var(--sui-surface);
+  text-align: left;
+  font: inherit;
+  font-size: 11px;
+}
+.worktree-form-actions {
+  display: flex;
+  gap: 7px;
+}
+.worktree-form-actions button {
+  padding: 5px 7px;
+}
+.worktree-form p {
+  margin: 0;
+  color: var(--sui-danger);
+  font-size: 11px;
 }
 .session-heading {
   display: flex;
@@ -121,7 +301,7 @@ button:disabled {
 .session-heading .label {
   flex-basis: 100%;
 }
-.sidebar nav {
+.session-list {
   flex: 1;
   overflow: auto;
 }
@@ -833,7 +1013,7 @@ button:disabled {
   .app-shell[data-mobile-view='sessions'] .sidebar {
     display: flex;
   }
-  .sidebar nav {
+  .session-list {
     min-height: 0;
   }
   .topbar {

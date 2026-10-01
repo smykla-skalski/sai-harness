@@ -1,10 +1,12 @@
-# SAI Harness
+# Sail
 
-A desktop workspace for planning and reviewing coding-agent work. OpenCode runs the agent sessions; SAI Harness manages the workflow around them: plans, reviewer findings, decisions, approvals, and implementation handoff.
+A desktop workspace for planning and reviewing coding-agent work. OpenCode runs the agent sessions; Sail manages the workflow around them: plans, reviewer findings, decisions, approvals, and implementation handoff.
 
 ## Plan workspace
 
 - Pick a repository, start an Architect chat, and resume earlier plan sessions.
+- Organize repositories into named sidebar groups and switch between them without losing each repository's last session.
+- Create a Git worktree from a repository row; Sail opens the new checkout and lists it beneath its repository.
 - See live OpenCode messages alongside structured questions, Mermaid diagrams, alternatives, and per-step decisions.
 - Send answers, request revisions, or approve a plan for the build agent through [opencode-plugin-plan-review](https://github.com/smykla-skalski/opencode-plugin-plan-review).
 - The desktop app starts a local, password-protected OpenCode server and stops it on exit.
@@ -31,7 +33,9 @@ Mise installs the latest stable Node.js and Rust toolchains. The development tas
 mise run dev
 ```
 
-Select the repository in the app and complete the repository setup checks, then describe the work in chat. The first message creates an Architect session. The app detects OpenCode in common installation locations. Open **OpenCode settings** to see the detected binary or set an absolute path; the app remembers an override. You can also set `SAI_OPENCODE_BIN` before starting the app.
+Select the repository in the app and complete the repository setup checks, then describe the work in chat. The first message creates an Architect session. The app detects OpenCode in common installation locations. Open **OpenCode settings** to see the detected binary or set an absolute path; the app remembers an override. You can also set `SAIL_OPENCODE_BIN` before starting the app.
+
+Use **+ Group** and **+ Repo** in the sidebar to organize saved repositories. Each repository row has a **+** control to create a worktree. Sail uses the remote default branch when Git records one, then `main` or `master`, then the main checkout branch. Enter a base branch in the form to choose another starting point. By default, new worktrees live in `~/sail/worktrees/<repository>-<id>/<name>` so repositories with the same name stay separate; choose a different parent folder in the form when needed. `SAIL_WORKTREE_ROOT` overrides the default root.
 
 Other tasks:
 
@@ -53,7 +57,7 @@ Svelte + SUI ── OpenCode v2 client ── local OpenCode server
       └── Tauri ── starts/stops server, opens repository picker
 ```
 
-OpenCode owns sessions and execution. The plan-review plugin owns plans and decisions. SAI Harness renders and submits that workflow in a desktop UI.
+OpenCode owns sessions and execution. The plan-review plugin owns plans and decisions. Sail renders and submits that workflow in a desktop UI.
 
 ## License
 

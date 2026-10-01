@@ -6,6 +6,7 @@
   "permissions": [
     "allow-start-runtime",
     "allow-validate-repository",
+    "allow-create-worktree",
     "allow-local-plugin-version",
     "dialog:allow-open",
     "dialog:allow-message"

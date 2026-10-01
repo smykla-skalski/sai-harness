@@ -3,6 +3,7 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "start_runtime",
             "validate_repository",
+            "create_worktree",
             "local_plugin_version",
         ]),
     ))
