@@ -53,10 +53,12 @@
 
   async function activate(id: string | null) {
     const current = ++generation;
+    const abandoned = permissions;
+    permissions = [];
+    for (const permission of abandoned) void acp.permission(agent, permission.id, null);
     selectedThreadId = id;
     activeSessionId = id;
     entries = [];
-    permissions = [];
     configOptions = [];
     authNeeded = false;
     busy = false;
@@ -156,6 +158,7 @@
       });
     return () => {
       disposed = true;
+      generation++;
       unlisten?.();
       for (const permission of permissions) void acp.permission(agent, permission.id, null);
     };
@@ -164,12 +167,15 @@
   async function send() {
     const text = draft.trim();
     if (!text || !ready || busy || !directory) return;
+    const current = generation;
+    let activityThread = thread;
     busy = true;
     error = '';
     draft = '';
     try {
       if (!activeSessionId) {
         const session = await acp.create(agent, directory);
+        if (current !== generation) return;
         configOptions = session.configOptions ?? [];
         activeSessionId = session.sessionId;
         selectedThreadId = session.sessionId;
@@ -180,19 +186,22 @@
           title: text.slice(0, 60),
           updated: Date.now(),
         };
+        activityThread = created;
         oncreated(created);
       }
       const id = activeSessionId;
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
       void follow();
       await acp.prompt(agent, id!, text);
-      if (thread) onactivity({ ...thread, updated: Date.now() });
+      if (activityThread) onactivity({ ...activityThread, updated: Date.now() });
     } catch (cause) {
-      error = describe(cause);
-      authNeeded = /auth|login|sign.?in/i.test(error);
-      if (!activeSessionId) draft = text;
+      if (current === generation) {
+        error = describe(cause);
+        authNeeded = /auth|login|sign.?in/i.test(error);
+        if (!activeSessionId) draft = text;
+      }
     } finally {
-      busy = false;
+      if (current === generation) busy = false;
     }
   }
 
@@ -277,7 +286,11 @@
       >{connecting ? 'Connecting' : ready ? 'Ready' : 'Offline'}</Badge
     >
   </div>
-  <div class="agent-conversation" bind:this={scroll} aria-label={`${name} conversation`}>
+  <div
+    class="agent-conversation conversation"
+    bind:this={scroll}
+    aria-label={`${name} conversation`}
+  >
     {#if entries.length === 0 && !connecting}
       <div class="agent-welcome">
         <h1>Work with {name}</h1>
@@ -286,24 +299,34 @@
     {/if}
     {#each entries as entry (entry.id)}
       {#if entry.type === 'tool'}
-        <details class="agent-tool">
+        <details class="agent-tool tool-card">
           <summary>{entry.title} · {entry.status}</summary
           >{#if entry.content}<pre>{entry.content}</pre>{/if}
         </details>
       {:else}
         <article
-          class:user={entry.type === 'user'}
+          class:user-message={entry.type === 'user'}
+          class:assistant-message={entry.type !== 'user'}
           class:thought={entry.type === 'thought'}
-          class="agent-message"
+          class="agent-message message"
         >
-          <strong
-            >{entry.type === 'user'
-              ? 'You'
-              : entry.type === 'thought'
-                ? `${name} · thinking`
-                : name}</strong
+          <div
+            class:agent-avatar={entry.type !== 'user'}
+            class:user-avatar={entry.type === 'user'}
+            class="avatar"
           >
-          <Markdown source={entry.text} />
+            {entry.type === 'user' ? 'You' : 'S.'}
+          </div>
+          <div class="message-body">
+            <div class="message-author">
+              {entry.type === 'user'
+                ? 'You'
+                : entry.type === 'thought'
+                  ? `${name} · thinking`
+                  : name}
+            </div>
+            <Markdown source={entry.text} />
+          </div>
         </article>
       {/if}
     {/each}
@@ -311,49 +334,51 @@
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}
   </div>
-  <div class="agent-composer">
-    {#if error}<p class="agent-error" role="alert">
-        {error} <button onclick={() => void activate(activeSessionId)}>Retry</button>
-      </p>{/if}
-    {#if authNeeded}
-      <div class="agent-auth" role="group" aria-label="Agent sign in">
-        {#each authMethods.filter((method) => method.type !== 'terminal') as method (method.id)}
-          <Button
-            size="sm"
-            onclick={() => authenticate(method.id)}
-            disabled={authenticating}
-            loading={authenticating}>Sign in with {method.name}</Button
-          >
-        {:else}
-          <span>Sign in with {name}, then choose Retry.</span>
-        {/each}
-      </div>
-    {/if}
-    {#each permissions as permission (String(permission.id))}
-      <div class="agent-permission" role="group" aria-label="Agent permission request">
-        <strong>{permission.title}</strong>
-        <div>
-          {#each permission.options as option (option.optionId)}<Button
+  <div class="agent-composer composer-wrap">
+    <div class="composer">
+      {#if error}<p class="agent-error" role="alert">
+          {error} <button onclick={() => void activate(activeSessionId)}>Retry</button>
+        </p>{/if}
+      {#if authNeeded}
+        <div class="agent-auth" role="group" aria-label="Agent sign in">
+          {#each authMethods.filter((method) => method.type !== 'terminal') as method (method.id)}
+            <Button
               size="sm"
-              variant={option.kind.startsWith('allow') ? 'primary' : 'secondary'}
-              onclick={() => answer(permission, option.optionId)}>{option.name}</Button
-            >{/each}
+              onclick={() => authenticate(method.id)}
+              disabled={authenticating}
+              loading={authenticating}>Sign in with {method.name}</Button
+            >
+          {:else}
+            <span>Sign in with {name}, then choose Retry.</span>
+          {/each}
         </div>
+      {/if}
+      {#each permissions as permission (String(permission.id))}
+        <div class="agent-permission" role="group" aria-label="Agent permission request">
+          <strong>{permission.title}</strong>
+          <div>
+            {#each permission.options as option (option.optionId)}<Button
+                size="sm"
+                variant={option.kind.startsWith('allow') ? 'primary' : 'secondary'}
+                onclick={() => answer(permission, option.optionId)}>{option.name}</Button
+              >{/each}
+          </div>
+        </div>
+      {/each}
+      <textarea
+        aria-label={`Message ${name}`}
+        bind:value={draft}
+        onkeydown={keydown}
+        rows="3"
+        placeholder={`Message ${name}…`}
+        disabled={!ready || busy || !directory}></textarea>
+      <div class="agent-actions composer-bottom">
+        <span>Enter to send · Shift+Enter for newline</span><Button
+          onclick={send}
+          disabled={!ready || busy || !draft.trim()}
+          loading={busy}>Send ↗</Button
+        >
       </div>
-    {/each}
-    <textarea
-      aria-label={`Message ${name}`}
-      bind:value={draft}
-      onkeydown={keydown}
-      rows="3"
-      placeholder={`Message ${name}…`}
-      disabled={!ready || busy || !directory}></textarea>
-    <div class="agent-actions">
-      <span>Enter to send · Shift+Enter for newline</span><Button
-        onclick={send}
-        disabled={!ready || busy || !draft.trim()}
-        loading={busy}>Send ↗</Button
-      >
     </div>
   </div>
 </div>
@@ -400,7 +425,6 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    padding: 24px;
   }
   .agent-welcome {
     max-width: 650px;
@@ -408,23 +432,14 @@
     text-align: center;
   }
   .agent-message {
-    max-width: 820px;
-    margin: 0 auto 22px;
-  }
-  .agent-message strong {
-    display: block;
-    margin-bottom: 7px;
-  }
-  .agent-message.user {
-    padding: 12px 16px;
-    background: var(--surface-2);
-    border-radius: 12px;
+    max-width: 740px;
+    margin: 0 auto;
   }
   .agent-message.thought {
     opacity: 0.65;
   }
   .agent-tool {
-    max-width: 820px;
+    max-width: 740px;
     margin: 0 auto 16px;
     padding: 10px 14px;
     border: 1px solid var(--border);
@@ -445,8 +460,7 @@
     gap: 12px;
   }
   .agent-composer {
-    padding: 12px 24px 20px;
-    border-top: 1px solid var(--border);
+    flex: 0 0 auto;
   }
   .agent-composer textarea {
     width: 100%;

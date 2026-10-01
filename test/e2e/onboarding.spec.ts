@@ -88,7 +88,9 @@ describe('repository setup', () => {
   });
 
   it('shows setup guidance for a fresh repository without the plugin', async () => {
-    await $(`.project-repository-select[title="${realpathSync(repository)}"]`).click();
+    await $(
+      `.project-repository-select[title="${repository}"], .project-repository-select[title="${realpathSync(repository)}"]`,
+    ).click();
     try {
       await browser.waitUntil(
         async () => (await $('.setup-panel').getText()).includes(realpathSync(repository)),
@@ -160,6 +162,8 @@ describe('repository setup', () => {
       'aria-current',
       'page',
     );
+    if (!(await $('.setup-panel').isExisting()))
+      await $('.topbar-actions button=Repository setup').click();
     await expect($('.setup-panel')).toHaveText(
       expect.stringContaining('Plan-review plugin not loaded'),
     );

@@ -6,6 +6,7 @@
   "permissions": [
     "allow-start-runtime",
     "allow-validate-repository",
+    "allow-working-tree-diff",
     "allow-create-worktree",
     "allow-local-plugin-version",
     "allow-acp-agents",

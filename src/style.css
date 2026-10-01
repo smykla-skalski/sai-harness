@@ -494,9 +494,6 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
 }
-.workspace.agent-hidden {
-  display: none;
-}
 .agent-launches {
   display: flex;
   flex-wrap: wrap;

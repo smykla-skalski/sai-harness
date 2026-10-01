@@ -347,6 +347,90 @@ fn validate_repository(path: String) -> Result<String, String> {
 }
 
 #[derive(Serialize)]
+struct WorkingDiff {
+    file: String,
+    patch: String,
+    additions: usize,
+    deletions: usize,
+    status: &'static str,
+}
+
+#[tauri::command]
+async fn working_tree_diff(path: String) -> Result<Vec<WorkingDiff>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = validate_repository(path)?;
+        let output = Command::new("git")
+            .args([
+                "-C",
+                &root,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--no-renames",
+                "--untracked-files=all",
+            ])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err("Could not read working tree changes.".into());
+        }
+        let has_head = Command::new("git")
+            .args(["-C", &root, "rev-parse", "--verify", "HEAD"])
+            .output()
+            .is_ok_and(|result| result.status.success());
+        let mut files = Vec::new();
+        for record in output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            if record.len() < 4 {
+                continue;
+            }
+            let file = String::from_utf8_lossy(&record[3..]).into_owned();
+            let untracked = &record[..2] == b"??";
+            let status = if untracked || record[..2].contains(&b'A') {
+                "added"
+            } else if record[..2].contains(&b'D') {
+                "deleted"
+            } else {
+                "modified"
+            };
+            let patch = if untracked || !has_head {
+                Command::new("git")
+                    .args(["-C", &root, "diff", "--no-index", "--", "/dev/null"])
+                    .arg(Path::new(&root).join(&file))
+                    .output()
+            } else {
+                Command::new("git")
+                    .args(["-C", &root, "diff", "HEAD", "--", &file])
+                    .output()
+            }
+            .map_err(|error| error.to_string())?;
+            let patch = String::from_utf8_lossy(&patch.stdout).into_owned();
+            let additions = patch
+                .lines()
+                .filter(|line| line.starts_with('+') && !line.starts_with("+++ "))
+                .count();
+            let deletions = patch
+                .lines()
+                .filter(|line| line.starts_with('-') && !line.starts_with("--- "))
+                .count();
+            files.push(WorkingDiff {
+                file,
+                patch,
+                additions,
+                deletions,
+                status,
+            });
+        }
+        Ok(files)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatedWorktree {
     path: String,
@@ -525,6 +609,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_runtime,
             validate_repository,
+            working_tree_diff,
             create_worktree,
             local_plugin_version,
             acp::acp_agents,

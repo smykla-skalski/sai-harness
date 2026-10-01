@@ -1,6 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +11,8 @@ describe('ACP agent threads', () => {
     execFileSync('git', ['init', '-q', repository]);
   });
 
-  after(() => {
+  after(async () => {
+    await browser.execute(() => localStorage.clear());
     rmSync(repository, { recursive: true, force: true });
   });
 
@@ -35,6 +36,7 @@ describe('ACP agent threads', () => {
       throw cause;
     }
     await $('.agent-launches button').click();
+    await expect($('.workspace .chat-area .agent-workspace')).toBeDisplayed();
     try {
       await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     } catch (cause) {
@@ -53,6 +55,12 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Do a small thing'),
     );
+    writeFileSync(join(repository, 'agent-change.txt'), 'Changed by agent\n');
+    await $('.topbar-actions button[title="Toggle Changes (⌘L)"]').click();
+    await expect($('.workspace .side-area')).toHaveText(
+      expect.stringContaining('agent-change.txt'),
+    );
+    await $('.workspace .side-area button[aria-label="Close Changes"]').click();
 
     await $('.agent-launches button:nth-child(2)').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Codex'));

@@ -15,6 +15,7 @@ struct AgentDefinition {
     executable: &'static str,
     package: &'static str,
     binary_env: Option<&'static str>,
+    min_node_major: u32,
 }
 
 const AGENTS: &[AgentDefinition] = &[
@@ -24,6 +25,7 @@ const AGENTS: &[AgentDefinition] = &[
         executable: "claude",
         package: "@agentclientprotocol/claude-agent-acp@0.84.0",
         binary_env: None,
+        min_node_major: 22,
     },
     AgentDefinition {
         id: "codex",
@@ -31,6 +33,7 @@ const AGENTS: &[AgentDefinition] = &[
         executable: "codex",
         package: "@agentclientprotocol/codex-acp@2.0.0",
         binary_env: Some("CODEX_PATH"),
+        min_node_major: 18,
     },
 ];
 
@@ -132,11 +135,14 @@ impl Connection {
     }
 }
 
-#[derive(Default)]
-pub struct AgentManager(Mutex<HashMap<String, Arc<Connection>>>);
+#[derive(Clone, Default)]
+pub struct AgentManager(Arc<Mutex<HashMap<String, Arc<Connection>>>>);
 
 impl Drop for AgentManager {
     fn drop(&mut self) {
+        if Arc::strong_count(&self.0) != 1 {
+            return;
+        }
         if let Ok(agents) = self.0.lock() {
             for runtime in agents.values() {
                 runtime.terminate();
@@ -178,6 +184,21 @@ fn find_executable(name: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+fn node_major(node: &PathBuf) -> Option<u32> {
+    let output = Command::new(node).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(output.stdout).ok()?;
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
 fn definition(id: &str) -> Result<&'static AgentDefinition, String> {
     AGENTS
         .iter()
@@ -210,6 +231,7 @@ pub fn acp_agents() -> Vec<AgentAvailability> {
     }
     let npx = find_executable("npx");
     let node = find_executable("node");
+    let major = node.as_ref().and_then(node_major);
     AGENTS
         .iter()
         .map(|agent| {
@@ -220,11 +242,18 @@ pub fn acp_agents() -> Vec<AgentAvailability> {
                 binary_path: binary
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned()),
-                available: binary.is_some() && npx.is_some() && node.is_some(),
+                available: binary.is_some()
+                    && npx.is_some()
+                    && major.is_some_and(|version| version >= agent.min_node_major),
                 reason: if binary.is_none() {
                     Some(format!("Install {} first.", agent.name))
                 } else if npx.is_none() || node.is_none() {
                     Some("Node.js and npx are required for the ACP adapter.".into())
+                } else if major.is_none_or(|version| version < agent.min_node_major) {
+                    Some(format!(
+                        "{} requires Node.js {} or newer.",
+                        agent.name, agent.min_node_major
+                    ))
                 } else {
                     None
                 },
@@ -234,9 +263,20 @@ pub fn acp_agents() -> Vec<AgentAvailability> {
 }
 
 #[tauri::command]
-pub fn acp_connect(
+pub async fn acp_connect(
     app: AppHandle,
     manager: State<'_, AgentManager>,
+    agent: String,
+) -> Result<Value, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || connect_blocking(app, &manager, agent))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn connect_blocking(
+    app: AppHandle,
+    manager: &AgentManager,
     agent: String,
 ) -> Result<Value, String> {
     let definition = definition(&agent)?;
@@ -400,7 +440,7 @@ pub fn acp_connect(
 }
 
 #[tauri::command]
-pub fn acp_new_session(
+pub async fn acp_new_session(
     manager: State<'_, AgentManager>,
     agent: String,
     cwd: String,
@@ -408,25 +448,35 @@ pub fn acp_new_session(
     if !PathBuf::from(&cwd).is_dir() {
         return Err("Repository directory does not exist.".into());
     }
-    connection(&manager, &agent)?.request(
-        "session/new",
-        json!({"cwd":cwd,"mcpServers":[]}),
-        Duration::from_secs(60),
-    )
+    let runtime = connection(&manager, &agent)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "session/new",
+            json!({"cwd":cwd,"mcpServers":[]}),
+            Duration::from_secs(60),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn acp_load_session(
+pub async fn acp_load_session(
     manager: State<'_, AgentManager>,
     agent: String,
     cwd: String,
     session_id: String,
 ) -> Result<Value, String> {
-    connection(&manager, &agent)?.request(
-        "session/load",
-        json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[]}),
-        Duration::from_secs(60),
-    )
+    let runtime = connection(&manager, &agent)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "session/load",
+            json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[]}),
+            Duration::from_secs(60),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -473,18 +523,23 @@ pub fn acp_permission(
 }
 
 #[tauri::command]
-pub fn acp_set_config(
+pub async fn acp_set_config(
     manager: State<'_, AgentManager>,
     agent: String,
     session_id: String,
     config_id: String,
     value: String,
 ) -> Result<Value, String> {
-    connection(&manager, &agent)?.request(
-        "session/set_config_option",
-        json!({"sessionId":session_id,"configId":config_id,"value":value}),
-        Duration::from_secs(30),
-    )
+    let runtime = connection(&manager, &agent)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "session/set_config_option",
+            json!({"sessionId":session_id,"configId":config_id,"value":value}),
+            Duration::from_secs(30),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
