@@ -24,3 +24,5 @@ tauri-plugin-dialog = "2"
 tauri-plugin-wdio = { version = "1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 notify-rust = "4.18.1"
+portable-pty = "0.9.0"
+shell-words = "1.1.1"

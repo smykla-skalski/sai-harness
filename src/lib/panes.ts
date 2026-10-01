@@ -1,7 +1,7 @@
 import type { AgentId, AgentThread } from './acp';
 
 export type Pane =
-  | { id: string; agent: AgentId | null; thread: AgentThread | null }
+  | { id: string; agent: AgentId | null; thread: AgentThread | null; kind?: 'terminal' }
   | { id: string; direction: 'row' | 'column'; ratio: number; first: Pane; second: Pane };
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
@@ -152,6 +152,7 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
       validPane(pane.second, ids)
     );
   return (
+    (pane.kind === undefined || pane.kind === 'terminal') &&
     (pane.agent === null || typeof pane.agent === 'string') &&
     (pane.thread === null ||
       (typeof pane.thread === 'object' &&

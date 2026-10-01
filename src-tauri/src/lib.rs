@@ -10,6 +10,7 @@ use tauri::State;
 mod acp;
 mod attention;
 mod settings;
+mod terminal;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -666,6 +667,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .manage(RuntimeManager::default())
         .manage(acp::AgentManager::default())
+        .manage(terminal::TerminalManager::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             settings::load_settings,
@@ -690,7 +692,13 @@ pub fn run() {
             acp::acp_set_config,
             acp::acp_authenticate,
             attention::show_attention_notification,
-            attention::set_attention_badge
+            attention::set_attention_badge,
+            terminal::terminal_open,
+            terminal::terminal_detach,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
+            terminal::terminal_open_file
         ]);
     #[cfg(feature = "e2e")]
     let builder = builder

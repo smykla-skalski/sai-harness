@@ -1760,7 +1760,7 @@
     persistPaneLayouts();
   }
 
-  function splitFocusedPane(direction: 'row' | 'column') {
+  function splitFocusedPane(direction: 'row' | 'column', kind?: 'terminal') {
     if (!directory) return;
     const focusedElement = document.querySelector<HTMLElement>(`[data-pane-id="${focusedPane}"]`);
     const bounds = focusedElement?.getBoundingClientRect();
@@ -1774,7 +1774,7 @@
     const old = new Set(leaves(paneLayout).map((leaf) => leaf.id));
     const created = leaves(layout).find((leaf) => !old.has(leaf.id));
     if (!created) return;
-    savePaneLayout(layout);
+    savePaneLayout(kind ? updatePane(layout, created.id, { kind }) : layout);
     focusPaneForTyping(created.id);
   }
 
@@ -1806,7 +1806,9 @@
     await tick();
     if (focusedPane !== id || promptFocusPane !== id) return;
     const pane = document.querySelector<HTMLElement>(`[data-pane-id="${id}"]`);
-    const prompt = pane?.querySelector<HTMLTextAreaElement>('[data-pane-prompt]:not(:disabled)');
+    const prompt = pane?.querySelector<HTMLTextAreaElement>(
+      '[data-pane-prompt]:not(:disabled), .xterm-helper-textarea',
+    );
     const picker = pane?.querySelector<HTMLButtonElement>(
       '[data-agent-choice]:not(:disabled), [data-pane-picker]',
     );
@@ -1830,6 +1832,8 @@
 
   function closeFocusedPane(id: string) {
     ++recentJumpGeneration;
+    if (leaves(paneLayout).find((leaf) => leaf.id === id)?.kind === 'terminal')
+      void invoke('terminal_close', { id });
     let layout = closePane(paneLayout, id);
     if (!('direction' in layout) && layout.id === 'main')
       layout = { ...layout, agent: acpAgent, thread: acpThread };
@@ -1845,6 +1849,8 @@
       return;
     }
     if (acpAgent || !leaves(paneLayout).some((pane) => pane.id === 'main')) {
+      if (leaves(paneLayout)[0]?.kind === 'terminal')
+        void invoke('terminal_close', { id: leaves(paneLayout)[0].id });
       acpAgent = null;
       acpThread = null;
       savePaneLayout(mainPane());
@@ -1866,7 +1872,12 @@
   }
 
   function choosePaneAgent(id: string, agent: AgentId) {
-    savePaneLayout(updatePane(paneLayout, id, { agent, thread: null }));
+    savePaneLayout(updatePane(paneLayout, id, { agent, thread: null, kind: undefined }));
+    focusPaneForTyping(id);
+  }
+
+  function choosePaneTerminal(id: string) {
+    savePaneLayout(updatePane(paneLayout, id, { agent: null, thread: null, kind: 'terminal' }));
     focusPaneForTyping(id);
   }
 
@@ -2916,6 +2927,18 @@
     if (
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 't' &&
+      !event.repeat &&
+      !document.querySelector('dialog[open]')
+    ) {
+      event.preventDefault();
+      splitFocusedPane('row', 'terminal');
+      return;
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
       event.key.toLowerCase() === 'd' &&
       !event.repeat &&
       !document.querySelector('dialog[open]')
@@ -3581,6 +3604,7 @@
       onratio={updatePaneRatio}
       oncreated={createPaneThread}
       onchooseagent={choosePaneAgent}
+      onchooseterminal={choosePaneTerminal}
       onactivity={saveAgentThread}
       focusPromptPane={promptFocusPane}
       onpromptfocused={() => (promptFocusPane = null)}

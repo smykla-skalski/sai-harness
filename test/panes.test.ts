@@ -78,6 +78,8 @@ void test('split and close preserve neighboring panes and their threads', () => 
 void test('pane layouts survive serialization and reject malformed saved trees', () => {
   const layout = splitPane(mainPane(), 'main', 'column');
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': layout }))['/repo'], layout);
+  const terminal = updatePane(layout, leaves(layout)[1].id, { kind: 'terminal' });
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': terminal }))['/repo'], terminal);
   const duplicate = {
     id: 'split',
     direction: 'row',

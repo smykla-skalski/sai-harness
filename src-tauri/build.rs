@@ -24,6 +24,12 @@ fn main() {
             "acp_authenticate",
             "show_attention_notification",
             "set_attention_badge",
+            "terminal_open",
+            "terminal_detach",
+            "terminal_write",
+            "terminal_resize",
+            "terminal_close",
+            "terminal_open_file",
         ]),
     ))
     .expect("failed to build Tauri permissions")
