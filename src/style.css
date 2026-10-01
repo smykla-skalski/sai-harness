@@ -386,12 +386,40 @@ button:disabled {
 }
 .workspace {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(350px, 420px);
+  grid-template-columns: minmax(300px, 1fr) 8px minmax(320px, var(--details-width));
   flex: 1;
   min-height: 0;
 }
 .workspace.single {
   grid-template-columns: minmax(0, 1fr);
+}
+.details-resizer {
+  position: relative;
+  width: 8px;
+  padding: 0;
+  border: 0;
+  background: var(--shell-divider);
+  cursor: col-resize;
+  touch-action: none;
+}
+.details-resizer::before {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 4px;
+  height: 32px;
+  border-radius: 2px;
+  background: var(--shell-muted);
+  content: '';
+  transform: translateY(-50%);
+}
+.details-resizer:hover,
+.details-resizer:focus-visible {
+  background: var(--sui-primary);
+}
+.details-resizer:hover::before,
+.details-resizer:focus-visible::before {
+  background: var(--sui-primary-foreground);
 }
 .side-area {
   display: flex;
@@ -587,19 +615,33 @@ button:disabled {
   align-items: center;
   gap: 9px;
   padding: 19px 0;
-  color: var(--sui-muted);
+  color: var(--sui-foreground);
   font-size: 12px;
 }
-.pulse {
-  width: 7px;
-  height: 7px;
+.activity-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 2px solid var(--shell-divider);
+  border-top-color: var(--sui-primary);
+  border-right-color: var(--sui-primary);
   border-radius: 50%;
-  background: var(--sui-primary);
-  animation: pulse 1.2s infinite alternate;
+  animation: activity-spin 0.9s linear infinite;
 }
-@keyframes pulse {
+.working-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes activity-spin {
   to {
-    opacity: 0.25;
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner {
+    animation: none;
   }
 }
 .composer-wrap {
@@ -763,7 +805,7 @@ button:disabled {
     flex-basis: 195px;
   }
   .workspace {
-    grid-template-columns: minmax(300px, 1fr) minmax(320px, 380px);
+    grid-template-columns: minmax(300px, 1fr) 8px minmax(320px, var(--details-width));
   }
 }
 @media (max-width: 850px) {
@@ -830,6 +872,9 @@ button:disabled {
   .workspace .side-area {
     display: none;
     height: 100%;
+  }
+  .details-resizer {
+    display: none;
   }
   .app-shell[data-mobile-view='chat'] .chat-area,
   .app-shell[data-mobile-view='details'] .side-area {

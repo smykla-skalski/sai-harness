@@ -99,6 +99,15 @@
   let sending = $state(false);
   let switching = $state(false);
   let running = $state(false);
+  let activity = $state('Thinking');
+  let activityTool = '';
+  const savedDetailsWidth = Number(localStorage.getItem('sai-details-width'));
+  let detailsWidth = $state(
+    Number.isFinite(savedDetailsWidth) && savedDetailsWidth >= 320 ? savedDetailsWidth : 420,
+  );
+  let workspaceWidth = $state(0);
+  let workspaceElement: HTMLDivElement;
+  let resizeStart: { x: number; width: number } | null = null;
   let error = $state('');
   let chatScroll: HTMLDivElement;
   let sidebarElement: HTMLElement;
@@ -258,6 +267,76 @@
       !switching,
   );
   let inputReady = $derived(workReady || (currentSession?.agent === 'architect' && planReady));
+  let maxDetailsWidth = $derived(Math.max(320, workspaceWidth - 308));
+  let visibleDetailsWidth = $derived(Math.min(detailsWidth, maxDetailsWidth));
+
+  function planExpandedKey() {
+    return `sai-plan-expanded:${encodeURIComponent(directory)}:${sessionID}`;
+  }
+
+  $effect(() => {
+    const plan = snapshot.plan;
+    if (
+      !sessionID ||
+      plan?.sessionID !== sessionID ||
+      plan.version !== 1 ||
+      running ||
+      workspaceWidth === 0 ||
+      localStorage.getItem(planExpandedKey())
+    )
+      return;
+    detailsWidth = Math.min(maxDetailsWidth, Math.round(workspaceWidth * 0.65));
+    localStorage.setItem('sai-details-width', String(detailsWidth));
+    localStorage.setItem(planExpandedKey(), '1');
+  });
+
+  function setDetailsWidth(width: number) {
+    detailsWidth = Math.min(maxDetailsWidth, Math.max(320, Math.round(width)));
+    localStorage.setItem('sai-details-width', String(detailsWidth));
+    if (sessionID) localStorage.setItem(planExpandedKey(), '1');
+  }
+
+  function startDetailsResize(event: PointerEvent) {
+    if (event.button !== 0) return;
+    resizeStart = {
+      x: event.clientX,
+      width: detailsArea?.getBoundingClientRect().width ?? detailsWidth,
+    };
+    if (event.currentTarget instanceof HTMLElement)
+      event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveDetailsResize(event: PointerEvent) {
+    if (!resizeStart) return;
+    detailsWidth = Math.min(
+      maxDetailsWidth,
+      Math.max(320, Math.round(resizeStart.width + resizeStart.x - event.clientX)),
+    );
+  }
+
+  function endDetailsResize() {
+    if (!resizeStart) return;
+    resizeStart = null;
+    localStorage.setItem('sai-details-width', String(detailsWidth));
+    if (sessionID) localStorage.setItem(planExpandedKey(), '1');
+  }
+
+  function keydownDetailsResize(event: KeyboardEvent) {
+    const step = event.shiftKey ? 50 : 20;
+    const width =
+      event.key === 'ArrowLeft'
+        ? visibleDetailsWidth + step
+        : event.key === 'ArrowRight'
+          ? visibleDetailsWidth - step
+          : event.key === 'Home'
+            ? 320
+            : event.key === 'End'
+              ? maxDetailsWidth
+              : null;
+    if (width === null) return;
+    event.preventDefault();
+    setDetailsWidth(width);
+  }
 
   function modelKey(model: ModelRef) {
     return `${model.providerID}:${model.id}`;
@@ -289,10 +368,13 @@
 
   onMount(() => {
     setTheme(dark);
+    const observer = new ResizeObserver(() => (workspaceWidth = workspaceElement.clientWidth));
+    observer.observe(workspaceElement);
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
     return () => {
       disposed = true;
+      observer.disconnect();
       eventController?.abort();
       clearTimeout(refreshTimer);
       clearTimeout(recoveryTimer);
@@ -683,6 +765,8 @@
     resetTimeline();
     followChat = viewStates.get(viewKey())?.follow ?? true;
     running = activeSessionIDs.includes(id);
+    activity = 'Thinking';
+    activityTool = '';
     pendingPermissions = [];
     pendingForms = [];
     snapshot = { plan: null, questions: null };
@@ -1233,6 +1317,7 @@
           )
             scheduleMessageRefresh(sessionID, event.data.messageID);
           if (event.type === 'session.text.delta') {
+            activity = 'Writing response';
             applyTextDelta(event.data.assistantMessageID, event.data.ordinal, event.data.delta);
             continue;
           }
@@ -1251,7 +1336,25 @@
             event.type !== 'session.text.ended'
           )
             scheduleMessageRefresh(event.data.sessionID, event.data.assistantMessageID);
-          if (event.type === 'session.execution.started') running = true;
+          if (event.type === 'session.execution.started') {
+            running = true;
+            activity = 'Thinking';
+            activityTool = '';
+          }
+          if (event.type === 'session.reasoning.started') activity = 'Thinking';
+          if (event.type === 'session.text.started') activity = 'Writing response';
+          if (event.type === 'session.tool.input.started') {
+            activityTool = event.data.name;
+            activity = `Preparing ${activityTool}`;
+          }
+          if (event.type === 'session.tool.called')
+            activity = activityTool ? `Using ${activityTool}` : 'Using a tool';
+          if (event.type === 'session.tool.success' || event.type === 'session.tool.failed') {
+            activity = 'Thinking';
+            activityTool = '';
+          }
+          if (event.type === 'session.compaction.started') activity = 'Organizing context';
+          if (event.type === 'session.retry.scheduled') activity = 'Retrying';
           if (
             [
               'session.execution.succeeded',
@@ -1342,7 +1445,11 @@
         });
         if (current === selection && path === directory) await refreshSessions();
       }
-      if (current === selection && path === directory) running = true;
+      if (current === selection && path === directory) {
+        running = true;
+        activity = 'Thinking';
+        activityTool = '';
+      }
       await client.session.prompt({
         sessionID: id,
         text,
@@ -1603,7 +1710,12 @@
             </p>
           </div>{/if}
       </section>{/if}
-    <div class:single={!sessionID} class="workspace">
+    <div
+      class:single={!sessionID}
+      class="workspace"
+      style={`--details-width: ${visibleDetailsWidth}px`}
+      bind:this={workspaceElement}
+    >
       <main class="chat-area" aria-label="Session conversation" tabindex="-1" bind:this={chatArea}>
         <div
           class="conversation"
@@ -1694,9 +1806,11 @@
               </div>
             </article>
           {/each}
-          {#if running}<div class="working">
-              <span class="pulse"></span>
-              {currentSession?.agent ?? 'Agent'} is working…
+          {#if running && runtimeState === 'connected'}<div class="working">
+              <span class="activity-spinner" aria-hidden="true"></span>
+              <span class="working-label" role="status"
+                >{currentSession?.agent ?? 'Agent'} · {activity}</span
+              >
               <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
             </div>{/if}
         </div>
@@ -1763,7 +1877,26 @@
           </div>
         </div>
       </main>
-      {#if sessionID}<section
+      {#if sessionID}<div
+          class="details-resizer"
+          role="slider"
+          tabindex="0"
+          aria-label="Pane divider position"
+          aria-orientation="horizontal"
+          aria-controls="session-details"
+          aria-valuemin="300"
+          aria-valuemax={Math.max(300, workspaceWidth - 328)}
+          aria-valuenow={Math.max(300, workspaceWidth - 8 - visibleDetailsWidth)}
+          aria-valuetext={`Details pane ${visibleDetailsWidth} pixels wide`}
+          onpointerdown={startDetailsResize}
+          onpointermove={moveDetailsResize}
+          onpointerup={endDetailsResize}
+          onpointercancel={endDetailsResize}
+          onkeydown={keydownDetailsResize}
+          ondblclick={() => setDetailsWidth(420)}
+        ></div>
+        <section
+          id="session-details"
           class="side-area"
           aria-label="Session details"
           tabindex="-1"

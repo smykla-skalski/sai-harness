@@ -8,7 +8,14 @@
   let { source, dark, title = 'Plan diagram' }: Props = $props();
   let imageUrl = $state('');
   let error = $state('');
+  let zoom = $state(100);
+  let fullscreen: HTMLDialogElement;
   let generation = 0;
+
+  function openFullscreen() {
+    zoom = 100;
+    fullscreen.showModal();
+  }
 
   $effect(() => {
     const current = ++generation;
@@ -37,7 +44,10 @@
 
 <div class="diagram" aria-label={title}>
   {#if imageUrl}
-    <img src={imageUrl} alt={`${title}. Text version follows.`} />
+    <button class="diagram-preview" aria-label={`Expand ${title}`} onclick={openFullscreen}>
+      <img src={imageUrl} alt={`${title}. Text version follows.`} />
+      <span>Expand diagram ↗</span>
+    </button>
   {:else if error}
     <p>{error}</p>
   {:else}
@@ -49,6 +59,30 @@
   </details>
 </div>
 
+<dialog class="diagram-fullscreen" aria-label={`${title} fullscreen`} bind:this={fullscreen}>
+  <div class="fullscreen-toolbar">
+    <strong>{title}</strong>
+    <div class="fullscreen-actions">
+      <button aria-label="Zoom out" disabled={zoom <= 50} onclick={() => (zoom -= 25)}>−</button>
+      <span>{zoom}%</span>
+      <button aria-label="Zoom in" disabled={zoom >= 300} onclick={() => (zoom += 25)}>+</button>
+      <button onclick={() => (zoom = 100)}>Reset</button>
+      <button onclick={() => fullscreen.close()}>Close ✕</button>
+    </div>
+  </div>
+  <div class="fullscreen-canvas">
+    {#if imageUrl}<img
+        src={imageUrl}
+        alt={`${title}. Text version follows.`}
+        style:width={`${zoom}%`}
+      />{/if}
+  </div>
+  <details class="diagram-source">
+    <summary>Read {title} as text</summary>
+    <pre>{source}</pre>
+  </details>
+</dialog>
+
 <style>
   .diagram {
     overflow: auto;
@@ -57,11 +91,26 @@
     border-radius: 10px;
     background: var(--sui-surface);
   }
-  img {
+  .diagram-preview {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    color: var(--sui-primary);
+    background: transparent;
+    cursor: zoom-in;
+    text-align: right;
+  }
+  .diagram-preview img {
     display: block;
     max-width: 100%;
     height: auto;
     margin: 0 auto;
+  }
+  .diagram-preview span {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
   }
   p {
     margin: 0;
@@ -79,5 +128,58 @@
   }
   summary {
     cursor: pointer;
+  }
+  .diagram-fullscreen {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    max-height: none;
+    margin: 0;
+    padding: 16px;
+    border: 0;
+    color: var(--sui-foreground);
+    background: var(--sui-canvas);
+  }
+  .diagram-fullscreen[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .diagram-fullscreen::backdrop {
+    background: rgb(0 0 0 / 70%);
+  }
+  .fullscreen-toolbar,
+  .fullscreen-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .fullscreen-toolbar {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .fullscreen-actions button {
+    padding: 6px 10px;
+    border: 1px solid var(--sui-border);
+    border-radius: 6px;
+    color: var(--sui-foreground);
+    background: var(--sui-surface);
+  }
+  .fullscreen-canvas {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid var(--shell-divider);
+    border-radius: 10px;
+    background: var(--sui-surface);
+  }
+  .fullscreen-canvas img {
+    display: block;
+    min-width: 0;
+    max-width: none;
+    height: auto;
+    margin: auto;
   }
 </style>
