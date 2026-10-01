@@ -93,6 +93,7 @@
   let appliedBinaryPath = getSetting('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
   let agentAvailability = $state<AgentAvailability[]>([]);
+  let agentDetectionError = $state('');
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
   let recentThreadKeys = $state<string[]>(
     loadRecentThreadKeys(getSetting('sai-recent-agent-threads'), savedAgentThreads),
@@ -537,6 +538,7 @@
       setupError,
       busy: connecting || running || sending,
       agents: agentAvailability,
+      agentsError: agentDetectionError,
     };
   }
 
@@ -546,6 +548,16 @@
     } catch (cause) {
       error = `Could not sync settings: ${describe(cause)}`;
     }
+  }
+
+  async function detectAgents() {
+    agentDetectionError = '';
+    try {
+      agentAvailability = await acp.agents();
+    } catch (cause) {
+      agentDetectionError = `Could not detect agents: ${describe(cause)}`;
+    }
+    await sendSettingsState();
   }
 
   async function openSettings() {
@@ -591,17 +603,21 @@
     let stopCloseRequest: (() => void) | undefined;
     if (isTauri()) {
       void getCurrentWindow()
-        .onCloseRequested(async (event) => {
+        .onCloseRequested((event) => {
+          event.preventDefault();
+          if (closingMain) return;
           closingMain = true;
-          try {
-            await settingsCreation?.catch(() => undefined);
-            const settings = await WebviewWindow.getByLabel('settings');
-            if (settings) await settings.destroy();
-          } catch (cause) {
-            closingMain = false;
-            event.preventDefault();
-            error = `Could not close settings: ${describe(cause)}`;
-          }
+          void (async () => {
+            try {
+              await settingsCreation?.catch(() => undefined);
+              const settings = await WebviewWindow.getByLabel('settings');
+              if (settings) await settings.destroy();
+              await getCurrentWindow().destroy();
+            } catch (cause) {
+              closingMain = false;
+              error = `Could not close settings: ${describe(cause)}`;
+            }
+          })();
         })
         .then((unlisten) => (stopCloseRequest = unlisten));
       void listen(settingsRequest, () => void sendSettingsState()).then(
@@ -613,17 +629,12 @@
         else if (action.type === 'binary') {
           binaryPath = action.value;
           void retryRuntime();
-        } else if (action.type === 'detect-agents')
-          void acp.agents().then((agents) => (agentAvailability = agents));
+        } else if (action.type === 'detect-agents') void detectAgents();
         else if (action.type === 'restart-setup') void restartSetup();
         void sendSettingsState();
       }).then((unlisten) => (stopSettingsAction = unlisten));
     }
-    if (isTauri())
-      void acp
-        .agents()
-        .then((agents) => (agentAvailability = agents))
-        .catch((cause) => (runtimeError = `Could not detect agents: ${describe(cause)}`));
+    if (isTauri()) void detectAgents();
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
     diffPollTimer = setInterval(() => {
@@ -1217,6 +1228,7 @@
   function clearSelectedSession() {
     saveViewState();
     sessionID = null;
+    if (mobileView === 'details') mobileView = 'chat';
     selectedSession = null;
     resetTimeline();
     snapshot = { plan: null, questions: null };

@@ -94,14 +94,17 @@
     <nav>
       <button
         class:active={selectedSection === 'general'}
+        aria-current={selectedSection === 'general' ? 'page' : undefined}
         onclick={() => (selectedSection = 'general')}>General</button
       >
       <button
         class:active={selectedSection === 'opencode'}
+        aria-current={selectedSection === 'opencode' ? 'page' : undefined}
         onclick={() => (selectedSection = 'opencode')}>OpenCode</button
       >
       <button
         class:active={selectedSection === 'agents'}
+        aria-current={selectedSection === 'agents' ? 'page' : undefined}
         onclick={() => (selectedSection = 'agents')}>Agents</button
       >
     </nav>
@@ -196,6 +199,9 @@
       <h1>Agents</h1>
       <section class="settings-card">
         <h2>Detected agents</h2>
+        {#if snapshot?.agentsError}<p class="runtime-diagnostic" role="alert">
+            {snapshot.agentsError}
+          </p>{/if}
         {#each snapshot?.agents ?? [] as agent (agent.id)}<p class="runtime-binary">
             <strong>{agent.name}</strong>: {agent.binaryPath ?? agent.reason ?? 'Unavailable'}
           </p>{/each}

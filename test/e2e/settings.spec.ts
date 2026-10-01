@@ -103,7 +103,15 @@ describe('disk-backed settings', () => {
   it('opens one native settings window with the gear and Command comma', async () => {
     await openSettings();
     await expect($('.settings-window')).toBeDisplayed();
+    await expect($('.settings-navigation button:nth-child(1)')).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
     await $('.settings-navigation button:nth-child(3)').click();
+    await expect($('.settings-navigation button:nth-child(3)')).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
     await expect($('.settings-card')).toHaveText(expect.stringContaining('Detected agents'));
     await browser.tauri.switchWindow('main');
     await browser.keys(['Meta', ',']);

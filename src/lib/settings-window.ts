@@ -17,6 +17,7 @@ export type SettingsSnapshot = {
   setupError: string;
   busy: boolean;
   agents: AgentAvailability[];
+  agentsError: string;
 };
 
 export type SettingsAction =
