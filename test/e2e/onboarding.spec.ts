@@ -3,15 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { returnToWorkspace, openSettings } from './settings-window';
 
 async function openDiagnostics() {
-  const settings = $('details.runtime-settings');
-  if ((await settings.getAttribute('open')) === null)
-    await $('details.runtime-settings summary').click();
-  const diagnostics = $('.repository-diagnostics');
-  if ((await diagnostics.getAttribute('open')) === null)
-    await $('.repository-diagnostics summary').click();
-  return diagnostics;
+  await openSettings();
+  await $('.settings-navigation button:nth-child(2)').click();
+  return $('.repository-diagnostics');
 }
 
 describe('repository setup', () => {
@@ -106,31 +103,32 @@ describe('repository setup', () => {
     await $(
       `.project-repository-select[title="${repository}"], .project-repository-select[title="${realpathSync(repository)}"]`,
     ).click();
+    const diagnostics = await openDiagnostics();
     try {
       await browser.waitUntil(
-        async () => (await (await openDiagnostics()).getText()).includes(realpathSync(repository)),
+        async () => (await diagnostics.getText()).includes(realpathSync(repository)),
         { timeout: 20_000, timeoutMsg: 'App did not inspect the selected repository' },
       );
     } catch (cause) {
       console.error('Repository setup diagnostic', {
         savedDirectory: await browser.execute(() => localStorage.getItem('sai-directory')),
         setup: await $('.repository-diagnostics').getText(),
-        sidebar: await $('.sidebar').getText(),
       });
       throw cause;
     }
-    const diagnostics = await openDiagnostics();
+    await browser.tauri.switchWindow('main');
     await expect($('.setup-panel')).not.toExist();
+    await browser.tauri.switchWindow('settings');
     await expect(diagnostics).toHaveText(expect.stringContaining(realpathSync(repository)));
-    await expect(diagnostics).toHaveText(expect.stringContaining('Plan-review plugin not loaded'));
+    await expect(diagnostics).toHaveText(expect.stringContaining('Plan-review plugin: not loaded'));
     await expect(diagnostics).toHaveText(
       expect.stringContaining('github:smykla-skalski/opencode-plugin-plan-review'),
     );
+    await returnToWorkspace();
     await expect($('[aria-label="New plan"]')).toBeDisabled();
     if ((await $('.topbar-actions').getText()).includes('Ready'))
       await expect($('.composer textarea')).toBeEnabled();
     else await expect($('.composer textarea')).not.toExist();
-    await $('details.runtime-settings summary').click();
   });
 
   it('creates and opens a worktree in the Sail workspace', async () => {
@@ -177,9 +175,9 @@ describe('repository setup', () => {
       'page',
     );
     await expect(await openDiagnostics()).toHaveText(
-      expect.stringContaining('Plan-review plugin not loaded'),
+      expect.stringContaining('Plan-review plugin: not loaded'),
     );
-    await $('details.runtime-settings summary').click();
+    await returnToWorkspace();
   });
 
   it('creates a worktree from an explicitly selected base branch', async () => {

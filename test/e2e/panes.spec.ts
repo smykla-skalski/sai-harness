@@ -63,19 +63,17 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'd']);
     await expect($('.pane-split.row')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(2);
-    const header = await browser.execute(() => ({
-      right: document.querySelector('.topbar-actions')!.getBoundingClientRect().right,
-      themeRight: document.querySelector('button[aria-label$=" theme"]')!.getBoundingClientRect()
-        .right,
-      themeScrollWidth: document.querySelector<HTMLElement>('button[aria-label$=" theme"]')!
-        .scrollWidth,
-      themeClientWidth: document.querySelector<HTMLElement>('button[aria-label$=" theme"]')!
-        .clientWidth,
-      viewport: innerWidth,
-    }));
+    const header = await browser.execute(() => {
+      const actions = document.querySelector<HTMLElement>('.topbar-actions')!;
+      return {
+        right: actions.getBoundingClientRect().right,
+        scrollWidth: actions.scrollWidth,
+        clientWidth: actions.clientWidth,
+        viewport: innerWidth,
+      };
+    });
     expect(header.right).toBeLessThanOrEqual(header.viewport + 1);
-    expect(header.themeRight).toBeLessThanOrEqual(header.viewport + 1);
-    expect(header.themeScrollWidth).toBeLessThanOrEqual(header.themeClientWidth + 1);
+    expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth + 1);
     await capture('desktop-agent-two-panes');
     await $('.pane-divider').click();
     await browser.keys('ArrowRight');

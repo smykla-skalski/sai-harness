@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Sail is a desktop front end for OpenCode. Install **OpenCode v2.0.19** separately; the app detects common executable locations and lets you select a binary in **OpenCode settings**. It starts its own loopback OpenCode server. Keep the same OpenCode profile when reopening the app so sessions and plugin data remain available. The supported client and plugin revisions are listed in [validation.md](validation.md).
+Sail is a desktop front end for OpenCode. Install **OpenCode v2.0.19** separately; the app detects common executable locations and lets you select a binary in **Settings → OpenCode**. Open Settings with **⌘,** or the gear at the bottom of the project sidebar. Sail starts its own loopback OpenCode server. Keep the same OpenCode profile when reopening the app so sessions and plugin data remain available. The supported client and plugin revisions are listed in [validation.md](validation.md).
 
 Install the tested CLI with npm and check its version:
 

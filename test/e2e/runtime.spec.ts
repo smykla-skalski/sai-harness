@@ -1,6 +1,7 @@
 import { browser, $, expect } from '@wdio/globals';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { returnToWorkspace, openSettings } from './settings-window';
 
 declare global {
   interface Window {
@@ -45,21 +46,27 @@ describe('OpenCode runtime', () => {
     const initial = await runtimeInfo();
     expect(initial.binaryPath).toContain('opencode');
 
-    await $('.runtime-settings summary').click();
-    await expect($('.runtime-binary')).toHaveText(expect.stringContaining('Detected:'));
+    await openSettings();
+    await $('.settings-navigation button:nth-child(2)').click();
+    await expect($('.runtime-binary[title]')).toHaveText(expect.stringContaining('Detected:'));
     await $('#opencode-bin').setValue(join(tmpdir(), 'no-such-opencode-for-sai'));
-    await $('.runtime-settings button').click();
+    await $('button=Save and reconnect').click();
     await expect($('.runtime-diagnostic')).toBeDisplayed();
     await expect($('.runtime-diagnostic')).toHaveText(
       expect.stringContaining('The current OpenCode connection remains active.'),
     );
-    await expect($('.sidebar-footer')).toHaveText('OpenCode connected');
+    await browser.tauri.switchWindow('main');
+    await expect($('.sidebar-footer')).toHaveText(expect.stringContaining('OpenCode connected'));
     expect((await runtimeInfo()).url).toBe(initial.url);
 
+    await browser.tauri.switchWindow('settings');
     await $('#opencode-bin').setValue('');
-    await $('.runtime-settings button').click();
-    await expect($('.sidebar-footer')).toHaveText('OpenCode connected');
+    await $('button=Save and reconnect').click();
+    await browser.tauri.switchWindow('main');
+    await expect($('.sidebar-footer')).toHaveText(expect.stringContaining('OpenCode connected'));
     expect((await runtimeInfo()).url).not.toBe(initial.url);
+    await browser.tauri.switchWindow('settings');
+    await returnToWorkspace();
   });
 
   it('recovers after its OpenCode child exits', async () => {

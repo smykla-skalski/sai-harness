@@ -483,11 +483,37 @@ button:disabled {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   padding: 15px 10px 2px;
   border-top: 1px solid var(--shell-divider);
   color: var(--shell-muted);
   font-size: 12px;
+}
+.sidebar-runtime {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+.settings-launch {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 7px;
+  color: var(--shell-muted);
+  background: transparent;
+}
+.settings-launch:hover {
+  color: var(--sui-foreground);
+  background: var(--shell-selected);
+}
+.settings-launch svg {
+  width: 19px;
+  height: 19px;
 }
 .status-dot {
   width: 7px;
@@ -546,75 +572,129 @@ button:disabled {
   gap: 10px;
   white-space: nowrap;
 }
-.runtime-settings {
-  position: relative;
-  font-size: 12px;
-}
-.runtime-settings summary {
-  cursor: pointer;
-}
-.runtime-settings .compact-hidden {
-  margin-left: 0.25em;
-}
-.runtime-settings-panel {
-  position: absolute;
-  z-index: 10;
-  top: 28px;
-  right: 0;
-  box-sizing: border-box;
-  width: min(320px, 80vw);
-  max-height: calc(100vh - 76px);
-  overflow-y: auto;
-  padding: 16px;
-  border: 1px solid var(--sui-border);
-  border-radius: 10px;
-  color: var(--sui-foreground);
-  background: var(--sui-surface);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
-  white-space: normal;
-}
-.runtime-settings-panel p {
-  margin: 0 0 10px;
-  overflow-wrap: anywhere;
-}
 .runtime-diagnostic {
   color: var(--sui-danger);
 }
 .runtime-binary {
   color: var(--sui-muted);
 }
-.runtime-settings-panel label {
-  display: block;
-  margin-bottom: 5px;
+.settings-window {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  background: var(--sui-canvas);
 }
-.runtime-settings-panel input {
-  box-sizing: border-box;
-  width: 100%;
-  margin-bottom: 10px;
-  padding: 8px;
-  border: 1px solid var(--sui-border);
-  border-radius: 6px;
+.settings-navigation {
+  padding: 26px 14px;
+  border-right: 1px solid var(--shell-divider);
+  background: var(--shell-sidebar);
+}
+.settings-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 30px;
+}
+.settings-navigation nav {
+  display: grid;
+  gap: 4px;
+}
+.settings-navigation button {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
   color: var(--sui-foreground);
+  background: transparent;
+  text-align: left;
+}
+.settings-navigation button.active,
+.settings-navigation button:hover {
+  color: var(--shell-selected-ink);
+  background: var(--shell-selected);
+}
+.settings-content {
+  position: relative;
+  overflow-y: auto;
+  min-width: 0;
+  padding: 32px;
+}
+.settings-close {
+  position: absolute;
+  top: 22px;
+  right: 25px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--shell-muted);
+  background: transparent;
+  font-size: 24px;
+}
+.settings-close:hover {
+  color: var(--sui-foreground);
+  background: var(--shell-selected);
+}
+.settings-content h1 {
+  margin: 0 0 24px;
+  font-size: 25px;
+}
+.settings-card {
+  max-width: 640px;
+  margin-bottom: 18px;
+  padding: 20px;
+  border: 1px solid var(--sui-border);
+  border-radius: 12px;
   background: var(--sui-surface);
 }
-.repository-diagnostics {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--shell-divider);
+.settings-card h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
 }
-.repository-diagnostics summary {
-  color: var(--sui-primary);
-  font-weight: 700;
+.settings-card p,
+.settings-card li {
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
-.repository-diagnostics ul {
-  padding-left: 18px;
+.settings-card .runtime-binary {
+  font-size: 13px;
+}
+.settings-card label {
+  display: block;
+  margin-bottom: 6px;
+}
+.settings-card input,
+.settings-card select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 14px;
+  padding: 9px;
+  border: 1px solid var(--sui-border);
+  border-radius: 7px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+  font: inherit;
+}
+.settings-card code {
   overflow-wrap: anywhere;
 }
-.repository-diagnostics li {
-  margin: 0 0 8px;
+.settings-card ul {
+  padding-left: 20px;
 }
-.repository-diagnostics code {
-  overflow-wrap: anywhere;
+@media (max-width: 620px) {
+  .settings-window {
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+  .settings-navigation {
+    padding: 18px 8px;
+  }
+  .settings-content {
+    padding: 20px;
+  }
+  .settings-card {
+    padding: 16px;
+  }
 }
 .workspace {
   display: grid;
@@ -1130,15 +1210,6 @@ button:disabled {
   }
 }
 @media (max-width: 850px) {
-  .runtime-settings-panel {
-    position: fixed;
-    top: 84px;
-    right: 12px;
-    left: 12px;
-    width: auto;
-    max-height: calc(100vh - 96px);
-    overflow: auto;
-  }
   .app-shell {
     display: block;
     position: relative;

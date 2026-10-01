@@ -1,8 +1,9 @@
-import { browser, $, $$, expect } from '@wdio/globals';
+import { browser, $, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { returnToWorkspace, openSettings } from './settings-window';
 
 const output = process.env.SAIL_VISUAL_AUDIT_DIR;
 
@@ -25,7 +26,6 @@ async function layout() {
       '.worktree-dialog',
       '.worktree-dialog-heading',
       '.worktree-form-actions',
-      '.runtime-settings-panel',
     ];
     const boxes = Object.fromEntries(
       selectors.flatMap((selector) => {
@@ -154,29 +154,28 @@ describe('visual layout audit', () => {
         await capture(`${width}x${height}-worktree-dialog-bottom`);
       await $('.worktree-dialog .worktree-cancel').click();
       if (width === 390) {
-        await $$('details.runtime-settings summary')[0].click();
+        await openSettings();
+        await browser.setWindowSize(520, 420);
+        await capture('compact-general-settings');
+        await $('.settings-navigation button:nth-child(2)').click();
         const settingsReachable = await browser.execute(() => {
-          const panel = document.querySelector<HTMLElement>(
-            '.runtime-settings[open] .runtime-settings-panel',
-          );
-          if (!panel) return false;
-          const rect = panel.getBoundingClientRect();
-          const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 20);
-          return !!target && panel.contains(target) && rect.left >= 0 && rect.right <= innerWidth;
+          const panel = document.querySelector<HTMLElement>('.settings-content');
+          return !!panel && document.documentElement.scrollWidth <= innerWidth;
         });
         expect(settingsReachable).toBe(true);
         await capture('mobile-opencode-settings');
-        if ((await $('.repository-diagnostics').getAttribute('open')) === null)
-          await $('.repository-diagnostics summary').click();
+        await browser.execute(() =>
+          document.querySelector('.repository-diagnostics')?.scrollIntoView({ block: 'start' }),
+        );
         await capture('mobile-repository-diagnostics');
         const restartBottom = await browser.execute(() => {
           const button = document.querySelector<HTMLElement>('.repository-diagnostics button')!;
           button.scrollIntoView({ block: 'end' });
-          return button.getBoundingClientRect().bottom;
+          return { bottom: button.getBoundingClientRect().bottom, height: innerHeight };
         });
-        expect(restartBottom).toBeLessThanOrEqual(size.viewport.height + 1);
+        expect(restartBottom.bottom).toBeLessThanOrEqual(restartBottom.height + 1);
         await capture('mobile-repository-diagnostics-bottom');
-        await $$('details.runtime-settings summary')[0].click();
+        await returnToWorkspace();
       }
     }, Promise.resolve());
 
@@ -187,13 +186,12 @@ describe('visual layout audit', () => {
     await $('.project-group-heading button:last-child').click();
     await capture('desktop-group-menu');
     await $('.project-group-heading button:last-child').click();
-    await $$('details.runtime-settings summary')[0].click();
-    if ((await $('.repository-diagnostics').getAttribute('open')) !== null)
-      await $('.repository-diagnostics summary').click();
+    await openSettings();
+    await capture('desktop-general-settings');
+    await $('.settings-navigation button:nth-child(2)').click();
     await capture('desktop-opencode-settings');
-    await $('.repository-diagnostics summary').click();
-    await browser.waitUntil(
-      async () => (await $('.repository-diagnostics').getAttribute('open')) !== null,
+    await browser.execute(() =>
+      document.querySelector('.repository-diagnostics')?.scrollIntoView({ block: 'start' }),
     );
     await capture('desktop-repository-diagnostics');
     const desktopRestart = await browser.execute(() => {
@@ -203,10 +201,9 @@ describe('visual layout audit', () => {
     });
     expect(desktopRestart.bottom).toBeLessThanOrEqual(desktopRestart.viewport + 1);
     await capture('desktop-repository-diagnostics-bottom');
-    await $$('details.runtime-settings summary')[0].click();
-    await $$('details.runtime-settings summary')[1].click();
+    await $('.settings-navigation button:nth-child(3)').click();
     await capture('desktop-agent-settings');
-    await $$('details.runtime-settings summary')[1].click();
+    await returnToWorkspace();
     await $(`[aria-label="Create worktree for ${path.split('/').at(-1)}"]`).click();
     await $(`[aria-label="Worktree name for ${path.split('/').at(-1)}"]`).setValue('visual-audit');
     await browser.execute(() => {
@@ -241,8 +238,17 @@ describe('visual layout audit', () => {
     await $('.topbar-actions button[title="Toggle Changes (⌘L)"]').click();
     await expect($('.diff-files')).toHaveText(expect.stringContaining('visual-change.txt'));
     await capture('desktop-agent-changes');
-    const darkButton = $('button[aria-label="Dark theme"]');
-    if (await darkButton.isExisting()) await darkButton.click();
+    await openSettings();
+    await browser.execute(() => {
+      const select = document.querySelector<HTMLSelectElement>('#theme-select')!;
+      select.value = 'dark';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await returnToWorkspace();
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => document.documentElement.dataset.suiTheme)) === 'dark',
+    );
     await capture('desktop-dark-changes');
     await browser.setWindowSize(390, 600);
     await $('.mobile-switcher button:nth-child(3)').click();
@@ -292,8 +298,37 @@ describe('visual layout audit', () => {
         { repositories: [selected], groups, worktrees: { [selected]: worktrees } },
         threads,
       );
+      const previousPage = await browser.execute(() => performance.timeOrigin);
       await browser.refresh();
-      if (width === 320) await $('.mobile-switcher button:nth-child(1)').click();
+      await browser.waitUntil(
+        async () => (await browser.execute(() => performance.timeOrigin)) !== previousPage,
+      );
+      await $('.app-shell').waitForDisplayed();
+      if (width === 320) {
+        await $('.mobile-switcher button:nth-child(1)').click();
+        await expect($('.app-shell')).toHaveAttribute('data-mobile-view', 'sessions');
+        await expect($('.sidebar')).toBeDisplayed();
+      }
+      await browser.execute(() =>
+        document.querySelector('.project-group-toggle')?.scrollIntoView(),
+      );
+      try {
+        await expect($('.project-group-toggle')).toBeDisplayed();
+      } catch (cause) {
+        console.error('Project group visibility diagnostic', {
+          seed,
+          state: await browser.execute(() => ({
+            view: document.querySelector('.app-shell')?.getAttribute('data-mobile-view'),
+            sidebar: getComputedStyle(document.querySelector('.sidebar')!).display,
+            group: document
+              .querySelector('.project-group-toggle')
+              ?.getBoundingClientRect()
+              .toJSON(),
+            contentScroll: document.querySelector('.sidebar-content')?.scrollTop,
+          })),
+        });
+        throw cause;
+      }
       await capture(`fuzz-${String(seed).padStart(2, '0')}-${width}`);
       console.log(
         `FUZZ_VISIBILITY_${seed}`,
@@ -307,7 +342,6 @@ describe('visual layout audit', () => {
           ),
         ),
       );
-      await expect($('.project-group-toggle')).toBeDisplayed();
       const findings = await browser.execute(() => {
         const sidebar = document.querySelector('.sidebar')!.getBoundingClientRect();
         const footer = document.querySelector('.sidebar-footer')!.getBoundingClientRect();

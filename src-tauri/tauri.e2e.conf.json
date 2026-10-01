@@ -19,9 +19,10 @@
       },
       "capabilities": [
         "default",
+        "settings",
         {
           "identifier": "e2e",
-          "windows": ["main"],
+          "windows": ["main", "settings"],
           "permissions": ["wdio:default", "wdio-webdriver:default"]
         }
       ]

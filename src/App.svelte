@@ -2,6 +2,9 @@
   import { onMount, tick } from 'svelte';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { invoke, isTauri } from '@tauri-apps/api/core';
+  import { emitTo, listen } from '@tauri-apps/api/event';
+  import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
   import { isSessionNotFoundError } from '@opencode/client';
@@ -52,7 +55,14 @@
   import { fileUri } from './lib/attachments';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
   import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
-  import { inspectRepository, type SetupCheck, type SetupReport } from './lib/onboarding';
+  import { inspectRepository, type SetupReport } from './lib/onboarding';
+  import {
+    settingsAction,
+    settingsRequest,
+    settingsState,
+    type SettingsAction,
+    type SettingsSnapshot,
+  } from './lib/settings-window';
   import {
     addWorktree,
     assignRepository,
@@ -73,7 +83,6 @@
   let binaryPath = $state(getSetting('sai-opencode-bin') ?? '');
   let appliedBinaryPath = getSetting('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
-  let runtimeSettingsOpen = $state(false);
   let agentAvailability = $state<AgentAvailability[]>([]);
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
   let paletteQuery = $state('');
@@ -109,7 +118,9 @@
   let setup = $state<SetupReport | null>(null);
   let setupError = $state('');
   let setupLoading = $state(false);
-  let setupOpen = $state(false);
+  let openingSettings = false;
+  let settingsCreation: Promise<void> | null = null;
+  let closingMain = false;
   const setupRestarted = new SvelteSet<string>();
   let lastSetupProbe = 0;
   let setupProbeCount = 0;
@@ -492,25 +503,107 @@
   );
   let diffAnnotations = $derived(annotateDiffs(diffs, snapshot.plan, directory));
 
-  function setupRows(report: SetupReport): [string, SetupCheck][] {
-    return [
-      ['OpenCode location', report.location],
-      ['Plan-review plugin', report.plugin],
-      ['Architect agent', report.architect],
-      ['Plan RPC', report.rpc],
-      ['Provider and model', report.model],
-      ['Architect model', report.planModel],
-    ];
-  }
-
   function setTheme(value: boolean) {
     dark = value;
     document.documentElement.dataset.suiTheme = value ? 'dark' : 'light';
     setSetting('sai-theme', value ? 'dark' : 'light');
   }
 
+  function settingsSnapshot(): SettingsSnapshot {
+    return {
+      theme: dark ? 'dark' : 'light',
+      binaryPath,
+      activeBinary,
+      runtimeState,
+      runtimeError,
+      directory,
+      setup,
+      setupLoading,
+      setupError,
+      busy: connecting || running || sending,
+      agents: agentAvailability,
+    };
+  }
+
+  async function sendSettingsState() {
+    try {
+      await emitTo('settings', settingsState, settingsSnapshot());
+    } catch (cause) {
+      error = `Could not sync settings: ${describe(cause)}`;
+    }
+  }
+
+  async function openSettings() {
+    if (openingSettings || closingMain) return;
+    openingSettings = true;
+    try {
+      const existing = await WebviewWindow.getByLabel('settings');
+      if (closingMain) return;
+      if (existing) {
+        await existing.show();
+        await existing.setFocus();
+        await sendSettingsState();
+        return;
+      }
+      const created = new WebviewWindow('settings', {
+        url: 'index.html?window=settings',
+        title: 'Sail Settings',
+        width: 760,
+        height: 620,
+        minWidth: 520,
+        minHeight: 420,
+        center: true,
+      });
+      settingsCreation = new Promise<void>((resolve, reject) => {
+        void created.once('tauri://created', () => resolve());
+        void created.once('tauri://error', (event) => reject(event.payload));
+      });
+      await settingsCreation;
+      if (closingMain) await created.close();
+      else await created.setFocus();
+    } catch (cause) {
+      error = `Could not open settings: ${describe(cause)}`;
+    } finally {
+      settingsCreation = null;
+      openingSettings = false;
+    }
+  }
+
   onMount(() => {
     setTheme(dark);
+    let stopSettingsRequest: (() => void) | undefined;
+    let stopSettingsAction: (() => void) | undefined;
+    let stopCloseRequest: (() => void) | undefined;
+    if (isTauri()) {
+      void getCurrentWindow()
+        .onCloseRequested(async (event) => {
+          closingMain = true;
+          try {
+            await settingsCreation?.catch(() => undefined);
+            const settings = await WebviewWindow.getByLabel('settings');
+            if (settings) await settings.destroy();
+          } catch (cause) {
+            closingMain = false;
+            event.preventDefault();
+            error = `Could not close settings: ${describe(cause)}`;
+          }
+        })
+        .then((unlisten) => (stopCloseRequest = unlisten));
+      void listen(settingsRequest, () => void sendSettingsState()).then(
+        (unlisten) => (stopSettingsRequest = unlisten),
+      );
+      void listen<SettingsAction>(settingsAction, (event) => {
+        const action = event.payload;
+        if (action.type === 'theme') setTheme(action.value === 'dark');
+        else if (action.type === 'binary') {
+          binaryPath = action.value;
+          void retryRuntime();
+        } else if (action.type === 'detect-agents')
+          void acp.agents().then((agents) => (agentAvailability = agents));
+        else if (action.type === 'restart-setup') void restartSetup();
+        void sendSettingsState();
+      }).then((unlisten) => (stopSettingsAction = unlisten));
+    }
     if (isTauri())
       void acp
         .agents()
@@ -535,6 +628,9 @@
         void refreshDiff(sessionID, selection, true);
     }, 3000);
     return () => {
+      stopSettingsRequest?.();
+      stopSettingsAction?.();
+      stopCloseRequest?.();
       disposed = true;
       eventController?.abort();
       clearTimeout(refreshTimer);
@@ -595,7 +691,6 @@
       client = null;
       runtimeState = 'error';
       runtimeError = describe(cause);
-      runtimeSettingsOpen = true;
       if (hasConnected) recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
     } finally {
       connecting = false;
@@ -617,7 +712,6 @@
       setSetting('sai-opencode-bin', candidate);
     } catch (cause) {
       runtimeError = `${describe(cause)}${runtimeState === 'connected' ? ' The current OpenCode connection remains active.' : ''}`;
-      runtimeSettingsOpen = true;
       if (runtimeState !== 'connected' && hasConnected)
         recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
     } finally {
@@ -676,7 +770,7 @@
       if (!(await restoreSession(initial))) {
         if (current !== selection || path !== directory) return;
         removeSetting(`sai-session:${path}`);
-        if (sessions[0]) await selectSession(sessions[0].id);
+        if (sessions[0]) await selectSession(sessions[0].id, true);
       }
     } else if (initial) {
       await refreshSession(initial);
@@ -844,7 +938,6 @@
     selectedAgentID = '';
     selectedModelKey = '';
     attachedFiles = [];
-    setupOpen = false;
     sessionID = null;
     mobileView = 'chat';
     newSessionMode = null;
@@ -881,7 +974,7 @@
       if (saved && (await restoreSession(saved))) return;
       if (current !== selection) return;
       if (saved) removeSetting(`sai-session:${directory}`);
-      if (sessions[0]) await selectSession(sessions[0].id);
+      if (sessions[0]) await selectSession(sessions[0].id, true);
     } catch (cause) {
       error = describe(cause);
     }
@@ -1068,7 +1161,7 @@
         return false;
       selectedSession = info;
       syncSessionChoice(info);
-      await selectSession(id);
+      await selectSession(id, true);
       return true;
     } catch (cause) {
       if (isSessionNotFoundError(cause)) return false;
@@ -1079,7 +1172,6 @@
   function clearSelectedSession() {
     saveViewState();
     sessionID = null;
-    mobileView = 'chat';
     selectedSession = null;
     resetTimeline();
     snapshot = { plan: null, questions: null };
@@ -1101,7 +1193,6 @@
     acpThread = thread;
     savePaneLayout(updatePane(paneLayout, 'main', { agent, thread }));
     mobileView = 'chat';
-    setupOpen = false;
   }
 
   function openCommandPalette() {
@@ -1376,7 +1467,7 @@
     }
   }
 
-  async function selectSession(id: string) {
+  async function selectSession(id: string, automatic = false) {
     if (!client || !directory) return;
     focusMainPane();
     acpAgent = null;
@@ -1421,13 +1512,13 @@
     historyLoading = false;
     sideTab = viewStates.get(viewKey())?.sideTab ?? 'plan';
     selectedFilePath = viewStates.get(viewKey())?.selectedFilePath ?? null;
-    mobileView = 'chat';
+    if (!automatic) mobileView = 'chat';
     error = '';
     setSetting(`sai-session:${directory}`, id);
     await refreshSession(id, current);
     if (current === selection) {
       await restoreViewState();
-      if (window.matchMedia('(max-width: 850px)').matches) chatArea?.focus();
+      if (!automatic && window.matchMedia('(max-width: 850px)').matches) chatArea?.focus();
     }
   }
 
@@ -2144,6 +2235,11 @@
   }
 
   function keydownWorkspace(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key === ',') {
+      event.preventDefault();
+      if (!event.repeat) void openSettings();
+      return;
+    }
     if (
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
@@ -2423,9 +2519,30 @@
           </div>{/if}
       </div>
     </div>
-    <div class="sidebar-footer" role="status">
-      <span class:connected={runtimeState === 'connected'} class="status-dot" aria-hidden="true"
-      ></span><span>OpenCode {runtimeState}</span>
+    <div class="sidebar-footer">
+      <button
+        class="settings-launch"
+        aria-label="Settings"
+        title="Settings (⌘,)"
+        onclick={openSettings}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          ><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" /><path
+            d="m19.4 13.4 1.1.9-1.7 3-1.4-.4a8 8 0 0 1-1.8 1.1l-.3 1.5h-3.5l-.3-1.5a8 8 0 0 1-1.8-1.1l-1.4.4-1.7-3 1.1-.9a8 8 0 0 1 0-2.8l-1.1-.9 1.7-3 1.4.4a8 8 0 0 1 1.8-1.1l.3-1.5h3.5l.3 1.5a8 8 0 0 1 1.8 1.1l1.4-.4 1.7 3-1.1.9a8 8 0 0 1 0 2.8Z"
+          /></svg
+        >
+      </button>
+      <span class="sidebar-runtime" role="status"
+        ><span class:connected={runtimeState === 'connected'} class="status-dot" aria-hidden="true"
+        ></span><span>OpenCode {runtimeState}</span></span
+      >
     </div>
   </aside>
   <div class="main-area">
@@ -2470,71 +2587,6 @@
                 : detailsOpen && activeSideTab === 'changes'}
             title="Toggle Changes (⌘L)">Changes</Button
           >{/if}
-        <details class="runtime-settings" bind:open={runtimeSettingsOpen}>
-          <summary>OpenCode<span class="compact-hidden"> settings</span></summary>
-          <div class="runtime-settings-panel">
-            {#if runtimeError}<p class="runtime-diagnostic" role="alert">{runtimeError}</p>{/if}
-            {#if activeBinary}<p class="runtime-binary" title={activeBinary}>
-                Detected: {activeBinary}
-              </p>{/if}
-            <label for="opencode-bin">Binary path</label>
-            <input
-              id="opencode-bin"
-              type="text"
-              bind:value={binaryPath}
-              placeholder="Automatic detection"
-            />
-            <Button size="sm" onclick={retryRuntime}>Save and reconnect</Button>
-            {#if directory}<details class="repository-diagnostics" bind:open={setupOpen}>
-                <summary>Repository diagnostics</summary>
-                <p class="runtime-binary" title={directory}>{directory}</p>
-                {#if setupLoading}<p role="status">Checking repository…</p>{/if}
-                {#if setupError}<p class="runtime-diagnostic" role="alert">{setupError}</p>{/if}
-                {#if setup}<ul>
-                    {#each setupRows(setup) as [label, item] (label)}<li>
-                        <strong>{label}:</strong>
-                        {item.detail}
-                      </li>{/each}
-                  </ul>{/if}
-                {#if setup?.plugin.state === 'action'}<p>
-                    Install the tested plugin in OpenCode:
-                    <code
-                      >opencode plugin add
-                      github:smykla-skalski/opencode-plugin-plan-review#fdc575ba5ffccc6420ad5b3b68372f99f70290f5</code
-                    >
-                  </p>{/if}
-                {#if setup?.model.state === 'action' || setup?.planModel.state === 'action'}<p>
-                    In OpenCode, run <code>/connect</code> to connect a provider and
-                    <code>/models</code> to enable a model.
-                  </p>{/if}
-                {#if setup?.architect.state === 'action' && setup?.plugin.state === 'ready'}<p>
-                    Configure an Architect agent in OpenCode.
-                  </p>{/if}
-                {#if !planReady}<p>Sail checks again automatically after setup changes.</p>{/if}
-                <Button
-                  size="sm"
-                  onclick={restartSetup}
-                  disabled={setupLoading || connecting || running || sending}
-                  >Restart and check</Button
-                >
-              </details>{/if}
-          </div>
-        </details>
-        <details class="runtime-settings">
-          <summary>Agent<span class="compact-hidden"> settings</span></summary>
-          <div class="runtime-settings-panel">
-            {#each agentAvailability as agent (agent.id)}
-              <p class="runtime-binary">
-                <strong>{agent.name}</strong>: {agent.binaryPath ?? agent.reason ?? 'Unavailable'}
-              </p>
-            {/each}
-            <Button
-              size="sm"
-              onclick={() => void acp.agents().then((agents) => (agentAvailability = agents))}
-              >Detect again</Button
-            >
-          </div>
-        </details>
         {#if !acpAgent}<span role="status"
             ><Badge tone={workReady ? 'success' : 'neutral'}
               >{running
@@ -2547,13 +2599,7 @@
                       ? 'Model needed'
                       : 'Unavailable'}</Badge
             ></span
-          >{/if}<Button
-          variant="ghost"
-          size="sm"
-          aria-label={`${dark ? 'Light' : 'Dark'} theme`}
-          onclick={() => setTheme(!dark)}
-          >{dark ? 'Light' : 'Dark'}<span class="compact-hidden"> theme</span></Button
-        >
+          >{/if}
       </div>
     </header>
     {#if $settingsError}<p class="notice error" role="alert">{$settingsError}</p>{/if}
