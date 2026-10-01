@@ -25,6 +25,7 @@ struct TerminalOutput {
 
 struct TerminalSession {
     directory: PathBuf,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     process_id: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -157,6 +158,7 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
         exit_code: None,
         subscriber: None,
     }));
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let process_id = child.process_id();
     let killer = child.clone_killer();
     let child = Arc::new(Mutex::new(child));
@@ -198,6 +200,7 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
     });
     Ok(TerminalSession {
         directory,
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         process_id,
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
