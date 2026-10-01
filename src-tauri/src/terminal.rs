@@ -66,11 +66,23 @@ fn default_editor() -> String {
             "/Applications/Zed.app/Contents/MacOS/cli",
         ] {
             if Path::new(candidate).is_file() {
-                return candidate.to_string();
+                return shell_words::quote(candidate).into_owned();
             }
         }
     }
     "code".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_editor;
+
+    #[test]
+    fn default_editor_path_survives_argument_parsing() {
+        let editor = default_editor();
+        let parts = shell_words::split(&editor).expect("valid default editor");
+        assert_eq!(parts.len(), 1);
+    }
 }
 
 fn editor_program(program: &str) -> PathBuf {
