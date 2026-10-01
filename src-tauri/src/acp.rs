@@ -1,0 +1,506 @@
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, State};
+
+struct AgentDefinition {
+    id: &'static str,
+    name: &'static str,
+    executable: &'static str,
+    package: &'static str,
+    binary_env: Option<&'static str>,
+}
+
+const AGENTS: &[AgentDefinition] = &[
+    AgentDefinition {
+        id: "claude",
+        name: "Claude",
+        executable: "claude",
+        package: "@agentclientprotocol/claude-agent-acp@0.84.0",
+        binary_env: None,
+    },
+    AgentDefinition {
+        id: "codex",
+        name: "Codex",
+        executable: "codex",
+        package: "@agentclientprotocol/codex-acp@2.0.0",
+        binary_env: Some("CODEX_PATH"),
+    },
+];
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAvailability {
+    id: String,
+    name: String,
+    binary_path: Option<String>,
+    available: bool,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentEvent {
+    agent: String,
+    message: Value,
+}
+
+struct Connection {
+    child: Mutex<Child>,
+    input: Mutex<ChildStdin>,
+    pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
+    next_id: AtomicU64,
+    alive: AtomicBool,
+    capabilities: Mutex<Value>,
+    ready: Condvar,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Connection {
+    fn terminate(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.alive.store(false, Ordering::Release);
+        self.ready.notify_all();
+    }
+
+    fn write(&self, message: &Value) -> Result<(), String> {
+        let mut input = self.input.lock().map_err(|error| error.to_string())?;
+        serde_json::to_writer(&mut *input, message).map_err(|error| error.to_string())?;
+        input.write_all(b"\n").map_err(|error| error.to_string())?;
+        input.flush().map_err(|error| error.to_string())
+    }
+
+    fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+        if !self.alive.load(Ordering::Acquire) {
+            return Err("Agent process stopped. Reopen the thread to reconnect.".into());
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = mpsc::channel();
+        self.pending
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(id, sender);
+        if let Err(error) =
+            self.write(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
+        {
+            self.pending
+                .lock()
+                .map_err(|cause| cause.to_string())?
+                .remove(&id);
+            return Err(error);
+        }
+        let response = receiver.recv_timeout(timeout).map_err(|_| {
+            self.pending
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.remove(&id));
+            format!("Agent did not answer {method} in time.")
+        })?;
+        if let Some(error) = response.get("error") {
+            return Err(error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Agent request failed.")
+                .to_string());
+        }
+        Ok(response.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    fn notify(&self, method: &str, params: Value) -> Result<(), String> {
+        self.write(&json!({"jsonrpc":"2.0","method":method,"params":params}))
+    }
+
+    fn respond(&self, id: Value, result: Value) -> Result<(), String> {
+        self.write(&json!({"jsonrpc":"2.0","id":id,"result":result}))
+    }
+}
+
+#[derive(Default)]
+pub struct AgentManager(Mutex<HashMap<String, Arc<Connection>>>);
+
+impl Drop for AgentManager {
+    fn drop(&mut self) {
+        if let Ok(agents) = self.0.lock() {
+            for runtime in agents.values() {
+                runtime.terminate();
+            }
+        }
+    }
+}
+
+fn find_executable(name: &str) -> Option<PathBuf> {
+    let names = if cfg!(windows) {
+        vec![
+            format!("{name}.exe"),
+            format!("{name}.cmd"),
+            format!("{name}.bat"),
+        ]
+    } else {
+        vec![name.to_string()]
+    };
+    let mut directories: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect())
+        .unwrap_or_default();
+    if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+        let home = PathBuf::from(home);
+        directories.extend([
+            home.join(".local/bin"),
+            home.join(".local/share/mise/shims"),
+            home.join(".local/share/mise/installs/node/latest/bin"),
+            home.join(".npm-global/bin"),
+        ]);
+    }
+    directories.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+    ]);
+    directories
+        .iter()
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|path| path.is_file())
+}
+
+fn definition(id: &str) -> Result<&'static AgentDefinition, String> {
+    AGENTS
+        .iter()
+        .find(|agent| agent.id == id)
+        .ok_or_else(|| "Unknown agent.".into())
+}
+
+fn connection(manager: &AgentManager, id: &str) -> Result<Arc<Connection>, String> {
+    let agents = manager.0.lock().map_err(|error| error.to_string())?;
+    agents
+        .get(id)
+        .cloned()
+        .ok_or_else(|| "Agent is not connected.".into())
+}
+
+#[tauri::command]
+pub fn acp_agents() -> Vec<AgentAvailability> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = std::env::var_os("SAIL_ACP_TEST_AGENT") {
+        return AGENTS
+            .iter()
+            .map(|agent| AgentAvailability {
+                id: agent.id.into(),
+                name: agent.name.into(),
+                binary_path: Some(PathBuf::from(&path).to_string_lossy().into_owned()),
+                available: true,
+                reason: None,
+            })
+            .collect();
+    }
+    let npx = find_executable("npx");
+    let node = find_executable("node");
+    AGENTS
+        .iter()
+        .map(|agent| {
+            let binary = find_executable(agent.executable);
+            AgentAvailability {
+                id: agent.id.into(),
+                name: agent.name.into(),
+                binary_path: binary
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                available: binary.is_some() && npx.is_some() && node.is_some(),
+                reason: if binary.is_none() {
+                    Some(format!("Install {} first.", agent.name))
+                } else if npx.is_none() || node.is_none() {
+                    Some("Node.js and npx are required for the ACP adapter.".into())
+                } else {
+                    None
+                },
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn acp_connect(
+    app: AppHandle,
+    manager: State<'_, AgentManager>,
+    agent: String,
+) -> Result<Value, String> {
+    let definition = definition(&agent)?;
+    let mut agents = manager.0.lock().map_err(|error| error.to_string())?;
+    if let Some(existing) = agents.get(&agent) {
+        if existing.alive.load(Ordering::Acquire) {
+            let existing = Arc::clone(existing);
+            drop(agents);
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut capabilities = existing
+                .capabilities
+                .lock()
+                .map_err(|error| error.to_string())?;
+            while capabilities.is_null() && existing.alive.load(Ordering::Acquire) {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("Agent initialization timed out.".into());
+                }
+                let (next, _) = existing
+                    .ready
+                    .wait_timeout(capabilities, remaining)
+                    .map_err(|error| error.to_string())?;
+                capabilities = next;
+            }
+            return if capabilities.is_null() {
+                Err("Agent process stopped during initialization.".into())
+            } else {
+                Ok(capabilities.clone())
+            };
+        }
+    }
+    let availability = acp_agents()
+        .into_iter()
+        .find(|item| item.id == agent)
+        .ok_or("Unknown agent.")?;
+    if !availability.available {
+        return Err(availability
+            .reason
+            .unwrap_or_else(|| "Agent unavailable.".into()));
+    }
+    let node = find_executable("node").ok_or("Node.js not found.")?;
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![node.parent().ok_or("Invalid Node.js path.")?.to_path_buf()];
+    paths.extend(std::env::split_paths(&original_path));
+    #[cfg(feature = "e2e")]
+    let test_agent = std::env::var_os("SAIL_ACP_TEST_AGENT");
+    let mut command = {
+        #[cfg(feature = "e2e")]
+        if let Some(path) = test_agent {
+            let mut command = Command::new(&node);
+            command.arg(path).arg(&agent);
+            command
+        } else {
+            let npx = find_executable("npx").ok_or("npx not found.")?;
+            let mut command = Command::new(npx);
+            command.args(["--yes", definition.package]);
+            command
+        }
+        #[cfg(not(feature = "e2e"))]
+        {
+            let npx = find_executable("npx").ok_or("npx not found.")?;
+            let mut command = Command::new(npx);
+            command.args(["--yes", definition.package]);
+            command
+        }
+    };
+    command.env(
+        "PATH",
+        std::env::join_paths(paths).map_err(|error| error.to_string())?,
+    );
+    if let (Some(name), Some(binary)) = (definition.binary_env, availability.binary_path) {
+        command.env(name, binary);
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not start {}: {error}", definition.name))?;
+    let input = child.stdin.take().ok_or("Agent stdin unavailable.")?;
+    let output = child.stdout.take().ok_or("Agent stdout unavailable.")?;
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                if line.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let runtime = Arc::new(Connection {
+        child: Mutex::new(child),
+        input: Mutex::new(input),
+        pending: Mutex::new(HashMap::new()),
+        next_id: AtomicU64::new(1),
+        alive: AtomicBool::new(true),
+        capabilities: Mutex::new(Value::Null),
+        ready: Condvar::new(),
+    });
+    let reader = Arc::clone(&runtime);
+    let agent_id = agent.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let Ok(line) = line else { break };
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if message.get("method").is_some() {
+                let _ = app.emit(
+                    "acp-event",
+                    AgentEvent {
+                        agent: agent_id.clone(),
+                        message,
+                    },
+                );
+            } else if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                if let Some(sender) = reader
+                    .pending
+                    .lock()
+                    .ok()
+                    .and_then(|mut map| map.remove(&id))
+                {
+                    let _ = sender.send(message);
+                }
+            }
+        }
+        reader.alive.store(false, Ordering::Release);
+        reader.ready.notify_all();
+        if let Ok(mut pending) = reader.pending.lock() {
+            for (_, sender) in pending.drain() {
+                let _ = sender.send(json!({"error":{"message":"Agent process exited."}}));
+            }
+        }
+        let _ = app.emit(
+            "acp-event",
+            AgentEvent {
+                agent: agent_id,
+                message: json!({"method":"sail/disconnected"}),
+            },
+        );
+    });
+    agents.insert(agent, Arc::clone(&runtime));
+    drop(agents);
+    let result = runtime.request("initialize", json!({
+        "protocolVersion": 1,
+        "clientCapabilities": {"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},
+        "clientInfo":{"name":"sail","title":"Sail","version":"0.1.0"}
+    }), Duration::from_secs(60)).inspect_err(|_| {
+        runtime.terminate();
+    })?;
+    if result.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
+        runtime.terminate();
+        return Err("Agent does not support ACP v1.".into());
+    }
+    *runtime
+        .capabilities
+        .lock()
+        .map_err(|error| error.to_string())? = result.clone();
+    runtime.ready.notify_all();
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn acp_new_session(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    cwd: String,
+) -> Result<Value, String> {
+    if !PathBuf::from(&cwd).is_dir() {
+        return Err("Repository directory does not exist.".into());
+    }
+    connection(&manager, &agent)?.request(
+        "session/new",
+        json!({"cwd":cwd,"mcpServers":[]}),
+        Duration::from_secs(60),
+    )
+}
+
+#[tauri::command]
+pub fn acp_load_session(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    cwd: String,
+    session_id: String,
+) -> Result<Value, String> {
+    connection(&manager, &agent)?.request(
+        "session/load",
+        json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[]}),
+        Duration::from_secs(60),
+    )
+}
+
+#[tauri::command]
+pub async fn acp_prompt(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    session_id: String,
+    text: String,
+) -> Result<Value, String> {
+    let runtime = connection(&manager, &agent)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "session/prompt",
+            json!({
+                "sessionId":session_id,"prompt":[{"type":"text","text":text}]
+            }),
+            Duration::from_secs(60 * 60 * 3),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn acp_cancel(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    session_id: String,
+) -> Result<(), String> {
+    connection(&manager, &agent)?.notify("session/cancel", json!({"sessionId":session_id}))
+}
+
+#[tauri::command]
+pub fn acp_permission(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    request_id: Value,
+    option_id: Option<String>,
+) -> Result<(), String> {
+    let outcome = option_id
+        .map(|id| json!({"outcome":"selected","optionId":id}))
+        .unwrap_or_else(|| json!({"outcome":"cancelled"}));
+    connection(&manager, &agent)?.respond(request_id, json!({"outcome":outcome}))
+}
+
+#[tauri::command]
+pub fn acp_set_config(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    session_id: String,
+    config_id: String,
+    value: String,
+) -> Result<Value, String> {
+    connection(&manager, &agent)?.request(
+        "session/set_config_option",
+        json!({"sessionId":session_id,"configId":config_id,"value":value}),
+        Duration::from_secs(30),
+    )
+}
+
+#[tauri::command]
+pub async fn acp_authenticate(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    method_id: String,
+) -> Result<Value, String> {
+    let runtime = connection(&manager, &agent)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "authenticate",
+            json!({"methodId":method_id}),
+            Duration::from_secs(60 * 5),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}

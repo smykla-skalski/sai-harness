@@ -14,6 +14,15 @@
   import HistoryPanel from './HistoryPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import ProjectSidebar from './ProjectSidebar.svelte';
+  import AgentWorkspace from './AgentWorkspace.svelte';
+  import {
+    acp,
+    loadAgentThreads,
+    saveAgentThreads,
+    type AgentAvailability,
+    type AgentId,
+    type AgentThread,
+  } from './lib/acp';
   import {
     connect,
     type OpenCodeClient,
@@ -36,7 +45,9 @@
   } from './lib/projects';
 
   let dark = $state(localStorage.getItem('sai-theme') === 'dark');
-  const savedDirectory = localStorage.getItem('sai-directory') ?? '';
+  const savedAgentThreads = loadAgentThreads();
+  const savedDirectory =
+    localStorage.getItem('sai-directory') ?? savedAgentThreads[0]?.directory ?? '';
   let directory = $state(savedDirectory);
   let projectCatalog = $state<ProjectCatalog>(
     loadProjectCatalog(localStorage.getItem('sai-project-catalog'), savedDirectory),
@@ -45,6 +56,10 @@
   let appliedBinaryPath = localStorage.getItem('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
   let runtimeSettingsOpen = $state(false);
+  let agentAvailability = $state<AgentAvailability[]>([]);
+  let agentThreads = $state<AgentThread[]>(savedAgentThreads);
+  let acpAgent = $state<AgentId | null>(null);
+  let acpThread = $state<AgentThread | null>(null);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
   let runtimeError = $state('');
   let workReady = $state(false);
@@ -409,6 +424,11 @@
 
   onMount(() => {
     setTheme(dark);
+    if (isTauri())
+      void acp
+        .agents()
+        .then((agents) => (agentAvailability = agents))
+        .catch((cause) => (runtimeError = `Could not detect agents: ${describe(cause)}`));
     const observer = new ResizeObserver(() => (workspaceWidth = workspaceElement.clientWidth));
     observer.observe(workspaceElement);
     void initialize();
@@ -650,11 +670,13 @@
   }
 
   async function loadProject(path: string) {
-    if (!client) return;
     saveViewState();
     error = '';
     const current = ++selection;
     directory = path;
+    localStorage.setItem('sai-directory', path);
+    acpAgent = null;
+    acpThread = null;
     ++sessionRefresh;
     workReady = false;
     planReady = false;
@@ -688,7 +710,7 @@
     historyError = '';
     ++historyRefresh;
     historyLoading = false;
-    if (!(await refreshSetup(path)) || current !== selection) return;
+    if (!client || !(await refreshSetup(path)) || current !== selection) return;
     draft = viewStates.get(viewKey())?.draft ?? '';
     if (!workReady && !planReady) return;
     try {
@@ -712,8 +734,17 @@
     try {
       const report = await inspectRepository(client, path);
       if (current !== selection) return false;
-      if (path !== report.repository)
+      if (path !== report.repository) {
         saveProjectCatalog(replaceRepositoryPath(projectCatalog, path, report.repository));
+        agentThreads = agentThreads.map((thread) =>
+          thread.directory === path
+            ? Object.assign({}, thread, { directory: report.repository })
+            : thread,
+        );
+        saveAgentThreads(agentThreads);
+        if (acpThread?.directory === path)
+          acpThread = Object.assign({}, acpThread, { directory: report.repository });
+      }
       directory = report.repository;
       localStorage.setItem('sai-directory', report.repository);
       setup = report;
@@ -891,8 +922,39 @@
     localStorage.removeItem(`sai-session:${directory}`);
   }
 
+  function openAgent(agent: AgentId, thread: AgentThread | null = null) {
+    if (!directory) return;
+    saveViewState();
+    acpAgent = agent;
+    acpThread = thread;
+    mobileView = 'chat';
+    setupOpen = false;
+  }
+
+  function saveAgentThread(thread: AgentThread) {
+    agentThreads = [
+      thread,
+      ...agentThreads.filter(
+        (item) => item.agent !== thread.agent || item.sessionId !== thread.sessionId,
+      ),
+    ].toSorted((a, b) => b.updated - a.updated);
+    saveAgentThreads(agentThreads);
+    acpThread = thread;
+  }
+
+  function removeAgentThread(thread: AgentThread) {
+    agentThreads = agentThreads.filter(
+      (item) => item.agent !== thread.agent || item.sessionId !== thread.sessionId,
+    );
+    saveAgentThreads(agentThreads);
+    if (acpThread?.sessionId === thread.sessionId && acpAgent === thread.agent)
+      openAgent(thread.agent);
+  }
+
   async function selectSession(id: string) {
     if (!client || !directory) return;
+    acpAgent = null;
+    acpThread = null;
     if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
       saveViewState();
     const current = ++selection;
@@ -949,6 +1011,8 @@
 
   function newWork() {
     if (!workReady || switching || sending) return;
+    acpAgent = null;
+    acpThread = null;
     saveViewState();
     ++selection;
     sessionID = null;
@@ -979,6 +1043,8 @@
 
   async function newPlan() {
     if (!client || !directory || !planReady || switching || sending) return;
+    acpAgent = null;
+    acpThread = null;
     const path = directory;
     const current = selection;
     try {
@@ -1652,6 +1718,7 @@
 
   function keydownWorkspace(event: KeyboardEvent) {
     if (
+      acpAgent ||
       !sessionID ||
       event.repeat ||
       event.key.toLowerCase() !== 'l' ||
@@ -1666,7 +1733,7 @@
   }
 
   function focusWorkspace() {
-    if (detailsOpen && activeSideTab === 'changes') void refreshDiff();
+    if (!acpAgent && detailsOpen && activeSideTab === 'changes') void refreshDiff();
   }
 
   function describe(cause: unknown): string {
@@ -1699,7 +1766,7 @@
     <ProjectSidebar
       catalog={projectCatalog}
       {directory}
-      disabled={runtimeState !== 'connected'}
+      disabled={runtimeState !== 'connected' && !agentAvailability.some((agent) => agent.available)}
       onselect={(path) => {
         if (path !== directory) void loadProject(path);
       }}
@@ -1731,6 +1798,44 @@
         aria-label="New plan">New plan</Button
       >
     </div>
+    <div class="session-heading"><span class="label">OTHER AGENTS</span></div>
+    <div class="agent-launches">
+      {#each agentAvailability as agent (agent.id)}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!directory || !agent.available}
+          title={agent.reason ?? `New ${agent.name} thread`}
+          onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
+        >
+      {/each}
+    </div>
+    {#each agentThreads.filter((thread) => thread.directory === directory) as thread (`${thread.agent}:${thread.sessionId}`)}
+      <div
+        class:active={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId}
+        class="session-row"
+      >
+        <button
+          class="session-item"
+          aria-current={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId
+            ? 'page'
+            : undefined}
+          onclick={() => openAgent(thread.agent, thread)}
+          title={thread.title}
+        >
+          <span class="session-symbol">◇</span><span class="session-details"
+            ><strong>{thread.title}</strong><small
+              >{thread.agent} · {new Date(thread.updated).toLocaleString()}</small
+            ></span
+          >
+        </button>
+        <button
+          class="session-action"
+          aria-label={`Remove ${thread.title} from Sail`}
+          onclick={() => removeAgentThread(thread)}>×</button
+        >
+      </div>
+    {/each}
     {#if directory}<input
         class="session-search"
         aria-label="Search sessions"
@@ -1740,7 +1845,7 @@
       />{/if}
     <nav class="session-list" aria-label="Sessions">
       {#each visibleSessions as session (session.id)}<div
-          class:active={session.id === sessionID}
+          class:active={!acpAgent && session.id === sessionID}
           class="session-row"
         >
           {#if editingSessionID === session.id}<div class="session-edit">
@@ -1757,7 +1862,7 @@
               >
             </div>{:else}<button
               class="session-item"
-              aria-current={session.id === sessionID ? 'page' : undefined}
+              aria-current={!acpAgent && session.id === sessionID ? 'page' : undefined}
               onclick={() => selectSession(session.id)}
               title={session.title ?? 'Untitled session'}
               ><span class="session-symbol">◇</span><span class="session-details"
@@ -1806,7 +1911,7 @@
         >
         <button
           aria-pressed={mobileView === 'details'}
-          disabled={!sessionID}
+          disabled={!sessionID || !!acpAgent}
           onclick={() => showMobileView('details')}>Details</button
         >
       </nav>
@@ -1814,15 +1919,18 @@
         <button
           class="breadcrumb-project"
           onclick={() => chooseProject()}
-          disabled={runtimeState !== 'connected'}
+          disabled={runtimeState !== 'connected' &&
+            !agentAvailability.some((agent) => agent.available)}
           >{directory ? directory.split('/').filter(Boolean).at(-1) : 'Workspace'} ⌄</button
         ><span class="slash">/</span><strong
-          >{currentSession?.title ??
-            (newSessionMode === 'work' ? 'New work' : 'New session')}</strong
+          >{acpAgent
+            ? (acpThread?.title ?? `New ${acpAgent} thread`)
+            : (currentSession?.title ??
+              (newSessionMode === 'work' ? 'New work' : 'New session'))}</strong
         >
       </div>
       <div class="topbar-actions">
-        {#if sessionID}<Button
+        {#if sessionID && !acpAgent}<Button
             variant="ghost"
             size="sm"
             onclick={toggleChanges}
@@ -1850,16 +1958,43 @@
             <Button size="sm" onclick={retryRuntime}>Save and reconnect</Button>
           </div>
         </details>
-        <span role="status"
-          ><Badge tone={workReady ? 'success' : 'neutral'}
-            >{running ? 'Running' : workReady ? 'Ready' : 'Setup needed'}</Badge
-          ></span
-        ><Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
+        <details class="runtime-settings">
+          <summary>Agent settings</summary>
+          <div class="runtime-settings-panel">
+            {#each agentAvailability as agent (agent.id)}
+              <p class="runtime-binary">
+                <strong>{agent.name}</strong>: {agent.binaryPath ?? agent.reason ?? 'Unavailable'}
+              </p>
+            {/each}
+            <Button
+              size="sm"
+              onclick={() => void acp.agents().then((agents) => (agentAvailability = agents))}
+              >Detect again</Button
+            >
+          </div>
+        </details>
+        {#if !acpAgent}<span role="status"
+            ><Badge tone={workReady ? 'success' : 'neutral'}
+              >{running ? 'Running' : workReady ? 'Ready' : 'Setup needed'}</Badge
+            ></span
+          >{/if}<Button variant="ghost" size="sm" onclick={() => setTheme(!dark)}
           >{dark ? 'Light' : 'Dark'} theme</Button
         >
       </div>
     </header>
-    {#if setupOpen && (directory || setupError)}<section
+    {#if acpAgent}
+      {#key acpAgent}
+        <AgentWorkspace
+          agent={acpAgent}
+          agentName={agentAvailability.find((agent) => agent.id === acpAgent)?.name ?? acpAgent}
+          {directory}
+          thread={acpThread}
+          oncreated={saveAgentThread}
+          onactivity={saveAgentThread}
+        />
+      {/key}
+    {/if}
+    {#if !acpAgent && setupOpen && (directory || setupError)}<section
         class="setup-panel"
         aria-label="Repository setup"
       >
@@ -1909,6 +2044,7 @@
           </div>{/if}
       </section>{/if}
     <div
+      class:agent-hidden={!!acpAgent}
       class:single={!sessionID || !detailsOpen}
       class:closed={!detailsOpen}
       class="workspace"

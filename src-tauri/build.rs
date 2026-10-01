@@ -5,6 +5,15 @@ fn main() {
             "validate_repository",
             "create_worktree",
             "local_plugin_version",
+            "acp_agents",
+            "acp_connect",
+            "acp_new_session",
+            "acp_load_session",
+            "acp_prompt",
+            "acp_cancel",
+            "acp_permission",
+            "acp_set_config",
+            "acp_authenticate",
         ]),
     ))
     .expect("failed to build Tauri permissions")

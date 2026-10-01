@@ -1,6 +1,6 @@
 # Sail
 
-A desktop workspace for planning and reviewing coding-agent work. OpenCode runs the agent sessions; Sail manages the workflow around them: plans, reviewer findings, decisions, approvals, and implementation handoff.
+A desktop workspace for coding-agent work. Sail hosts OpenCode planning sessions and Claude or Codex threads in its own interface.
 
 ## Plan workspace
 
@@ -11,6 +11,13 @@ A desktop workspace for planning and reviewing coding-agent work. OpenCode runs 
 - See live OpenCode messages alongside structured questions, Mermaid diagrams, alternatives, and per-step decisions.
 - Send answers, request revisions, or approve a plan for the build agent through [opencode-plugin-plan-review](https://github.com/smykla-skalski/opencode-plugin-plan-review).
 - The desktop app starts a local, password-protected OpenCode server and stops it on exit.
+
+## Claude and Codex threads
+
+- Install Claude Code or Codex and Node.js with `npx`. Sail detects the installed binaries and shows them in **Agent settings**.
+- Choose a repository, then use **+ Claude** or **+ Codex** in the sidebar. Messages, tool activity, permission requests, and model or mode choices stay in Sail.
+- Sail runs pinned ACP adapters on demand. The first launch downloads the adapter through `npx`; later launches use npm's cache. Each agent uses its own authentication and configuration. Codex can open its ChatGPT sign-in flow inside Sail when needed.
+- Threads are saved per repository and agent. Reopening a thread replays its history from the agent. The Architect plan and review workflow remains on OpenCode.
 
 ## Development
 
@@ -55,10 +62,10 @@ Pull requests run the same frontend and Rust checks on Linux, macOS, and Windows
 ```text
 Svelte + SUI ── OpenCode v2 client ── local OpenCode server
       │                                    └── plan-review plugin RPC + storage
-      └── Tauri ── starts/stops server, opens repository picker
+      └── Tauri ── ACP process bridge ── Claude / Codex adapters
 ```
 
-OpenCode owns sessions and execution. The plan-review plugin owns plans and decisions. Sail renders and submits that workflow in a desktop UI.
+OpenCode owns Architect sessions and execution. The plan-review plugin owns plans and decisions. Claude and Codex own their ACP sessions; Sail renders their threads and approvals in the desktop UI. Adding another ACP agent requires one entry in the Tauri agent registry.
 
 ## License
 

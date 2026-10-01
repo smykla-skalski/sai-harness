@@ -1,0 +1,99 @@
+import { browser, $, expect } from '@wdio/globals';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('ACP agent threads', () => {
+  const repository = mkdtempSync(join(tmpdir(), 'sail-acp-e2e-'));
+
+  before(() => {
+    execFileSync('git', ['init', '-q', repository]);
+  });
+
+  after(() => {
+    rmSync(repository, { recursive: true, force: true });
+  });
+
+  it('hosts Claude and Codex conversations, approvals, and restored history in Sail', async () => {
+    await browser.execute((path) => {
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [] }),
+      );
+    }, realpathSync(repository));
+    await browser.refresh();
+    try {
+      await expect($('.agent-launches')).toHaveText(expect.stringContaining('Claude'));
+    } catch (cause) {
+      console.error('ACP discovery diagnostic', {
+        agents: await browser.tauri.execute(async ({ core }) => core.invoke('acp_agents')),
+        sidebar: await $('.sidebar').getText(),
+        page: await browser.execute(() => document.body.innerText.slice(0, 2000)),
+      });
+      throw cause;
+    }
+    await $('.agent-launches button').click();
+    try {
+      await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    } catch (cause) {
+      console.error('ACP connection diagnostic', {
+        agents: await browser.tauri.execute(async ({ core }) => core.invoke('acp_agents')),
+        workspace: await $('.agent-workspace').getText(),
+        settings: await $('.topbar-actions').getText(),
+      });
+      throw cause;
+    }
+    await $('.agent-composer textarea').setValue('Do a small thing');
+    await $('.agent-actions button').click();
+    await expect($('.agent-config select')).toHaveValue('test');
+    await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Do a small thing'),
+    );
+
+    await $('.agent-launches button:nth-child(2)').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Codex'));
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Try Codex');
+    await $('.agent-actions button').click();
+    await expect($('.agent-auth')).toHaveText(expect.stringContaining('Sign in with ChatGPT'));
+    await expect($('.agent-composer textarea')).toHaveValue('Try Codex');
+    await $('.agent-auth button').click();
+    await $('.agent-actions button').click();
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Done: Try Codex'));
+
+    try {
+      await $('.session-row .session-item[title="Do a small thing"]').click();
+    } catch (cause) {
+      console.error('ACP thread list diagnostic', {
+        sidebar: await $('.sidebar').getText(),
+        threads: await browser.execute(() => localStorage.getItem('sail-agent-threads')),
+      });
+      throw cause;
+    }
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Do a small thing'),
+    );
+    await browser.refresh();
+    try {
+      await $('.session-row .session-item[title="Do a small thing"]').click();
+    } catch (cause) {
+      console.error('ACP reload diagnostic', {
+        sidebar: await $('.sidebar').getText(),
+        threads: await browser.execute(() => localStorage.getItem('sail-agent-threads')),
+        directory: await browser.execute(() => localStorage.getItem('sai-directory')),
+        origin: await browser.execute(() => location.origin),
+        keys: await browser.execute(() => Object.keys(localStorage)),
+      });
+      throw cause;
+    }
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Do a small thing'),
+    );
+  });
+});

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 
 const state = mkdtempSync(join(tmpdir(), 'sail-e2e-'));
 process.env.SAIL_WORKTREE_ROOT ??= join(state, 'worktrees');
+process.env.SAIL_ACP_TEST_AGENT = resolve('test/e2e/acp-agent.mjs');
 for (const [name, directory] of Object.entries({
   XDG_CONFIG_HOME: 'config',
   XDG_DATA_HOME: 'data',

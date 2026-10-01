@@ -494,6 +494,15 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
 }
+.workspace.agent-hidden {
+  display: none;
+}
+.agent-launches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 8px;
+}
 .setup-panel {
   padding: 16px 22px;
   border-bottom: 1px solid var(--shell-divider);

@@ -7,6 +7,8 @@ use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::State;
 
+mod acp;
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeInfo {
@@ -518,12 +520,22 @@ fn local_plugin_version(path: String) -> Option<String> {
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(RuntimeManager::default())
+        .manage(acp::AgentManager::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             start_runtime,
             validate_repository,
             create_worktree,
-            local_plugin_version
+            local_plugin_version,
+            acp::acp_agents,
+            acp::acp_connect,
+            acp::acp_new_session,
+            acp::acp_load_session,
+            acp::acp_prompt,
+            acp::acp_cancel,
+            acp::acp_permission,
+            acp::acp_set_config,
+            acp::acp_authenticate
         ]);
     #[cfg(feature = "e2e")]
     let builder = builder
