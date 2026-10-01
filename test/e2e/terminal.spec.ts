@@ -6,8 +6,11 @@ import { join } from 'node:path';
 
 async function sendCommand(command: string) {
   await browser.execute(async (value) => {
-    const id = document.querySelector('.pane-leaf.focused')?.getAttribute('data-pane-id');
-    if (!id) throw new Error('No focused terminal pane');
+    const id = document
+      .querySelector('.terminal-screen')
+      ?.closest('.pane-leaf')
+      ?.getAttribute('data-pane-id');
+    if (!id) throw new Error('No terminal pane');
     const bridge: unknown = Reflect.get(window, '__TAURI__');
     if (!bridge || typeof bridge !== 'object' || !('core' in bridge))
       throw new Error('Tauri bridge unavailable');
@@ -113,6 +116,9 @@ describe('shell terminal panes', () => {
           .querySelector('.terminal-screen .xterm-accessibility-tree')
           ?.textContent?.includes('restarted'),
       ),
+    );
+    await browser.execute(() =>
+      document.querySelector<HTMLElement>('.terminal-screen .xterm-helper-textarea')?.focus(),
     );
     await browser.keys(['Meta', 'w']);
     await expect($('.terminal-screen')).not.toExist();
