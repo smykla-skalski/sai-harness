@@ -2,6 +2,14 @@ name: Desktop packages
 
 on:
   pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - scripts/package-release.mjs
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/tauri.conf.json
+      - src-tauri/icons/**
   workflow_dispatch:
   push:
     branches: [main]
