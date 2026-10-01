@@ -374,6 +374,7 @@
   let pendingPermissions = $state<PermissionRequest[]>([]);
   let pendingForms = $state<FormInfo[]>([]);
   let selection = 0;
+  let projectLoadGeneration = 0;
   let sessionRefresh = 0;
   let promptRefresh = 0;
 
@@ -796,6 +797,7 @@
   }
 
   async function loadProject(path: string) {
+    ++projectLoadGeneration;
     saveViewState();
     error = '';
     const current = ++selection;
@@ -1112,10 +1114,23 @@
       return;
     }
     closeCommandPalette(false);
-    if (target !== directory) await loadProject(target);
-    if (!directory) return;
+    let expectedProjectLoad = projectLoadGeneration;
+    if (target !== directory) {
+      const pending = loadProject(target);
+      expectedProjectLoad = projectLoadGeneration;
+      await pending;
+    }
+    if (expectedProjectLoad !== projectLoadGeneration || !directory) return;
+    const selectedThread = thread
+      ? (agentThreads.find(
+          (item) =>
+            item.directory === directory &&
+            item.agent === thread.agent &&
+            item.sessionId === thread.sessionId,
+        ) ?? null)
+      : null;
     focusMainPane();
-    openAgent(agent, thread);
+    openAgent(agent, selectedThread);
     focusPaneForTyping('main');
   }
 
@@ -1217,7 +1232,7 @@
 
   async function focusPanePromptAfterTick(id: string) {
     await tick();
-    if (focusedPane !== id) return;
+    if (focusedPane !== id || promptFocusPane !== id) return;
     const pane = document.querySelector<HTMLElement>(`[data-pane-id="${id}"]`);
     const prompt = pane?.querySelector<HTMLTextAreaElement>('[data-pane-prompt]:not(:disabled)');
     if (prompt) {
@@ -1227,6 +1242,12 @@
       pane?.focus();
       if (id === 'main' && !acpAgent) promptFocusPane = null;
     }
+  }
+
+  function cancelPendingPromptFocus(event: FocusEvent) {
+    if (!promptFocusPane) return;
+    const pane = document.querySelector<HTMLElement>(`[data-pane-id="${promptFocusPane}"]`);
+    if (!(event.target instanceof Node) || !pane?.contains(event.target)) promptFocusPane = null;
   }
 
   function closeFocusedPane(id: string) {
@@ -2106,11 +2127,10 @@
       !event.altKey &&
       !event.shiftKey &&
       event.key.toLowerCase() === 'w' &&
-      !event.repeat &&
-      !document.querySelector('dialog[open]')
+      !event.repeat
     ) {
       event.preventDefault();
-      closeCurrentPane();
+      if (!document.querySelector('dialog[open]')) closeCurrentPane();
       return;
     }
     if (
@@ -2210,7 +2230,11 @@
 </script>
 
 <svelte:head><title>Sail · Plan workspace</title></svelte:head>
-<svelte:window onkeydown={keydownWorkspace} onfocus={focusWorkspace} />
+<svelte:window
+  onkeydown={keydownWorkspace}
+  onfocus={focusWorkspace}
+  onfocusin={cancelPendingPromptFocus}
+/>
 <div class="app-shell" data-mobile-view={mobileView}>
   <aside
     class="sidebar"
