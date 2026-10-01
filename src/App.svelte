@@ -23,6 +23,7 @@
   import {
     inboxLocations,
     loadInboxSeen,
+    maxInboxSeen,
     openCodeRequestTime,
     sortInbox,
     type InboxItem,
@@ -879,9 +880,21 @@
   function inboxTime(key: string, observed = Date.now()) {
     if (inboxSeen[key] === undefined || observed < inboxSeen[key]) {
       inboxSeen[key] = observed;
+      if (Object.keys(inboxSeen).length > maxInboxSeen) {
+        const oldest = Object.entries(inboxSeen)
+          .filter(([entry]) => entry !== key)
+          .toSorted((left, right) => left[1] - right[1])[0];
+        delete inboxSeen[oldest[0]];
+      }
       setSetting('sai-inbox-seen', JSON.stringify(inboxSeen));
     }
     return inboxSeen[key];
+  }
+
+  function forgetInboxTime(key: string) {
+    if (inboxSeen[key] === undefined) return;
+    delete inboxSeen[key];
+    setSetting('sai-inbox-seen', JSON.stringify(inboxSeen));
   }
 
   function scheduleInboxRefresh() {
@@ -2725,10 +2738,14 @@
           event.type === 'form.replied' ||
           event.type === 'form.cancelled'
         ) {
-          if (event.type === 'permission.asked')
+          if (event.type === 'permission.asked' && !openCodeRequestTime(event.data.id))
             inboxTime(`opencode:permission:${event.data.id}`, event.created);
-          if (event.type === 'form.created')
+          if (event.type === 'form.created' && !openCodeRequestTime(event.data.form.id))
             inboxTime(`opencode:form:${event.data.form.id}`, event.created);
+          if (event.type === 'permission.replied')
+            forgetInboxTime(`opencode:permission:${event.data.requestID}`);
+          if (event.type === 'form.replied' || event.type === 'form.cancelled')
+            forgetInboxTime(`opencode:form:${event.data.id}`);
           scheduleRefresh();
           scheduleInboxRefresh();
         }

@@ -18,16 +18,22 @@ export type InboxItem = InboxLocation & {
   options?: { optionId: string; name: string; kind: string }[];
 };
 
+export const maxInboxSeen = 256;
+
+function projectName(path: string): string {
+  return path.split(/[\\/]/).findLast((part) => !!part) ?? path;
+}
+
 export function inboxLocations(catalog: ProjectCatalog): InboxLocation[] {
   return catalog.repositories.flatMap((repository) => [
     {
       directory: repository,
-      project: repository.split('/').findLast((part) => !!part) ?? repository,
+      project: projectName(repository),
       worktree: null,
     },
     ...(catalog.worktrees[repository] ?? []).map((worktree) => ({
       directory: worktree.path,
-      project: repository.split('/').findLast((part) => !!part) ?? repository,
+      project: projectName(repository),
       worktree: worktree.branch,
     })),
   ]);
@@ -54,9 +60,18 @@ export function loadInboxSeen(raw: string | null): Record<string, number> {
     const parsed: unknown = JSON.parse(raw ?? '{}');
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     return Object.fromEntries(
-      Object.entries(parsed).filter(
-        ([key, value]) => key.length > 0 && typeof value === 'number' && Number.isFinite(value),
-      ),
+      Object.entries(parsed)
+        .filter((entry): entry is [string, number] => {
+          const [key, value] = entry;
+          return (
+            key.length > 0 &&
+            typeof value === 'number' &&
+            Number.isFinite(value) &&
+            openCodeRequestTime(key.slice(key.lastIndexOf(':') + 1)) === null
+          );
+        })
+        .toSorted((left, right) => right[1] - left[1])
+        .slice(0, maxInboxSeen),
     );
   } catch {
     return {};
