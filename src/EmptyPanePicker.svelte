@@ -42,7 +42,6 @@
     const pane = picker.closest('.pane-leaf');
     const targetPane = event.target.closest('.pane-leaf');
     if (targetPane && targetPane !== pane) return;
-    if (stage === 'kind' && !pane?.contains(event.target)) return;
     if (stage === 'kind' && event.key.toLowerCase() === 'a') {
       event.preventDefault();
       void showAgents();

@@ -64,6 +64,7 @@ describe('split agent panes', () => {
     await expect($('.pane-split.row')).toBeDisplayed();
     expect((await $$('.pane-leaf')).length).toBe(2);
     await expect($('.pane-leaf.focused [data-pane-picker]')).toBeFocused();
+    await browser.execute(() => document.querySelector<HTMLElement>('.sidebar')?.focus());
     await browser.keys('a');
     await expect($('.pane-leaf.focused [data-agent-choice]:not([disabled])')).toBeFocused();
     await $('.pane-leaf.focused .pane-picker-intro h2').click();
