@@ -7,9 +7,21 @@ import {
   loadPaneLayouts,
   mainPane,
   migratePaneDirectory,
+  paneRatioBounds,
+  clampPaneRatio,
   splitPane,
   updatePane,
 } from '../src/lib/panes.ts';
+
+void test('split ratios keep both panes usable at narrow sizes', () => {
+  const bounds = paneRatioBounds(370);
+  assert.equal(Math.round(370 * bounds.min), 120);
+  assert.equal(Math.round(370 - 8 - 370 * bounds.max), 120);
+  assert.equal(clampPaneRatio(0.9, 370), bounds.max);
+  const narrow = paneRatioBounds(240);
+  assert.equal(narrow.min, narrow.max);
+  assert.equal(Math.round(240 * narrow.min), 116);
+});
 
 void test('arrow navigation follows neighboring panes without wrapping', () => {
   const panes = [

@@ -35,6 +35,7 @@
     leaves,
     loadPaneLayouts,
     mainPane,
+    minPaneSpan,
     migratePaneDirectory,
     splitPane,
     updatePane,
@@ -1356,6 +1357,13 @@
 
   function splitFocusedPane(direction: 'row' | 'column') {
     if (!directory) return;
+    const focusedElement = document.querySelector<HTMLElement>(`[data-pane-id="${focusedPane}"]`);
+    const bounds = focusedElement?.getBoundingClientRect();
+    const span = direction === 'row' ? bounds?.width : bounds?.height;
+    if (!span || span < 2 * minPaneSpan + 8) {
+      error = 'Enlarge the focused pane before splitting it again.';
+      return;
+    }
     ++recentJumpGeneration;
     const layout = splitPane(paneLayout, focusedPane, direction);
     const old = new Set(leaves(paneLayout).map((leaf) => leaf.id));

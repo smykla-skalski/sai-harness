@@ -7,7 +7,7 @@
   import DiffPanel from './DiffPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
-  import type { Pane } from './lib/panes';
+  import { clampPaneRatio, paneRatioBounds, type Pane } from './lib/panes';
 
   type Props = {
     pane: Pane;
@@ -51,8 +51,17 @@
     onchanges,
   }: Props = $props();
   let container = $state<HTMLDivElement>();
+  let splitWidth = $state(0);
+  let splitHeight = $state(0);
   let dragging = false;
   let previewRatio = $state<number | null>(null);
+  const splitSpan = $derived(
+    'direction' in pane ? (pane.direction === 'row' ? splitWidth : splitHeight) : 0,
+  );
+  const ratioBounds = $derived(paneRatioBounds(splitSpan));
+  const visibleRatio = $derived(
+    clampPaneRatio(previewRatio ?? ('direction' in pane ? pane.ratio : 0.5), splitSpan),
+  );
   let diffs = $state<FileDiffInfo[]>([]);
   let diffLoading = $state(false);
   let diffError = $state('');
@@ -89,7 +98,7 @@
       pane && 'direction' in pane && pane.direction === 'row'
         ? event.clientX - bounds.left
         : event.clientY - bounds.top;
-    return Math.max(0.1, Math.min(0.9, offset / span));
+    return clampPaneRatio(offset / span, span);
   }
 
   function resizeKey(event: KeyboardEvent) {
@@ -109,7 +118,7 @@
             : 0;
     if (!change) return;
     event.preventDefault();
-    onratio(pane.id, Math.max(0.1, Math.min(0.9, pane.ratio + change)));
+    onratio(pane.id, clampPaneRatio(visibleRatio + change, splitSpan));
   }
 </script>
 
@@ -118,8 +127,10 @@
     class="pane-split"
     class:row={pane.direction === 'row'}
     class:column={pane.direction === 'column'}
-    style={`--pane-ratio: ${(previewRatio ?? pane.ratio) * 100}%`}
+    style={`--pane-ratio: ${visibleRatio * 100}%`}
     bind:this={container}
+    bind:clientWidth={splitWidth}
+    bind:clientHeight={splitHeight}
   >
     <PaneTree
       pane={pane.first}
@@ -147,9 +158,9 @@
       tabindex="0"
       aria-label="Split pane divider"
       aria-orientation={pane.direction === 'row' ? 'vertical' : 'horizontal'}
-      aria-valuemin="10"
-      aria-valuemax="90"
-      aria-valuenow={Math.round(pane.ratio * 100)}
+      aria-valuemin={Math.round(ratioBounds.min * 100)}
+      aria-valuemax={Math.round(ratioBounds.max * 100)}
+      aria-valuenow={Math.round(visibleRatio * 100)}
       onpointerdown={(event) => {
         if (event.button !== 0) return;
         dragging = true;

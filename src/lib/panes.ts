@@ -6,6 +6,25 @@ export type Pane =
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
 
+export const minPaneSpan = 120;
+
+export function paneRatioBounds(span: number): { min: number; max: number } {
+  if (!Number.isFinite(span) || span <= 8) return { min: 0.5, max: 0.5 };
+  if (span < 2 * minPaneSpan + 8) {
+    const midpoint = (span - 8) / (2 * span);
+    return { min: midpoint, max: midpoint };
+  }
+  return {
+    min: Math.min(0.5, Math.max(0.1, minPaneSpan / span)),
+    max: Math.max(0.5, Math.min(0.9, (span - 8 - minPaneSpan) / span)),
+  };
+}
+
+export function clampPaneRatio(ratio: number, span: number): number {
+  const { min, max } = paneRatioBounds(span);
+  return Math.max(min, Math.min(max, ratio));
+}
+
 export type PaneBounds = {
   id: string;
   left: number;

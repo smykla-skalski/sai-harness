@@ -64,6 +64,14 @@
             : choices.length - 1
           : (current + step + choices.length) % choices.length;
       choices[next]?.focus();
+    } else if (
+      stage === 'agent' &&
+      event.key === 'Enter' &&
+      document.activeElement instanceof HTMLButtonElement &&
+      document.activeElement.hasAttribute('data-agent-choice')
+    ) {
+      event.preventDefault();
+      document.activeElement.click();
     }
   }
 </script>
