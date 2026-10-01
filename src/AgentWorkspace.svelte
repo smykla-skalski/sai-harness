@@ -37,6 +37,7 @@
   let authNeeded = $state(false);
   let authenticating = $state(false);
   let activeSessionId: string | null = null;
+  let stopRequested = false;
   let selectedThreadId: string | null = null;
   let generation = 0;
   let scroll: HTMLDivElement;
@@ -84,6 +85,7 @@
     configOptions = [];
     authNeeded = false;
     busy = false;
+    stopRequested = false;
     error = '';
     ready = false;
     connecting = true;
@@ -143,7 +145,6 @@
           configOptions = data.configOptions as AgentConfigOption[];
         if (data.sessionUpdate !== 'user_message_chunk' || connecting) {
           entries = updateEntries(entries, data);
-          void follow();
         }
       } else if (message.method === 'session/request_permission' && message.id != null) {
         queuePermission(message);
@@ -176,6 +177,7 @@
     const current = generation;
     let activityThread = thread;
     busy = true;
+    stopRequested = false;
     error = '';
     draft = '';
     try {
@@ -196,6 +198,10 @@
         oncreated(created);
       }
       const id = activeSessionId;
+      if (stopRequested) {
+        draft = text;
+        return;
+      }
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
       void follow();
       await acp.prompt(agent, id!, text);
@@ -212,6 +218,7 @@
   }
 
   async function stop() {
+    stopRequested = true;
     if (!activeSessionId) return;
     try {
       await acp.cancel(agent, activeSessionId);
@@ -268,8 +275,27 @@
       void send();
     }
   }
+
+  function keydownWorkspace(event: KeyboardEvent) {
+    if (
+      event.key !== 'Escape' ||
+      event.defaultPrevented ||
+      event.repeat ||
+      event.isComposing ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.shiftKey ||
+      !busy ||
+      document.querySelector('dialog[open]')
+    )
+      return;
+    event.preventDefault();
+    void stop();
+  }
 </script>
 
+<svelte:window onkeydown={keydownWorkspace} />
 <div class="agent-workspace">
   <div class="agent-header">
     <div><strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span></div>

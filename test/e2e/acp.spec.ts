@@ -117,5 +117,41 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Delayed approval'),
     );
+
+    await $('.agent-composer textarea').setValue('Escape stop');
+    await $('.agent-actions button').click();
+    await expect($('.agent-permission')).toBeDisplayed();
+    await browser.keys('Escape');
+    await expect($('.agent-permission')).not.toBeDisplayed();
+    await expect($('.agent-busy')).not.toBeDisplayed();
+
+    await $('.agent-composer textarea').setValue('Long answer');
+    await $('.agent-actions button').click();
+    await expect($('.agent-permission')).toBeDisplayed();
+    const beforeReply = await browser.execute(
+      () => document.querySelector('.agent-conversation')?.scrollTop ?? -1,
+    );
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Answer line 99'));
+    expect(
+      await browser.execute(() => {
+        const conversation = document.querySelector('.agent-conversation');
+        return conversation ? conversation.scrollHeight > conversation.clientHeight : false;
+      }),
+    ).toBe(true);
+    expect(
+      await browser.execute(() => document.querySelector('.agent-conversation')?.scrollTop ?? -1),
+    ).toBe(beforeReply);
+
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Cancel creation');
+    await $('.agent-actions button').click();
+    await browser.keys('Escape');
+    await expect($('.agent-busy')).not.toBeDisplayed();
+    await expect($('.agent-composer textarea')).toHaveValue('Cancel creation');
+    await expect($('.agent-conversation')).not.toHaveText(
+      expect.stringContaining('Cancel creation'),
+    );
   });
 });

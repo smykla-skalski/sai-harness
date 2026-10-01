@@ -1337,8 +1337,6 @@
     const incoming = await collectGap(first.cursor.next ?? null, [...first.data]);
     if (!valid()) return;
     messages = mergeMessages(messages, acceptProjectedMessages(incoming, observed));
-    await tick();
-    scrollToLatest();
   }
 
   async function loadOlderMessages() {
@@ -1387,8 +1385,6 @@
         delete remaining[messageID];
         liveText = remaining;
       }
-      await tick();
-      scrollToLatest();
     } catch {
       // The projection may not exist yet; the next durable event or resync will load it.
     }
@@ -1537,7 +1533,6 @@
     const parts = liveText[messageID] ?? {};
     const base = parts[ordinal] ?? (part?.type === 'text' ? part.text : '');
     liveText[messageID] = { ...parts, [ordinal]: base + delta };
-    scrollToLatest();
   }
 
   async function reconcileExecution(id: string, current: number) {
@@ -1763,6 +1758,23 @@
 
   function keydownWorkspace(event: KeyboardEvent) {
     if (
+      event.key === 'Escape' &&
+      !event.defaultPrevented &&
+      !event.repeat &&
+      !event.isComposing &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !acpAgent &&
+      running &&
+      !document.querySelector('dialog[open]')
+    ) {
+      event.preventDefault();
+      void stop();
+      return;
+    }
+    if (
       (!acpAgent && !sessionID) ||
       event.repeat ||
       event.key.toLowerCase() !== 'l' ||
@@ -1899,7 +1911,10 @@
                 bind:value={editedTitle}
                 onkeydown={(event) => {
                   if (event.key === 'Enter') void saveRename();
-                  if (event.key === 'Escape') editingSessionID = null;
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    editingSessionID = null;
+                  }
                 }}
               />
               <button aria-label="Save title" onclick={saveRename}>✓</button>

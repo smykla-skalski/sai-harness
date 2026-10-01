@@ -66,7 +66,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     const sessionId = `test-${++nextSession}`;
     sessions.set(sessionId, []);
-    send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+    setTimeout(
+      () => send({ id: message.id, result: { sessionId, configOptions: configOptions() } }),
+      1000,
+    );
   } else if (message.method === 'session/load') {
     const history = sessions.get(message.params.sessionId);
     if (!history) send({ id: message.id, error: { code: -1, message: 'Session missing' } });
@@ -110,7 +113,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       status: 'completed',
     });
     const text =
-      message.result?.outcome?.optionId === 'allow' ? `Done: ${pending.text}` : 'Rejected';
+      message.result?.outcome?.optionId === 'allow'
+        ? pending.text === 'Long answer'
+          ? Array.from({ length: 100 }, (_, index) => `Answer line ${index}`).join('\n')
+          : `Done: ${pending.text}`
+        : 'Rejected';
     const reply = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } };
     sessions.get(pending.sessionId).push(reply);
     update(pending.sessionId, reply);
