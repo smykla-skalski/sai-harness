@@ -647,8 +647,83 @@ button:disabled {
   flex: 1;
   min-height: 0;
 }
+.pane-split {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.pane-split.row {
+  grid-template-columns: minmax(0, var(--pane-ratio)) 8px minmax(0, 1fr);
+}
+.pane-split.column {
+  grid-template-rows: minmax(0, var(--pane-ratio)) 8px minmax(0, 1fr);
+}
+.pane-divider {
+  background: var(--shell-divider);
+  touch-action: none;
+}
+.pane-split.row > .pane-divider {
+  cursor: col-resize;
+}
+.pane-split.column > .pane-divider {
+  cursor: row-resize;
+}
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--sui-primary);
+}
+.pane-leaf {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+.pane-leaf.focused {
+  outline-color: var(--sui-primary);
+}
+.pane-leaf > .workspace {
+  min-width: 0;
+}
+.pane-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--shell-divider);
+}
+.pane-heading button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+}
+.pane-agent-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.pane-agent-content > .agent-workspace {
+  min-width: 0;
+}
+.pane-agent-content.changes-open > .agent-workspace {
+  flex: 1 1 50%;
+}
+.pane-agent-content > .diff-panel {
+  flex: 1 1 50%;
+  min-width: 0;
+}
 .workspace.single {
   grid-template-columns: minmax(0, 1fr);
+}
+.pane-split .workspace:not(.single) {
+  grid-template-columns: minmax(0, 1fr) 8px minmax(0, min(42%, var(--details-width)));
 }
 .workspace.closed .details-resizer,
 .workspace.closed .side-area {

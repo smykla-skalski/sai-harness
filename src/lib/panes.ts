@@ -1,0 +1,95 @@
+import type { AgentId, AgentThread } from './acp';
+
+export type Pane =
+  | { id: string; agent: AgentId | null; thread: AgentThread | null }
+  | { id: string; direction: 'row' | 'column'; ratio: number; first: Pane; second: Pane };
+
+export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
+
+export function leaves(pane: Pane): Extract<Pane, { agent: AgentId | null }>[] {
+  return 'direction' in pane ? [...leaves(pane.first), ...leaves(pane.second)] : [pane];
+}
+
+export function splitPane(
+  pane: Pane,
+  id: string,
+  direction: 'row' | 'column',
+  agent: AgentId,
+): Pane {
+  if ('direction' in pane)
+    return {
+      ...pane,
+      first: splitPane(pane.first, id, direction, agent),
+      second: splitPane(pane.second, id, direction, agent),
+    };
+  if (pane.id !== id) return pane;
+  return {
+    id: crypto.randomUUID(),
+    direction,
+    ratio: 0.5,
+    first: pane,
+    second: { id: crypto.randomUUID(), agent, thread: null },
+  };
+}
+
+export function closePane(pane: Pane, id: string): Pane {
+  if (!('direction' in pane)) return pane.id === id ? mainPane() : pane;
+  if (leaves(pane.first).some((leaf) => leaf.id === id)) {
+    if (!('direction' in pane.first) && pane.first.id === id) return pane.second;
+    return { ...pane, first: closePane(pane.first, id) };
+  }
+  if (!('direction' in pane.second) && pane.second.id === id) return pane.first;
+  return { ...pane, second: closePane(pane.second, id) };
+}
+
+export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane {
+  if ('direction' in pane) {
+    if (pane.id === id && 'ratio' in update && typeof update.ratio === 'number')
+      return { ...pane, ratio: update.ratio };
+    return {
+      ...pane,
+      first: updatePane(pane.first, id, update),
+      second: updatePane(pane.second, id, update),
+    };
+  }
+  return pane.id === id ? { ...pane, ...update } : pane;
+}
+
+export function loadPaneLayouts(raw: string | null): Record<string, Pane> {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, Pane] =>
+          typeof entry[0] === 'string' && validPane(entry[1], new Set<string>()),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function validPane(value: unknown, ids: Set<string>): value is Pane {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const pane: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  if (typeof pane.id !== 'string' || !pane.id || ids.has(pane.id)) return false;
+  ids.add(pane.id);
+  if (pane.direction === 'row' || pane.direction === 'column')
+    return (
+      typeof pane.ratio === 'number' &&
+      Number.isFinite(pane.ratio) &&
+      pane.ratio >= 0.1 &&
+      pane.ratio <= 0.9 &&
+      validPane(pane.first, ids) &&
+      validPane(pane.second, ids)
+    );
+  return (
+    (pane.agent === null || typeof pane.agent === 'string') &&
+    (pane.thread === null ||
+      (typeof pane.thread === 'object' &&
+        pane.thread !== null &&
+        'sessionId' in pane.thread &&
+        typeof pane.thread.sessionId === 'string'))
+  );
+}

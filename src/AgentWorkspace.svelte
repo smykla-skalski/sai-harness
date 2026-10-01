@@ -21,12 +21,22 @@
     directory: string;
     thread: AgentThread | null;
     running: boolean;
+    focused?: boolean;
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
     onstatus: (thread: AgentThread, running: boolean) => void;
   }
-  let { agent, agentName, directory, thread, running, oncreated, onactivity, onstatus }: Props =
-    $props();
+  let {
+    agent,
+    agentName,
+    directory,
+    thread,
+    running,
+    focused = true,
+    oncreated,
+    onactivity,
+    onstatus,
+  }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
   let busy = $state(false);
@@ -313,6 +323,7 @@
       event.altKey ||
       event.shiftKey ||
       !isBusy ||
+      !focused ||
       document.querySelector('dialog[open]')
     )
       return;

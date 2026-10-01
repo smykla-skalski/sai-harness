@@ -15,6 +15,16 @@
   import PromptPanel from './PromptPanel.svelte';
   import ProjectSidebar from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
+  import PaneTree from './PaneTree.svelte';
+  import {
+    closePane,
+    leaves,
+    loadPaneLayouts,
+    mainPane,
+    splitPane,
+    updatePane,
+    type Pane,
+  } from './lib/panes';
   import {
     acp,
     loadAgentThreads,
@@ -60,9 +70,17 @@
   let agentAvailability = $state<AgentAvailability[]>([]);
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
   let runningAgentThreads = $state<Record<string, boolean>>({});
+  const savedPaneLayouts = loadPaneLayouts(getSetting('sai-pane-layouts'));
+  let paneLayouts = $state<Record<string, Pane>>(savedPaneLayouts);
+  let focusedPane = $state(leaves(savedPaneLayouts[savedDirectory] ?? mainPane())[0]?.id ?? 'main');
+  let paneLayout = $derived(paneLayouts[directory] ?? mainPane());
   let agentChangesOpen = $state(false);
-  let acpAgent = $state<AgentId | null>(null);
-  let acpThread = $state<AgentThread | null>(null);
+  let changesPanes = $state<string[]>([]);
+  const initialMainPane = leaves(savedPaneLayouts[savedDirectory] ?? mainPane()).find(
+    (leaf) => leaf.id === 'main',
+  );
+  let acpAgent = $state<AgentId | null>(initialMainPane?.agent ?? null);
+  let acpThread = $state<AgentThread | null>(initialMainPane?.thread ?? null);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
   let runtimeError = $state('');
   let workReady = $state(false);
@@ -138,13 +156,21 @@
     Number.isFinite(savedDetailsWidth) && savedDetailsWidth >= 320 ? savedDetailsWidth : 420,
   );
   let workspaceWidth = $state(0);
-  let workspaceElement: HTMLDivElement;
+  let workspaceElement = $state<HTMLDivElement>();
   let resizeStart: { x: number; width: number } | null = null;
   let error = $state('');
   let chatScroll = $state<HTMLDivElement>();
   let sidebarElement: HTMLElement;
   let chatArea: HTMLElement;
   let detailsArea = $state<HTMLElement>();
+
+  $effect(() => {
+    if (!workspaceElement) return;
+    const element = workspaceElement;
+    const observer = new ResizeObserver(() => (workspaceWidth = element.clientWidth));
+    observer.observe(element);
+    return () => observer.disconnect();
+  });
 
   async function showMobileView(view: 'sessions' | 'chat' | 'details') {
     saveViewState();
@@ -168,6 +194,12 @@
   }
 
   async function toggleChanges() {
+    if (focusedPane !== 'main') {
+      changesPanes = changesPanes.includes(focusedPane)
+        ? changesPanes.filter((id) => id !== focusedPane)
+        : [...changesPanes, focusedPane];
+      return;
+    }
     if (acpAgent) {
       agentChangesOpen = !agentChangesOpen;
       if (window.matchMedia('(max-width: 850px)').matches)
@@ -463,8 +495,6 @@
         .agents()
         .then((agents) => (agentAvailability = agents))
         .catch((cause) => (runtimeError = `Could not detect agents: ${describe(cause)}`));
-    const observer = new ResizeObserver(() => (workspaceWidth = workspaceElement.clientWidth));
-    observer.observe(workspaceElement);
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
     diffPollTimer = setInterval(() => {
@@ -485,7 +515,6 @@
     }, 3000);
     return () => {
       disposed = true;
-      observer.disconnect();
       eventController?.abort();
       clearTimeout(refreshTimer);
       clearTimeout(diffTimer);
@@ -594,6 +623,7 @@
     const path = directory;
     await refreshSessions();
     if (current !== selection || path !== directory) return;
+    if (acpAgent) return;
     const saved = getSetting(`sai-session:${path}`);
     const initial = sessionID ?? saved ?? sessions[0]?.id;
     if (initial && initial !== sessionID) {
@@ -721,6 +751,8 @@
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
       saveAgentThreads(agentThreads);
       for (const thread of removedThreads) updateAgentThreadStatus(thread, false);
+      delete paneLayouts[path];
+      persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
     } catch (cause) {
       if (wasSelected) await loadProject(path);
@@ -751,9 +783,11 @@
     error = '';
     const current = ++selection;
     directory = path;
+    focusedPane = leaves(paneLayouts[path] ?? mainPane())[0]?.id ?? 'main';
     setSetting('sai-directory', path);
-    acpAgent = null;
-    acpThread = null;
+    const savedMain = leaves(paneLayouts[path] ?? mainPane()).find((leaf) => leaf.id === 'main');
+    acpAgent = savedMain?.agent ?? null;
+    acpThread = savedMain?.thread ?? null;
     ++sessionRefresh;
     workReady = false;
     planReady = false;
@@ -789,6 +823,7 @@
     historyLoading = false;
     if (!client || !(await refreshSetup(path)) || current !== selection) return;
     draft = viewStates.get(viewKey())?.draft ?? '';
+    if (acpAgent) return;
     if (!workReady && !planReady) return;
     try {
       await refreshSessions();
@@ -812,6 +847,11 @@
       const report = await inspectRepository(client, path);
       if (current !== selection) return false;
       if (path !== report.repository) {
+        if (paneLayouts[path]) {
+          paneLayouts = { ...paneLayouts, [report.repository]: paneLayouts[path] };
+          delete paneLayouts[path];
+          persistPaneLayouts();
+        }
         saveProjectCatalog(replaceRepositoryPath(projectCatalog, path, report.repository));
         agentThreads = agentThreads.map((thread) =>
           thread.directory === path
@@ -1001,9 +1041,14 @@
 
   function openAgent(agent: AgentId, thread: AgentThread | null = null) {
     if (!directory) return;
+    if (focusedPane !== 'main' && leaves(paneLayout).some((leaf) => leaf.id === focusedPane)) {
+      savePaneLayout(updatePane(paneLayout, focusedPane, { agent, thread }));
+      return;
+    }
     saveViewState();
     acpAgent = agent;
     acpThread = thread;
+    savePaneLayout(updatePane(paneLayout, 'main', { agent, thread }));
     mobileView = 'chat';
     setupOpen = false;
   }
@@ -1019,6 +1064,20 @@
       ),
     ].toSorted((a, b) => b.updated - a.updated);
     saveAgentThreads(agentThreads);
+    for (const [path, layout] of Object.entries(paneLayouts)) {
+      let next = layout;
+      for (const leaf of leaves(layout)) {
+        if (
+          leaf.thread?.sessionId === thread.sessionId &&
+          leaf.thread.directory === thread.directory &&
+          leaf.agent === thread.agent
+        ) {
+          next = updatePane(next, leaf.id, { thread });
+        }
+      }
+      paneLayouts[path] = next;
+    }
+    persistPaneLayouts();
     if (
       acpAgent === thread.agent &&
       acpThread?.sessionId === thread.sessionId &&
@@ -1029,8 +1088,75 @@
 
   function createAgentThread(thread: AgentThread) {
     saveAgentThread(thread);
-    if (acpAgent === thread.agent && directory === thread.directory && !acpThread)
+    if (acpAgent === thread.agent && directory === thread.directory && !acpThread) {
       acpThread = thread;
+      savePaneLayout(updatePane(paneLayout, 'main', { agent: thread.agent, thread }));
+    }
+  }
+
+  function persistPaneLayouts() {
+    setSetting('sai-pane-layouts', JSON.stringify(paneLayouts));
+  }
+
+  function savePaneLayout(layout: Pane) {
+    paneLayouts = { ...paneLayouts, [directory]: layout };
+    persistPaneLayouts();
+  }
+
+  function splitFocusedPane(direction: 'row' | 'column') {
+    if (!directory) return;
+    const agent =
+      (focusedPane === 'main'
+        ? acpAgent
+        : leaves(paneLayout).find((leaf) => leaf.id === focusedPane)?.agent) ??
+      agentAvailability.find((item) => item.available)?.id;
+    if (!agent) {
+      error = 'Install an agent to open another pane.';
+      return;
+    }
+    const layout = splitPane(paneLayout, focusedPane, direction, agent);
+    const old = new Set(leaves(paneLayout).map((leaf) => leaf.id));
+    const created = leaves(layout).find((leaf) => !old.has(leaf.id));
+    if (!created) return;
+    savePaneLayout(layout);
+    focusedPane = created.id;
+    void tick().then(() =>
+      document.querySelector<HTMLElement>(`[data-pane-id="${created.id}"]`)?.focus(),
+    );
+  }
+
+  function closeFocusedPane(id: string) {
+    let layout = closePane(paneLayout, id);
+    if (!('direction' in layout) && layout.id === 'main')
+      layout = { ...layout, agent: acpAgent, thread: acpThread };
+    savePaneLayout(layout);
+    changesPanes = changesPanes.filter((item) => item !== id);
+    focusedPane = leaves(layout)[0]?.id ?? 'main';
+    void tick().then(() =>
+      document.querySelector<HTMLElement>(`[data-pane-id="${focusedPane}"]`)?.focus(),
+    );
+  }
+
+  function updatePaneRatio(id: string, ratio: number) {
+    savePaneLayout(updatePane(paneLayout, id, { ratio }));
+  }
+
+  function createPaneThread(id: string, thread: AgentThread) {
+    savePaneLayout(updatePane(paneLayout, id, { thread }));
+    saveAgentThread(thread);
+  }
+
+  function focusMainPane() {
+    if (!leaves(paneLayout).some((leaf) => leaf.id === 'main')) {
+      savePaneLayout({
+        id: crypto.randomUUID(),
+        direction: 'row',
+        ratio: 0.5,
+        first: mainPane(),
+        second: paneLayout,
+      });
+    }
+    focusedPane = 'main';
   }
 
   function removeAgentThread(thread: AgentThread) {
@@ -1042,12 +1168,27 @@
     );
     saveAgentThreads(agentThreads);
     updateAgentThreadStatus(thread, false);
+    for (const [path, layout] of Object.entries(paneLayouts)) {
+      let next = layout;
+      for (const leaf of leaves(layout)) {
+        if (
+          leaf.thread?.sessionId === thread.sessionId &&
+          leaf.thread.directory === thread.directory &&
+          leaf.agent === thread.agent
+        )
+          next = updatePane(next, leaf.id, { thread: null });
+      }
+      paneLayouts[path] = next;
+    }
+    persistPaneLayouts();
     if (
       acpThread?.sessionId === thread.sessionId &&
       acpThread.directory === thread.directory &&
       acpAgent === thread.agent
-    )
-      openAgent(thread.agent);
+    ) {
+      acpThread = null;
+      savePaneLayout(updatePane(paneLayout, 'main', { agent: thread.agent, thread: null }));
+    }
   }
 
   function agentThreadKey(thread: AgentThread): string {
@@ -1066,8 +1207,10 @@
 
   async function selectSession(id: string) {
     if (!client || !directory) return;
+    focusMainPane();
     acpAgent = null;
     acpThread = null;
+    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
     if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
       saveViewState();
     const current = ++selection;
@@ -1124,8 +1267,10 @@
 
   function newWork() {
     if (!workReady || switching || sending) return;
+    focusMainPane();
     acpAgent = null;
     acpThread = null;
+    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
     saveViewState();
     ++selection;
     sessionID = null;
@@ -1156,8 +1301,10 @@
 
   async function newPlan() {
     if (!client || !directory || !planReady || switching || sending) return;
+    focusMainPane();
     acpAgent = null;
     acpThread = null;
+    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
     const path = directory;
     const current = selection;
     try {
@@ -1827,6 +1974,33 @@
 
   function keydownWorkspace(event: KeyboardEvent) {
     if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      event.key.toLowerCase() === 'd' &&
+      !event.repeat &&
+      !document.querySelector('dialog[open]')
+    ) {
+      event.preventDefault();
+      splitFocusedPane(event.shiftKey ? 'column' : 'row');
+      return;
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.altKey &&
+      ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)
+    ) {
+      const panes = leaves(paneLayout);
+      const index = panes.findIndex((leaf) => leaf.id === focusedPane);
+      const step = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+      const next = panes[(index + step + panes.length) % panes.length];
+      if (next) {
+        event.preventDefault();
+        focusedPane = next.id;
+        document.querySelector<HTMLElement>(`[data-pane-id="${next.id}"]`)?.focus();
+      }
+      return;
+    }
+    if (
       event.key === 'Escape' &&
       !event.defaultPrevented &&
       !event.repeat &&
@@ -1836,6 +2010,7 @@
       !event.altKey &&
       !event.shiftKey &&
       !acpAgent &&
+      focusedPane === 'main' &&
       running &&
       !document.querySelector('dialog[open]')
     ) {
@@ -1844,7 +2019,7 @@
       return;
     }
     if (
-      (!acpAgent && !sessionID) ||
+      (focusedPane === 'main' && !acpAgent && !sessionID) ||
       event.repeat ||
       event.key.toLowerCase() !== 'l' ||
       !(event.metaKey || event.ctrlKey) ||
@@ -2064,12 +2239,16 @@
         >
       </div>
       <div class="topbar-actions">
-        {#if sessionID || acpAgent}<Button
+        {#if sessionID || acpAgent || focusedPane !== 'main'}<Button
             variant="ghost"
             size="sm"
             onclick={toggleChanges}
             aria-controls="session-details"
-            aria-expanded={acpAgent ? agentChangesOpen : detailsOpen && activeSideTab === 'changes'}
+            aria-expanded={focusedPane !== 'main'
+              ? changesPanes.includes(focusedPane)
+              : acpAgent
+                ? agentChangesOpen
+                : detailsOpen && activeSideTab === 'changes'}
             title="Toggle Changes (⌘L)">Changes</Button
           >{/if}
         {#if directory}<Button variant="ghost" size="sm" onclick={() => (setupOpen = !setupOpen)}
@@ -2166,267 +2345,296 @@
             </p>
           </div>{/if}
       </section>{/if}
-    <div
-      class:single={acpAgent ? !agentChangesOpen : !sessionID || !detailsOpen}
-      class:closed={acpAgent ? !agentChangesOpen : !detailsOpen}
-      class="workspace"
-      style={`--details-width: ${visibleDetailsWidth}px`}
-      bind:this={workspaceElement}
-    >
-      <main class="chat-area" aria-label="Session conversation" tabindex="-1" bind:this={chatArea}>
-        {#if acpAgent}
-          {#key acpAgent}
-            <AgentWorkspace
-              agent={acpAgent}
-              agentName={agentAvailability.find((agent) => agent.id === acpAgent)?.name ?? acpAgent}
-              {directory}
-              thread={acpThread}
-              running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
-              oncreated={createAgentThread}
-              onactivity={saveAgentThread}
-              onstatus={updateAgentThreadStatus}
-            />
-          {/key}
-        {:else}
-          <div
-            class="conversation"
-            bind:this={chatScroll}
-            onscroll={() => (followChat = chatScroll ? nearBottom(chatScroll) : true)}
-          >
-            {#if olderMessageCursor}<button
-                class="older-messages"
-                onclick={loadOlderMessages}
-                disabled={loadingOlder}
-              >
-                {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
-              </button>{/if}
-            {#if !sessionID && messages.length === 0}<div class="welcome">
-                <div class="welcome-mark">◇</div>
-                <p class="eyebrow">PLAN WITH ARCHITECT</p>
-                <h1>What are we working on?</h1>
-                <p>
-                  Choose an agent and model, then describe the work. Use New plan for
-                  Architect-first planning.
-                </p>
-                {#if !directory}<Button
-                    onclick={() => chooseProject()}
-                    disabled={runtimeState !== 'connected'}>Select repository</Button
-                  >{/if}
-              </div>{/if}
-            {#each chatMessages as message (message.id)}
-              {#if message.type === 'user'}<article
-                  class="message user-message"
-                  data-message-id={message.id}
+    {#snippet mainPaneContent()}
+      <div
+        class:single={acpAgent ? !agentChangesOpen : !sessionID || !detailsOpen}
+        class:closed={acpAgent ? !agentChangesOpen : !detailsOpen}
+        class="workspace"
+        style={`--details-width: ${visibleDetailsWidth}px`}
+        bind:this={workspaceElement}
+      >
+        <main
+          class="chat-area"
+          aria-label="Session conversation"
+          tabindex="-1"
+          bind:this={chatArea}
+        >
+          {#if acpAgent}
+            {#key acpAgent}
+              <AgentWorkspace
+                agent={acpAgent}
+                agentName={agentAvailability.find((agent) => agent.id === acpAgent)?.name ??
+                  acpAgent}
+                {directory}
+                thread={acpThread}
+                running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
+                focused={focusedPane === 'main'}
+                oncreated={createAgentThread}
+                onactivity={saveAgentThread}
+                onstatus={updateAgentThreadStatus}
+              />
+            {/key}
+          {:else}
+            <div
+              class="conversation"
+              bind:this={chatScroll}
+              onscroll={() => (followChat = chatScroll ? nearBottom(chatScroll) : true)}
+            >
+              {#if olderMessageCursor}<button
+                  class="older-messages"
+                  onclick={loadOlderMessages}
+                  disabled={loadingOlder}
                 >
-                  <div class="avatar user-avatar">You</div>
-                  <div class="message-body">
-                    <div class="message-author">You</div>
-                    <Markdown source={message.text} />
-                    {#if message.files?.length}<div class="message-files">
-                        {#each message.files as file, fileIndex (fileIndex)}<span
-                            >{file.name ??
-                              (file.source.type === 'uri' ? file.source.uri : 'Attachment')}</span
-                          >{/each}
-                      </div>{/if}
-                  </div>
-                </article>
-              {:else if message.type === 'assistant'}<article
-                  class="message assistant-message"
-                  data-message-id={message.id}
-                >
+                  {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+                </button>{/if}
+              {#if !sessionID && messages.length === 0}<div class="welcome">
+                  <div class="welcome-mark">◇</div>
+                  <p class="eyebrow">PLAN WITH ARCHITECT</p>
+                  <h1>What are we working on?</h1>
+                  <p>
+                    Choose an agent and model, then describe the work. Use New plan for
+                    Architect-first planning.
+                  </p>
+                  {#if !directory}<Button
+                      onclick={() => chooseProject()}
+                      disabled={runtimeState !== 'connected'}>Select repository</Button
+                    >{/if}
+                </div>{/if}
+              {#each chatMessages as message (message.id)}
+                {#if message.type === 'user'}<article
+                    class="message user-message"
+                    data-message-id={message.id}
+                  >
+                    <div class="avatar user-avatar">You</div>
+                    <div class="message-body">
+                      <div class="message-author">You</div>
+                      <Markdown source={message.text} />
+                      {#if message.files?.length}<div class="message-files">
+                          {#each message.files as file, fileIndex (fileIndex)}<span
+                              >{file.name ??
+                                (file.source.type === 'uri' ? file.source.uri : 'Attachment')}</span
+                            >{/each}
+                        </div>{/if}
+                    </div>
+                  </article>
+                {:else if message.type === 'assistant'}<article
+                    class="message assistant-message"
+                    data-message-id={message.id}
+                  >
+                    <div class="avatar agent-avatar">S.</div>
+                    <div class="message-body">
+                      <div class="message-author">{message.agent}</div>
+                      {#if assistantText(message)}<Markdown source={assistantText(message)} />{/if}
+                      {#each message.content as part, ordinal (ordinal)}
+                        {#if part.type === 'tool'}<details class="tool-card">
+                            <summary>{part.name} · {part.state.status}</summary>
+                            {#if part.state.status === 'streaming'}<pre>{part.state.input}</pre>
+                            {:else}<pre>{JSON.stringify(part.state.input, null, 2)}</pre>{/if}
+                            {#if part.state.status === 'completed' || part.state.status === 'error'}
+                              {#each part.state.content ?? [] as item, itemIndex (itemIndex)}
+                                {#if item.type === 'text'}<pre>{item.text}</pre>
+                                {:else}<p>{item.name ?? item.uri}</p>{/if}
+                              {/each}
+                            {/if}
+                            {#if part.state.status === 'error'}<p class="message-error">
+                                {part.state.error.message}
+                              </p>{/if}
+                          </details>{/if}
+                      {/each}
+                      {#if message.retry}<p class="retry-state" role="status">
+                          Retry {message.retry.attempt}: {message.retry.error.message}
+                        </p>{/if}
+                      {#if message.error}<p class="message-error" role="alert">
+                          {message.error.message}
+                        </p>{/if}
+                    </div>
+                  </article>{/if}
+              {/each}
+              {#each liveOnly as [id, parts] (id)}
+                <article class="message assistant-message" data-message-id={id}>
                   <div class="avatar agent-avatar">S.</div>
                   <div class="message-body">
-                    <div class="message-author">{message.agent}</div>
-                    {#if assistantText(message)}<Markdown source={assistantText(message)} />{/if}
-                    {#each message.content as part, ordinal (ordinal)}
-                      {#if part.type === 'tool'}<details class="tool-card">
-                          <summary>{part.name} · {part.state.status}</summary>
-                          {#if part.state.status === 'streaming'}<pre>{part.state.input}</pre>
-                          {:else}<pre>{JSON.stringify(part.state.input, null, 2)}</pre>{/if}
-                          {#if part.state.status === 'completed' || part.state.status === 'error'}
-                            {#each part.state.content ?? [] as item, itemIndex (itemIndex)}
-                              {#if item.type === 'text'}<pre>{item.text}</pre>
-                              {:else}<p>{item.name ?? item.uri}</p>{/if}
-                            {/each}
-                          {/if}
-                          {#if part.state.status === 'error'}<p class="message-error">
-                              {part.state.error.message}
-                            </p>{/if}
-                        </details>{/if}
-                    {/each}
-                    {#if message.retry}<p class="retry-state" role="status">
-                        Retry {message.retry.attempt}: {message.retry.error.message}
-                      </p>{/if}
-                    {#if message.error}<p class="message-error" role="alert">
-                        {message.error.message}
-                      </p>{/if}
+                    <div class="message-author">{currentSession?.agent ?? 'Agent'} · streaming</div>
+                    <Markdown
+                      source={Object.entries(parts)
+                        .toSorted(([a], [b]) => Number(a) - Number(b))
+                        .map(([, value]) => value)
+                        .join('\n')}
+                    />
                   </div>
-                </article>{/if}
-            {/each}
-            {#each liveOnly as [id, parts] (id)}
-              <article class="message assistant-message" data-message-id={id}>
-                <div class="avatar agent-avatar">S.</div>
-                <div class="message-body">
-                  <div class="message-author">{currentSession?.agent ?? 'Agent'} · streaming</div>
-                  <Markdown
-                    source={Object.entries(parts)
-                      .toSorted(([a], [b]) => Number(a) - Number(b))
-                      .map(([, value]) => value)
-                      .join('\n')}
-                  />
-                </div>
-              </article>
-            {/each}
-            {#if running && runtimeState === 'connected'}<div class="working">
-                <span class="activity-spinner" aria-hidden="true"></span>
-                <span class="working-label" role="status"
-                  >{currentSession?.agent ?? 'Agent'} · {activity}</span
-                >
-                <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
-              </div>{/if}
-          </div>
-          <div class="composer-wrap">
-            {#if error}<p class="notice error" role="alert">{error}</p>{/if}
-            <PromptPanel
-              {pendingPermissions}
-              {pendingForms}
-              client={connecting ? null : client}
-              {sessionID}
-              onchanged={() => refreshPrompts()}
-            />
-            <div class="composer">
-              <div class="work-controls">
-                <label
-                  >Agent<select
-                    value={selectedAgentID}
-                    disabled={running || sending || switching || !workReady}
-                    onchange={(event) => void chooseAgent(event.currentTarget.value)}
+                </article>
+              {/each}
+              {#if running && runtimeState === 'connected'}<div class="working">
+                  <span class="activity-spinner" aria-hidden="true"></span>
+                  <span class="working-label" role="status"
+                    >{currentSession?.agent ?? 'Agent'} · {activity}</span
                   >
-                    {#each setup?.agents ?? [] as agent (agent.id)}<option value={agent.id}
-                        >{agent.name}</option
-                      >{/each}
-                  </select></label
-                >
-                <label
-                  >Model<select
-                    value={selectedModelKey}
-                    disabled={running || sending || switching || !workReady}
-                    onchange={(event) => void chooseModel(event.currentTarget.value)}
-                  >
-                    {#each setup?.models ?? [] as model (modelKey(model))}<option
-                        value={modelKey(model)}>{model.providerID} / {model.name}</option
-                      >{/each}
-                  </select></label
-                >
-              </div>
-              {#if attachedFiles.length}<div class="attachments">
-                  {#each attachedFiles as path (path)}<span
-                      >{path.split(/[\\/]/).at(-1)}<button
-                        aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
-                        onclick={() =>
-                          (attachedFiles = attachedFiles.filter((item) => item !== path))}>×</button
-                      ></span
-                    >{/each}
+                  <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
                 </div>{/if}
-              <textarea
-                aria-label="Message"
-                bind:value={draft}
-                onkeydown={keydown}
-                rows="3"
-                placeholder={inputReady
-                  ? 'Describe the work or ask a question…'
-                  : 'Complete repository setup before planning…'}
-                disabled={!inputReady || sending}></textarea>
-              <div class="composer-bottom">
-                <span>Enter to send · Shift+Enter for newline</span><Button
-                  variant="ghost"
-                  size="sm"
-                  onclick={attachFiles}
-                  disabled={!inputReady || sending}>Attach files</Button
-                ><Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
+            </div>
+            <div class="composer-wrap">
+              {#if error}<p class="notice error" role="alert">{error}</p>{/if}
+              <PromptPanel
+                {pendingPermissions}
+                {pendingForms}
+                client={connecting ? null : client}
+                {sessionID}
+                onchanged={() => refreshPrompts()}
+              />
+              <div class="composer">
+                <div class="work-controls">
+                  <label
+                    >Agent<select
+                      value={selectedAgentID}
+                      disabled={running || sending || switching || !workReady}
+                      onchange={(event) => void chooseAgent(event.currentTarget.value)}
+                    >
+                      {#each setup?.agents ?? [] as agent (agent.id)}<option value={agent.id}
+                          >{agent.name}</option
+                        >{/each}
+                    </select></label
+                  >
+                  <label
+                    >Model<select
+                      value={selectedModelKey}
+                      disabled={running || sending || switching || !workReady}
+                      onchange={(event) => void chooseModel(event.currentTarget.value)}
+                    >
+                      {#each setup?.models ?? [] as model (modelKey(model))}<option
+                          value={modelKey(model)}>{model.providerID} / {model.name}</option
+                        >{/each}
+                    </select></label
+                  >
+                </div>
+                {#if attachedFiles.length}<div class="attachments">
+                    {#each attachedFiles as path (path)}<span
+                        >{path.split(/[\\/]/).at(-1)}<button
+                          aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
+                          onclick={() =>
+                            (attachedFiles = attachedFiles.filter((item) => item !== path))}
+                          >×</button
+                        ></span
+                      >{/each}
+                  </div>{/if}
+                <textarea
+                  aria-label="Message"
+                  bind:value={draft}
+                  onkeydown={keydown}
+                  rows="3"
+                  placeholder={inputReady
+                    ? 'Describe the work or ask a question…'
+                    : 'Complete repository setup before planning…'}
+                  disabled={!inputReady || sending}></textarea>
+                <div class="composer-bottom">
+                  <span>Enter to send · Shift+Enter for newline</span><Button
+                    variant="ghost"
+                    size="sm"
+                    onclick={attachFiles}
+                    disabled={!inputReady || sending}>Attach files</Button
+                  ><Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
+                </div>
               </div>
             </div>
-          </div>
-        {/if}
-      </main>
-      {#if sessionID || acpAgent}<div
-          class="details-resizer"
-          role="slider"
-          tabindex="0"
-          aria-label="Pane divider position"
-          aria-orientation="horizontal"
-          aria-controls="session-details"
-          aria-valuemin="300"
-          aria-valuemax={Math.max(300, workspaceWidth - 328)}
-          aria-valuenow={Math.max(300, workspaceWidth - 8 - visibleDetailsWidth)}
-          aria-valuetext={`Details pane ${visibleDetailsWidth} pixels wide`}
-          onpointerdown={startDetailsResize}
-          onpointermove={moveDetailsResize}
-          onpointerup={endDetailsResize}
-          onpointercancel={endDetailsResize}
-          onkeydown={keydownDetailsResize}
-          ondblclick={() => setDetailsWidth(420)}
-        ></div>
-        <section
-          id="session-details"
-          class="side-area"
-          aria-label="Session details"
-          tabindex="-1"
-          bind:this={detailsArea}
-        >
-          <nav class="side-tabs" aria-label="Session detail tabs">
-            {#if !acpAgent && showPlanPanel}<button
-                class:active={activeSideTab === 'plan'}
-                aria-current={activeSideTab === 'plan' ? 'page' : undefined}
-                onclick={() => switchSideTab('plan')}>Plan</button
-              >{/if}<button
-              class:active={acpAgent || activeSideTab === 'changes'}
-              aria-current={acpAgent || activeSideTab === 'changes' ? 'page' : undefined}
-              onclick={toggleChanges}>Changes ({diffs.length})</button
-            >{#if !acpAgent}<button
-                class:active={activeSideTab === 'history'}
-                aria-current={activeSideTab === 'history' ? 'page' : undefined}
-                onclick={() => switchSideTab('history')}>History</button
-              >{/if}
-          </nav>
-          <div class="side-panel-body">
-            {#if !acpAgent && showPlanPanel}<div
-                class:inactive={activeSideTab !== 'plan'}
-                class="side-view"
-              >
-                <PlanPanel
-                  {snapshot}
-                  client={connecting ? null : client}
-                  {directory}
-                  {sessionID}
-                  {dark}
-                  onchanged={() => refreshSession()}
-                  onselectfile={selectDiffPath}
+          {/if}
+        </main>
+        {#if sessionID || acpAgent}<div
+            class="details-resizer"
+            role="slider"
+            tabindex="0"
+            aria-label="Pane divider position"
+            aria-orientation="horizontal"
+            aria-controls="session-details"
+            aria-valuemin="300"
+            aria-valuemax={Math.max(300, workspaceWidth - 328)}
+            aria-valuenow={Math.max(300, workspaceWidth - 8 - visibleDetailsWidth)}
+            aria-valuetext={`Details pane ${visibleDetailsWidth} pixels wide`}
+            onpointerdown={startDetailsResize}
+            onpointermove={moveDetailsResize}
+            onpointerup={endDetailsResize}
+            onpointercancel={endDetailsResize}
+            onkeydown={keydownDetailsResize}
+            ondblclick={() => setDetailsWidth(420)}
+          ></div>
+          <section
+            id="session-details"
+            class="side-area"
+            aria-label="Session details"
+            tabindex="-1"
+            bind:this={detailsArea}
+          >
+            <nav class="side-tabs" aria-label="Session detail tabs">
+              {#if !acpAgent && showPlanPanel}<button
+                  class:active={activeSideTab === 'plan'}
+                  aria-current={activeSideTab === 'plan' ? 'page' : undefined}
+                  onclick={() => switchSideTab('plan')}>Plan</button
+                >{/if}<button
+                class:active={acpAgent || activeSideTab === 'changes'}
+                aria-current={acpAgent || activeSideTab === 'changes' ? 'page' : undefined}
+                onclick={toggleChanges}>Changes ({diffs.length})</button
+              >{#if !acpAgent}<button
+                  class:active={activeSideTab === 'history'}
+                  aria-current={activeSideTab === 'history' ? 'page' : undefined}
+                  onclick={() => switchSideTab('history')}>History</button
+                >{/if}
+            </nav>
+            <div class="side-panel-body">
+              {#if !acpAgent && showPlanPanel}<div
+                  class:inactive={activeSideTab !== 'plan'}
+                  class="side-view"
+                >
+                  <PlanPanel
+                    {snapshot}
+                    client={connecting ? null : client}
+                    {directory}
+                    {sessionID}
+                    {dark}
+                    onchanged={() => refreshSession()}
+                    onselectfile={selectDiffPath}
+                  />
+                </div>{/if}
+              <div class:inactive={!acpAgent && activeSideTab !== 'changes'} class="side-view">
+                <DiffPanel
+                  files={diffs}
+                  annotations={acpAgent ? {} : diffAnnotations}
+                  selected={selectedFilePath}
+                  loading={diffLoading}
+                  error={diffError}
+                  onselect={(file) => (selectedFilePath = file)}
+                  onrefresh={() => (acpAgent ? refreshAgentDiff() : refreshDiff())}
+                  onclose={toggleChanges}
                 />
-              </div>{/if}
-            <div class:inactive={!acpAgent && activeSideTab !== 'changes'} class="side-view">
-              <DiffPanel
-                files={diffs}
-                annotations={acpAgent ? {} : diffAnnotations}
-                selected={selectedFilePath}
-                loading={diffLoading}
-                error={diffError}
-                onselect={(file) => (selectedFilePath = file)}
-                onrefresh={() => (acpAgent ? refreshAgentDiff() : refreshDiff())}
-                onclose={toggleChanges}
-              />
+              </div>
+              {#if !acpAgent}<div class:inactive={activeSideTab !== 'history'} class="side-view">
+                  <HistoryPanel
+                    events={historyEvents}
+                    session={currentSession}
+                    loading={historyLoading}
+                    error={historyError}
+                    onrefresh={() => refreshHistory()}
+                  />
+                </div>{/if}
             </div>
-            {#if !acpAgent}<div class:inactive={activeSideTab !== 'history'} class="side-view">
-                <HistoryPanel
-                  events={historyEvents}
-                  session={currentSession}
-                  loading={historyLoading}
-                  error={historyError}
-                  onrefresh={() => refreshHistory()}
-                />
-              </div>{/if}
-          </div>
-        </section>{/if}
-    </div>
+          </section>{/if}
+      </div>
+    {/snippet}
+    <PaneTree
+      pane={paneLayout}
+      focused={focusedPane}
+      {directory}
+      agents={agentAvailability}
+      {changesPanes}
+      main={mainPaneContent}
+      canClose={leaves(paneLayout).length > 1}
+      onfocus={(id) => (focusedPane = id)}
+      onclose={closeFocusedPane}
+      onratio={updatePaneRatio}
+      oncreated={createPaneThread}
+      onactivity={saveAgentThread}
+      running={(thread) => !!(thread && runningAgentThreads[agentThreadKey(thread)])}
+      onstatus={updateAgentThreadStatus}
+      onchanges={(id) => {
+        changesPanes = changesPanes.filter((item) => item !== id);
+      }}
+    />
   </div>
 </div>
