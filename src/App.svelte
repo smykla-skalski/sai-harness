@@ -16,7 +16,11 @@
   import ProjectSidebar from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import PaneTree from './PaneTree.svelte';
-  import { searchCommandPalette, type PaletteEntry } from './lib/command-palette';
+  import {
+    newestAvailableThread,
+    searchCommandPalette,
+    type PaletteEntry,
+  } from './lib/command-palette';
   import {
     adjacentPaneId,
     closePane,
@@ -74,7 +78,7 @@
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
   let paletteQuery = $state('');
   let paletteIndex = $state(0);
-  let promptFocusRequested = $state(false);
+  let promptFocusPane = $state<string | null>(null);
   let paletteDialog: HTMLDialogElement;
   let paletteInput: HTMLInputElement;
   let palettePreviousFocus: HTMLElement | null = null;
@@ -1095,11 +1099,7 @@
       entry?.kind === 'thread'
         ? entry.thread
         : entry?.kind === 'location'
-          ? (agentThreads
-              .filter(
-                (item) => item.directory === target && (!entry.agent || item.agent === entry.agent),
-              )
-              .toSorted((a, b) => b.updated - a.updated)[0] ?? null)
+          ? newestAvailableThread(agentThreads, agentAvailability, target, entry.agent)
           : null;
     const agent =
       entry?.agent ?? thread?.agent ?? agentAvailability.find((item) => item.available)?.id;
@@ -1116,10 +1116,7 @@
     if (!directory) return;
     focusMainPane();
     openAgent(agent, thread);
-    promptFocusRequested = !thread;
-    if (thread) {
-      void tick().then(() => document.querySelector<HTMLElement>('[data-pane-id="main"]')?.focus());
-    }
+    focusPaneForTyping('main');
   }
 
   function keydownCommandPalette(event: KeyboardEvent) {
@@ -1209,10 +1206,27 @@
     const created = leaves(layout).find((leaf) => !old.has(leaf.id));
     if (!created) return;
     savePaneLayout(layout);
-    focusedPane = created.id;
-    void tick().then(() =>
-      document.querySelector<HTMLElement>(`[data-pane-id="${created.id}"]`)?.focus(),
-    );
+    focusPaneForTyping(created.id);
+  }
+
+  function focusPaneForTyping(id: string) {
+    focusedPane = id;
+    promptFocusPane = id;
+    void focusPanePromptAfterTick(id);
+  }
+
+  async function focusPanePromptAfterTick(id: string) {
+    await tick();
+    if (focusedPane !== id) return;
+    const pane = document.querySelector<HTMLElement>(`[data-pane-id="${id}"]`);
+    const prompt = pane?.querySelector<HTMLTextAreaElement>('[data-pane-prompt]:not(:disabled)');
+    if (prompt) {
+      prompt.focus();
+      promptFocusPane = null;
+    } else {
+      pane?.focus();
+      if (id === 'main' && !acpAgent) promptFocusPane = null;
+    }
   }
 
   function closeFocusedPane(id: string) {
@@ -1221,10 +1235,23 @@
       layout = { ...layout, agent: acpAgent, thread: acpThread };
     savePaneLayout(layout);
     changesPanes = changesPanes.filter((item) => item !== id);
-    focusedPane = leaves(layout)[0]?.id ?? 'main';
-    void tick().then(() =>
-      document.querySelector<HTMLElement>(`[data-pane-id="${focusedPane}"]`)?.focus(),
-    );
+    focusPaneForTyping(leaves(layout)[0]?.id ?? 'main');
+  }
+
+  function closeCurrentPane() {
+    if (leaves(paneLayout).length > 1) {
+      closeFocusedPane(focusedPane);
+      return;
+    }
+    if (acpAgent || !leaves(paneLayout).some((pane) => pane.id === 'main')) {
+      acpAgent = null;
+      acpThread = null;
+      savePaneLayout(mainPane());
+      changesPanes = [];
+    } else if (sessionID) {
+      clearSelectedSession();
+    }
+    focusPaneForTyping('main');
   }
 
   function updatePaneRatio(id: string, ratio: number) {
@@ -2077,6 +2104,18 @@
     if (
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 'w' &&
+      !event.repeat &&
+      !document.querySelector('dialog[open]')
+    ) {
+      event.preventDefault();
+      closeCurrentPane();
+      return;
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
       event.key.toLowerCase() === 'd' &&
       !event.repeat &&
       !document.querySelector('dialog[open]')
@@ -2113,7 +2152,7 @@
               focusedPane,
               event.key.slice(5).toLowerCase() as 'left' | 'right' | 'up' | 'down',
             );
-      if (next) document.querySelector<HTMLElement>(`[data-pane-id="${next}"]`)?.focus();
+      if (next) focusPaneForTyping(next);
       return;
     }
     if (
@@ -2483,8 +2522,8 @@
                   acpAgent}
                 {directory}
                 thread={acpThread}
-                focusPrompt={promptFocusRequested}
-                onpromptfocused={() => (promptFocusRequested = false)}
+                focusPrompt={promptFocusPane === 'main'}
+                onpromptfocused={() => (promptFocusPane = null)}
                 running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
                 focused={focusedPane === 'main'}
                 oncreated={createAgentThread}
@@ -2635,6 +2674,7 @@
                       >{/each}
                   </div>{/if}
                 <textarea
+                  data-pane-prompt
                   aria-label="Message"
                   bind:value={draft}
                   onkeydown={keydown}
@@ -2748,6 +2788,8 @@
       onratio={updatePaneRatio}
       oncreated={createPaneThread}
       onactivity={saveAgentThread}
+      focusPromptPane={promptFocusPane}
+      onpromptfocused={() => (promptFocusPane = null)}
       running={(thread) => !!(thread && runningAgentThreads[agentThreadKey(thread)])}
       onstatus={updateAgentThreadStatus}
       onchanges={(id) => {

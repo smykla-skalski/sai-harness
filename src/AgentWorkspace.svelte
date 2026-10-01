@@ -459,6 +459,7 @@
       {/each}
       <textarea
         bind:this={prompt}
+        data-pane-prompt
         aria-label={`Message ${name}`}
         bind:value={draft}
         onkeydown={keydown}

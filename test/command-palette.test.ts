@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { searchCommandPalette } from '../src/lib/command-palette.ts';
+import { newestAvailableThread, searchCommandPalette } from '../src/lib/command-palette.ts';
 import type { AgentAvailability, AgentThread } from '../src/lib/acp.ts';
 import type { ProjectCatalog } from '../src/lib/projects.ts';
 
@@ -33,4 +33,14 @@ void test('agent term filters threads and keeps empty locations available', () =
   assert.ok(matches.some((entry) => entry.thread?.sessionId === 'b'));
   assert.ok(!matches.some((entry) => entry.thread?.sessionId === 'a'));
   assert.deepEqual(searchCommandPalette(catalog, threads, agents, '/work/alpha', 'no-match'), []);
+});
+
+void test('location picks newest thread with an available agent', () => {
+  const withUnavailable = [
+    ...threads,
+    { agent: 'ghost', directory: '/work/bravo', sessionId: 'ghost', title: 'Ghost', updated: 9 },
+  ];
+  assert.equal(newestAvailableThread(withUnavailable, agents, '/work/bravo', null)?.sessionId, 'b');
+  assert.equal(newestAvailableThread(withUnavailable, agents, '/work/alpha-feature', null), null);
+  assert.equal(newestAvailableThread(withUnavailable, agents, '/work/bravo', 'claude'), null);
 });

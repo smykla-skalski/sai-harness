@@ -70,6 +70,7 @@ describe('split agent panes', () => {
     await browser.keys('F6');
     const focusedAfter = await $('.pane-leaf.focused').getAttribute('data-pane-id');
     expect(focusedAfter).not.toBe(focusedBefore);
+    await expect($('.pane-leaf.focused textarea[data-pane-prompt]')).toBeFocused();
 
     await browser.refresh();
     await expect($('.pane-split.column')).toBeDisplayed();
@@ -97,5 +98,8 @@ describe('split agent panes', () => {
     await $('button[aria-label="Close pane"]').click();
     await browser.refresh();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
+    await browser.keys(['Meta', 'w']);
+    await expect($('.agent-header')).not.toExist();
+    await expect($('.workspace')).toBeDisplayed();
   });
 });

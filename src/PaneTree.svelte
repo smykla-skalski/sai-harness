@@ -21,6 +21,8 @@
     onratio: (id: string, ratio: number) => void;
     oncreated: (id: string, thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
+    focusPromptPane: string | null;
+    onpromptfocused: () => void;
     running: (thread: AgentThread | null) => boolean;
     onstatus: (thread: AgentThread, running: boolean) => void;
     onchanges: (id: string) => void;
@@ -39,6 +41,8 @@
     onratio,
     oncreated,
     onactivity,
+    focusPromptPane,
+    onpromptfocused,
     running,
     onstatus,
     onchanges,
@@ -127,6 +131,8 @@
       {onratio}
       {oncreated}
       {onactivity}
+      {focusPromptPane}
+      {onpromptfocused}
       {running}
       {onstatus}
       {onchanges}
@@ -172,6 +178,8 @@
       {onratio}
       {oncreated}
       {onactivity}
+      {focusPromptPane}
+      {onpromptfocused}
       {running}
       {onstatus}
       {onchanges}
@@ -214,6 +222,8 @@
             thread={pane.thread}
             running={running(pane.thread)}
             focused={focused === pane.id}
+            focusPrompt={focusPromptPane === pane.id}
+            {onpromptfocused}
             oncreated={(thread) => oncreated(pane.id, thread)}
             {onactivity}
             {onstatus}

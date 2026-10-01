@@ -11,6 +11,24 @@ export type PaletteEntry = {
   thread: AgentThread | null;
 };
 
+export function newestAvailableThread(
+  threads: AgentThread[],
+  agents: AgentAvailability[],
+  directory: string,
+  agentId: AgentId | null,
+): AgentThread | null {
+  return (
+    threads
+      .filter(
+        (thread) =>
+          thread.directory === directory &&
+          (!agentId || thread.agent === agentId) &&
+          agents.some((agent) => agent.id === thread.agent && agent.available),
+      )
+      .toSorted((a, b) => b.updated - a.updated)[0] ?? null
+  );
+}
+
 function name(path: string): string {
   return path.split(/[\\/]/).findLast((part) => part.length > 0) ?? path;
 }

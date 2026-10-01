@@ -33,6 +33,13 @@ describe('command palette', () => {
           JSON.stringify([
             { agent: 'claude', directory: b, sessionId: 'old', title: 'Old thread', updated: 1 },
             { agent: 'claude', directory: b, sessionId: 'new', title: 'Newest thread', updated: 2 },
+            {
+              agent: 'ghost',
+              directory: b,
+              sessionId: 'ghost',
+              title: 'Unavailable thread',
+              updated: 3,
+            },
           ]),
         );
       },
