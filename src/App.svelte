@@ -22,6 +22,7 @@
     leaves,
     loadPaneLayouts,
     mainPane,
+    migratePaneDirectory,
     splitPane,
     updatePane,
     type Pane,
@@ -849,7 +850,10 @@
       if (current !== selection) return false;
       if (path !== report.repository) {
         if (paneLayouts[path]) {
-          paneLayouts = { ...paneLayouts, [report.repository]: paneLayouts[path] };
+          paneLayouts = {
+            ...paneLayouts,
+            [report.repository]: migratePaneDirectory(paneLayouts[path], path, report.repository),
+          };
           delete paneLayouts[path];
           persistPaneLayouts();
         }

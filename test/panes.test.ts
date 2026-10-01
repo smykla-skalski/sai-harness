@@ -6,6 +6,7 @@ import {
   leaves,
   loadPaneLayouts,
   mainPane,
+  migratePaneDirectory,
   splitPane,
   updatePane,
 } from '../src/lib/panes.ts';
@@ -63,5 +64,28 @@ void test('pane layouts survive serialization and reject malformed saved trees',
     second: { id: 'main', agent: 'claude', thread: null },
   };
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': duplicate })), {});
+  const invalidDirection = {
+    id: 'main',
+    direction: 'diagonal',
+    agent: 'claude',
+    thread: null,
+  };
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': invalidDirection })), {});
   assert.deepEqual(loadPaneLayouts('{invalid'), {});
+});
+
+void test('canonical path migration updates threads inside nested panes', () => {
+  const first = splitPane(mainPane(), 'main', 'row', 'claude');
+  const second = splitPane(first, leaves(first)[1].id, 'column', 'codex');
+  const oldThread = {
+    agent: 'codex',
+    sessionId: 'session-1',
+    directory: '/old/repo',
+    title: 'Work',
+    updated: 1,
+  };
+  const populated = updatePane(second, leaves(second)[2].id, { thread: oldThread });
+  const migrated = migratePaneDirectory(populated, '/old/repo', '/new/repo');
+  assert.equal(leaves(migrated)[2].thread?.directory, '/new/repo');
+  assert.equal(leaves(populated)[2].thread?.directory, '/old/repo');
 });

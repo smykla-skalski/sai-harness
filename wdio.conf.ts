@@ -15,7 +15,10 @@ for (const [name, directory] of Object.entries({
   process.env[name] = join(state, directory);
 }
 
-const binary = resolve(`src-tauri/target/debug/sail${process.platform === 'win32' ? '.exe' : ''}`);
+const binary = resolve(
+  process.env.SAIL_E2E_BINARY ??
+    `src-tauri/target/debug/sail${process.platform === 'win32' ? '.exe' : ''}`,
+);
 
 export const config = {
   runner: 'local',

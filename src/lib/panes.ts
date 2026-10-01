@@ -95,6 +95,18 @@ export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane 
   return pane.id === id ? { ...pane, ...update } : pane;
 }
 
+export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane {
+  if ('direction' in pane)
+    return {
+      ...pane,
+      first: migratePaneDirectory(pane.first, from, to),
+      second: migratePaneDirectory(pane.second, from, to),
+    };
+  return pane.thread?.directory === from
+    ? { ...pane, thread: { ...pane.thread, directory: to } }
+    : pane;
+}
+
 export function loadPaneLayouts(raw: string | null): Record<string, Pane> {
   try {
     const parsed: unknown = JSON.parse(raw ?? '{}');
@@ -115,8 +127,9 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
   const pane: Record<string, unknown> = Object.fromEntries(Object.entries(value));
   if (typeof pane.id !== 'string' || !pane.id || ids.has(pane.id)) return false;
   ids.add(pane.id);
-  if (pane.direction === 'row' || pane.direction === 'column')
+  if ('direction' in pane)
     return (
+      (pane.direction === 'row' || pane.direction === 'column') &&
       typeof pane.ratio === 'number' &&
       Number.isFinite(pane.ratio) &&
       pane.ratio >= 0.1 &&
