@@ -2,7 +2,7 @@
   import { marked, type Token } from 'marked';
   import { safeMarkdownHref } from './lib/markdown';
 
-  let { source }: { source: string } = $props();
+  let { source, compact = false }: { source: string; compact?: boolean } = $props();
   let blocks = $derived(marked.lexer(source));
 </script>
 
@@ -70,13 +70,24 @@
   {/each}
 {/snippet}
 
-<div class="markdown">{@render renderBlocks(blocks)}</div>
+<div class:compact class="markdown">{@render renderBlocks(blocks)}</div>
 
 <style>
   .markdown {
     overflow-wrap: anywhere;
     font-size: 14px;
     line-height: 1.6;
+  }
+  .markdown.compact {
+    font-size: inherit;
+    line-height: inherit;
+  }
+  .markdown.compact :global(p) {
+    margin-bottom: 6px;
+  }
+  .markdown.compact :global(ul),
+  .markdown.compact :global(ol) {
+    margin: 4px 0;
   }
   .markdown :global(p) {
     margin: 0 0 10px;

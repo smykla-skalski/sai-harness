@@ -2,6 +2,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import { tick } from 'svelte';
   import Diagram from './Diagram.svelte';
+  import Markdown from './Markdown.svelte';
   import {
     answerQuestions,
     canExecutePlan,
@@ -505,7 +506,7 @@
               ? 'Plan amendment: review new steps and changed file access.'
               : 'Plan proposal: review the steps before execution.'}
         </p>{/if}
-      <p class="summary">{plan.summary}</p>
+      <div class="summary"><Markdown source={plan.summary} compact /></div>
       {#if execution && (plan.state !== 'review' || plan.reviewReason !== 'plan')}<section
           class="execution-progress"
           aria-label="Execution progress"
@@ -596,12 +597,16 @@
               >{/if}{#if alternative.pros.length}<div>
                 <b>Pros</b>
                 <ul>
-                  {#each alternative.pros as pro, proIndex (proIndex)}<li>{pro}</li>{/each}
+                  {#each alternative.pros as pro, proIndex (proIndex)}<li>
+                      <Markdown source={pro} compact />
+                    </li>{/each}
                 </ul>
               </div>{/if}{#if alternative.cons.length}<div>
                 <b>Cons</b>
                 <ul>
-                  {#each alternative.cons as con, conIndex (conIndex)}<li>{con}</li>{/each}
+                  {#each alternative.cons as con, conIndex (conIndex)}<li>
+                      <Markdown source={con} compact />
+                    </li>{/each}
                 </ul>
               </div>{/if}
           </div>
@@ -630,13 +635,21 @@
           </div>
           {#if step.origin === 'amendment'}<p class="step-flag">Added during execution</p>{/if}
           {#if decisions[step.id]?.edit}<p class="step-flag">Edited in your draft</p>{/if}
-          {#if step.needsYou}<p class="decision-prompt">Decision: {step.needsYou}</p>{/if}
+          {#if step.needsYou}<div class="decision-prompt">
+              <strong>Decision:</strong><Markdown source={step.needsYou} compact />
+            </div>{/if}
           {#if plan.state !== 'review' || plan.reviewReason !== 'plan'}<div class="step-execution">
-              {#if step.note}<p><strong>Progress:</strong> {step.note}</p>{/if}
-              {#if step.check}<p class:failed={step.check.outcome === 'fail'}>
+              {#if step.note}<div class="execution-copy">
+                  <strong>Progress:</strong><Markdown source={step.note} compact />
+                </div>{/if}
+              {#if step.check}<div
+                  class:failed={step.check.outcome === 'fail'}
+                  class="execution-copy"
+                >
                   <strong>Check {step.check.outcome}:</strong>
-                  {step.check.summary}{#if step.check.command}<code>{step.check.command}</code>{/if}
-                </p>{/if}
+                  <Markdown source={step.check.summary} compact />
+                  {#if step.check.command}<code>{step.check.command}</code>{/if}
+                </div>{/if}
               <p><strong>Planned files:</strong> {step.files.join(' · ') || 'None listed'}</p>
               <p>
                 <strong>Touched files:</strong>
@@ -654,8 +667,12 @@
               step.check?.outcome === 'fail'}
           >
             <summary>Step details</summary>
-            <p>{decisions[step.id]?.edit?.detail ?? step.detail}</p>
-            {#if step.rationale}<p>Why: {step.rationale}</p>{/if}
+            <div class="step-prose">
+              <Markdown source={decisions[step.id]?.edit?.detail ?? step.detail} compact />
+            </div>
+            {#if step.rationale}<div class="step-prose">
+                <strong>Why:</strong><Markdown source={step.rationale} compact />
+              </div>{/if}
             {#if step.dependsOn?.length}<p>After: {step.dependsOn.join(', ')}</p>{/if}
             {#if step.files.length}<p class="files">Files: {step.files.join(' · ')}</p>{/if}
             {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.touched.length}<p
@@ -663,14 +680,19 @@
               >
                 Touched: {step.touched.join(' · ')}
               </p>{/if}
-            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.note}<p>
-                Progress: {step.note}
-              </p>{/if}
-            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.check}<p>
-                Check ({step.check.outcome}): {step.check.summary}{#if step.check.command}<code>
-                    {step.check.command}</code
-                  >{/if}
-              </p>{/if}
+            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.note}<div
+                class="step-prose"
+              >
+                <strong>Progress:</strong><Markdown source={step.note} compact />
+              </div>{/if}
+            {#if plan.state === 'review' && plan.reviewReason === 'plan' && step.check}<div
+                class="step-prose"
+              >
+                <strong>Check ({step.check.outcome}):</strong><Markdown
+                  source={step.check.summary}
+                  compact
+                />{#if step.check.command}<code>{step.check.command}</code>{/if}
+              </div>{/if}
             {#if step.diagram}<Diagram
                 source={step.diagram}
                 title={`${step.title} diagram`}
@@ -860,6 +882,9 @@
     line-height: 1.55;
     white-space: pre-wrap;
   }
+  .summary {
+    white-space: normal;
+  }
   .review-context,
   .execute-confirm {
     color: var(--sui-muted);
@@ -972,6 +997,9 @@
   .step-card details p {
     white-space: pre-wrap;
   }
+  .step-prose {
+    margin: 10px 0;
+  }
   .step-card summary {
     cursor: pointer;
   }
@@ -996,8 +1024,8 @@
     font: 13px/1.5 var(--sui-font);
   }
   .step-card .decision-prompt {
+    margin: 10px 0;
     color: var(--sui-foreground);
-    font-weight: 600;
   }
   .step-card .files {
     font-family: ui-monospace, monospace;
@@ -1011,6 +1039,9 @@
     overflow-wrap: anywhere;
   }
   .step-execution p {
+    margin: 5px 0;
+  }
+  .step-execution .execution-copy {
     margin: 5px 0;
   }
   .step-execution .failed {
