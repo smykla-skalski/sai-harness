@@ -467,6 +467,7 @@
     healthTimer = setInterval(() => void checkRuntime(), 5000);
     diffPollTimer = setInterval(() => {
       if (
+        !acpAgent &&
         detailsOpen &&
         activeSideTab === 'changes' &&
         sessionID &&
@@ -1401,7 +1402,7 @@
   }
 
   async function refreshDiff(id = sessionID, current = selection, quiet = false) {
-    if (!client || !id || !directory) return;
+    if (acpAgent || !client || !id || !directory) return;
     const source = client;
     const path = directory;
     const generation = ++diffRefresh;
@@ -1409,6 +1410,7 @@
     try {
       const next = (await source.vcs.diff({ location: { directory: path }, mode: 'working' })).data;
       if (
+        acpAgent ||
         generation !== diffRefresh ||
         current !== selection ||
         id !== sessionID ||
@@ -1419,7 +1421,7 @@
       diffError = '';
       selectedFilePath = selectedDiffFile(next, selectedFilePath, path);
     } catch (cause) {
-      if (generation === diffRefresh && current === selection && id === sessionID)
+      if (!acpAgent && generation === diffRefresh && current === selection && id === sessionID)
         diffError = describe(cause);
     } finally {
       if (generation === diffRefresh) diffLoading = false;
@@ -1771,7 +1773,7 @@
 
   function focusWorkspace() {
     if (acpAgent && agentChangesOpen) void refreshAgentDiff();
-    else if (detailsOpen && activeSideTab === 'changes') void refreshDiff();
+    else if (!acpAgent && detailsOpen && activeSideTab === 'changes') void refreshDiff();
   }
 
   function describe(cause: unknown): string {
