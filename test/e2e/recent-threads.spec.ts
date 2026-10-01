@@ -65,11 +65,31 @@ describe('recent thread shortcuts', () => {
     await browser.keys(['Meta', '1']);
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Thread two'));
 
-    await browser.keys(['Control', 'Tab']);
+    await browser.execute(() =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, bubbles: true }),
+      ),
+    );
     await browser.waitUntil(
       async () =>
         (await browser.execute(() => localStorage.getItem('sai-directory'))) === firstPath,
     );
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Thread one'));
+
+    await browser.execute(() =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Tab',
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+        }),
+      ),
+    );
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => localStorage.getItem('sai-directory'))) === secondPath,
+    );
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Thread two'));
   });
 });
