@@ -1,7 +1,8 @@
 import type { AgentId, AgentThread } from './acp';
 
 export type Pane =
-  | { id: string; agent: AgentId | null; thread: AgentThread | null; kind?: 'terminal' }
+  | { id: string; agent: AgentId | null; thread: AgentThread | null; kind?: undefined }
+  | { id: string; agent: null; thread: null; kind: 'terminal' }
   | { id: string; direction: 'row' | 'column'; ratio: number; first: Pane; second: Pane };
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
@@ -106,7 +107,11 @@ export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane 
       second: updatePane(pane.second, id, update),
     };
   }
-  return pane.id === id ? { ...pane, ...update } : pane;
+  if (pane.id !== id) return pane;
+  const next = { ...pane, ...update };
+  return next.kind === 'terminal'
+    ? { id: next.id, kind: 'terminal', agent: null, thread: null }
+    : { id: next.id, agent: next.agent ?? null, thread: next.thread ?? null };
 }
 
 export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane {
@@ -116,6 +121,7 @@ export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane
       first: migratePaneDirectory(pane.first, from, to),
       second: migratePaneDirectory(pane.second, from, to),
     };
+  if (pane.kind === 'terminal') return pane;
   return pane.thread?.directory === from
     ? { ...pane, thread: { ...pane.thread, directory: to } }
     : pane;
@@ -151,8 +157,9 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
       validPane(pane.first, ids) &&
       validPane(pane.second, ids)
     );
+  if (pane.kind === 'terminal') return pane.agent === null && pane.thread === null;
   return (
-    (pane.kind === undefined || pane.kind === 'terminal') &&
+    pane.kind === undefined &&
     (pane.agent === null || typeof pane.agent === 'string') &&
     (pane.thread === null ||
       (typeof pane.thread === 'object' &&

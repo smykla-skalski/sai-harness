@@ -1,6 +1,6 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,7 +18,11 @@ pub enum TerminalEvent {
 }
 
 struct TerminalOutput {
-    history: Vec<u8>,
+    history: VecDeque<u8>,
+    #[cfg(windows)]
+    current_directory: PathBuf,
+    #[cfg(windows)]
+    osc_tail: Vec<u8>,
     exit_code: Option<u32>,
     subscriber: Option<(String, Channel<TerminalEvent>)>,
 }
@@ -140,6 +144,8 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
     command.cwd(&directory);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    #[cfg(windows)]
+    command.env("PROMPT", "$E]9;9;$P$E\\$P$G");
     let child = pair
         .slave
         .spawn_command(command)
@@ -154,7 +160,11 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
         .take_writer()
         .map_err(|error| error.to_string())?;
     let output = Arc::new(Mutex::new(TerminalOutput {
-        history: Vec::new(),
+        history: VecDeque::new(),
+        #[cfg(windows)]
+        current_directory: directory.clone(),
+        #[cfg(windows)]
+        osc_tail: Vec::new(),
         exit_code: None,
         subscriber: None,
     }));
@@ -171,11 +181,11 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
                 Ok(0) | Err(_) => break,
                 Ok(size) => {
                     if let Ok(mut state) = background_output.lock() {
-                        state.history.extend_from_slice(&buffer[..size]);
-                        if state.history.len() > MAX_OUTPUT {
-                            let excess = state.history.len() - MAX_OUTPUT;
-                            state.history.drain(..excess);
-                        }
+                        state.history.extend(&buffer[..size]);
+                        let excess = state.history.len().saturating_sub(MAX_OUTPUT);
+                        state.history.drain(..excess);
+                        #[cfg(windows)]
+                        update_windows_directory(&mut state, &buffer[..size]);
                         if let Some((_, channel)) = &state.subscriber {
                             let _ = channel.send(TerminalEvent::Output {
                                 data: buffer[..size].to_vec(),
@@ -253,12 +263,14 @@ pub fn terminal_open(
         .map_err(|error| error.to_string())?;
     let mut output = session.output.lock().map_err(|error| error.to_string())?;
     output.subscriber = Some((attachment, on_event.clone()));
-    for chunk in output.history.chunks(8192) {
-        on_event
-            .send(TerminalEvent::Output {
-                data: chunk.to_vec(),
-            })
-            .map_err(|error| error.to_string())?;
+    for slice in [output.history.as_slices().0, output.history.as_slices().1] {
+        for chunk in slice.chunks(8192) {
+            on_event
+                .send(TerminalEvent::Output {
+                    data: chunk.to_vec(),
+                })
+                .map_err(|error| error.to_string())?;
+        }
     }
     if let Some(code) = output.exit_code {
         on_event
@@ -357,6 +369,10 @@ pub fn terminal_close(manager: State<'_, TerminalManager>, id: String) -> Result
 }
 
 fn shell_directory(session: &TerminalSession) -> PathBuf {
+    #[cfg(windows)]
+    if let Ok(output) = session.output.lock() {
+        return output.current_directory.clone();
+    }
     #[cfg(target_os = "linux")]
     if let Some(pid) = session.process_id {
         if let Ok(directory) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
@@ -380,6 +396,32 @@ fn shell_directory(session: &TerminalSession) -> PathBuf {
         }
     }
     session.directory.clone()
+}
+
+#[cfg(windows)]
+fn update_windows_directory(output: &mut TerminalOutput, bytes: &[u8]) {
+    output.osc_tail.extend_from_slice(bytes);
+    for start in 0..output.osc_tail.len().saturating_sub(3) {
+        if !output.osc_tail[start..].starts_with(b"\x1b]9;9;") {
+            continue;
+        }
+        if let Some(end) = output.osc_tail[start + 6..]
+            .windows(2)
+            .position(|pair| pair == b"\x1b\\")
+        {
+            let path = &output.osc_tail[start + 6..start + 6 + end];
+            if let Ok(path) = std::str::from_utf8(path) {
+                let directory = PathBuf::from(path);
+                if directory.is_dir() {
+                    output.current_directory = directory;
+                }
+            }
+        }
+    }
+    if output.osc_tail.len() > 8192 {
+        let excess = output.osc_tail.len() - 8192;
+        output.osc_tail.drain(..excess);
+    }
 }
 
 #[tauri::command]

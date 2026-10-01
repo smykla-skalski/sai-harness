@@ -1121,6 +1121,11 @@
     const wasSelected = directory === path;
     try {
       if (wasSelected) await loadProject(repository);
+      await Promise.all(
+        leaves(paneLayouts[path] ?? mainPane())
+          .filter((pane) => pane.kind === 'terminal')
+          .map((pane) => invoke('terminal_close', { id: pane.id })),
+      );
       await invoke('delete_worktree', { repository, worktree: path });
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
       const removedThreads = agentThreads.filter((thread) => thread.directory === path);
@@ -1836,7 +1841,7 @@
       void invoke('terminal_close', { id });
     let layout = closePane(paneLayout, id);
     if (!('direction' in layout) && layout.id === 'main')
-      layout = { ...layout, agent: acpAgent, thread: acpThread };
+      layout = { id: 'main', agent: acpAgent, thread: acpThread };
     savePaneLayout(layout);
     changesPanes = changesPanes.filter((item) => item !== id);
     focusPaneForTyping(leaves(layout)[0]?.id ?? 'main');

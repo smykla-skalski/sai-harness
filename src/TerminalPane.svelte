@@ -30,20 +30,24 @@
   let generation = 0;
   const attachment = crypto.randomUUID();
 
-  function channel(): Channel<TerminalEvent> {
+  function channel(onexit: (code: number) => void): Channel<TerminalEvent> {
     const current = ++generation;
     const receiver = new Channel<TerminalEvent>();
     Object.assign(receiver, {
       onmessage: (event: TerminalEvent) => {
         if (disposed || current !== generation) return;
         if (event.kind === 'output') terminal.write(new Uint8Array(event.data));
-        else exitCode = event.code;
+        else {
+          exitCode = event.code;
+          onexit(event.code);
+        }
       },
     });
     return receiver;
   }
 
   async function open() {
+    let reportedExit: number | null = null;
     try {
       await invoke('terminal_open', {
         id,
@@ -51,9 +55,10 @@
         cols: terminal.cols,
         rows: terminal.rows,
         attachment,
-        onEvent: channel(),
+        onEvent: channel((code) => (reportedExit = code)),
       });
       started = true;
+      exitCode = reportedExit;
       error = '';
       if (focused) terminal.focus();
     } catch (cause) {
@@ -66,7 +71,6 @@
       ++generation;
       await invoke('terminal_close', { id });
       terminal.reset();
-      exitCode = null;
       started = false;
       await open();
     } catch (cause) {
@@ -118,14 +122,27 @@
     });
     terminal.registerLinkProvider({
       provideLinks(line, callback) {
-        const content = terminal.buffer.active.getLine(line - 1)?.translateToString() ?? '';
+        const buffer = terminal.buffer.active;
+        let first = line - 1;
+        while (first > 0 && buffer.getLine(first)?.isWrapped) first--;
+        let last = line - 1;
+        while (last + 1 < buffer.length && buffer.getLine(last + 1)?.isWrapped) last++;
+        let content = '';
+        for (let row = first; row <= last; row++) {
+          content += buffer.getLine(row)?.translateToString(row !== last) ?? '';
+        }
         const links: ILink[] = [];
         for (const link of terminalFileLinks(content)) {
+          const start = link.start - 1;
+          const end = start + link.text.length - 1;
+          const startRow = first + Math.floor(start / terminal.cols) + 1;
+          const endRow = first + Math.floor(end / terminal.cols) + 1;
+          if (line < startRow || line > endRow) continue;
           links.push({
             text: link.text,
             range: {
-              start: { x: link.start, y: line },
-              end: { x: link.start + link.text.length, y: line },
+              start: { x: (start % terminal.cols) + 1, y: startRow },
+              end: { x: (end % terminal.cols) + 1, y: endRow },
             },
             activate: () =>
               void invoke('terminal_open_file', {

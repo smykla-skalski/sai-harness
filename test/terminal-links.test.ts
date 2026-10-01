@@ -10,3 +10,14 @@ void test('terminal file links include relative, absolute, and Windows paths', (
   ]);
   assert.deepEqual(terminalFileLinks('https://example.com/a.ts:2'), []);
 });
+
+void test('terminal links preserve spaced, quoted, escaped, and extensionless paths', () => {
+  assert.deepEqual(terminalFileLinks('/tmp/my file.ts:2 Makefile:12'), [
+    { path: '/tmp/my file.ts', line: 2, text: '/tmp/my file.ts:2', start: 1 },
+    { path: 'Makefile', line: 12, text: 'Makefile:12', start: 19 },
+  ]);
+  assert.deepEqual(terminalFileLinks('"my file.ts":7 my\\ file.ts:3'), [
+    { path: 'my file.ts', line: 7, text: '"my file.ts":7', start: 1 },
+    { path: 'my file.ts', line: 3, text: 'my\\ file.ts:3', start: 16 },
+  ]);
+});

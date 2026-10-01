@@ -80,6 +80,10 @@ void test('pane layouts survive serialization and reject malformed saved trees',
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': layout }))['/repo'], layout);
   const terminal = updatePane(layout, leaves(layout)[1].id, { kind: 'terminal' });
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': terminal }))['/repo'], terminal);
+  const hybrid = { id: 'main', kind: 'terminal', agent: 'claude', thread: null };
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': hybrid })), {});
+  const mainTerminal = updatePane(mainPane(), 'main', { kind: 'terminal' });
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': mainTerminal }))['/repo'], mainTerminal);
   const duplicate = {
     id: 'split',
     direction: 'row',
