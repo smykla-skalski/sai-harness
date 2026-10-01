@@ -16,6 +16,7 @@
   import ProjectSidebar from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import PaneTree from './PaneTree.svelte';
+  import { searchCommandPalette, type PaletteEntry } from './lib/command-palette';
   import {
     adjacentPaneId,
     closePane,
@@ -71,6 +72,16 @@
   let runtimeSettingsOpen = $state(false);
   let agentAvailability = $state<AgentAvailability[]>([]);
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
+  let paletteQuery = $state('');
+  let paletteIndex = $state(0);
+  let promptFocusRequested = $state(false);
+  let paletteDialog: HTMLDialogElement;
+  let paletteInput: HTMLInputElement;
+  let palettePreviousFocus: HTMLElement | null = null;
+  let restorePaletteFocus = true;
+  const paletteEntries = $derived(
+    searchCommandPalette(projectCatalog, agentThreads, agentAvailability, directory, paletteQuery),
+  );
   let runningAgentThreads = $state<Record<string, boolean>>({});
   const savedPaneLayouts = loadPaneLayouts(getSetting('sai-pane-layouts'));
   let paneLayouts = $state<Record<string, Pane>>(savedPaneLayouts);
@@ -1058,6 +1069,80 @@
     setupOpen = false;
   }
 
+  function openCommandPalette() {
+    if (paletteDialog.open || document.querySelector('dialog[open]')) return;
+    palettePreviousFocus = document.activeElement as HTMLElement | null;
+    restorePaletteFocus = true;
+    paletteQuery = '';
+    paletteIndex = 0;
+    paletteDialog.showModal();
+    void tick().then(() => paletteInput.focus());
+  }
+
+  function closeCommandPalette(restore = true) {
+    restorePaletteFocus = restore;
+    paletteDialog.close();
+  }
+
+  function commandPaletteClosed() {
+    if (restorePaletteFocus) palettePreviousFocus?.focus();
+    palettePreviousFocus = null;
+  }
+
+  async function choosePaletteEntry(entry: PaletteEntry | null) {
+    const target = entry?.directory ?? directory;
+    const thread =
+      entry?.kind === 'thread'
+        ? entry.thread
+        : entry?.kind === 'location'
+          ? (agentThreads
+              .filter(
+                (item) => item.directory === target && (!entry.agent || item.agent === entry.agent),
+              )
+              .toSorted((a, b) => b.updated - a.updated)[0] ?? null)
+          : null;
+    const agent =
+      entry?.agent ?? thread?.agent ?? agentAvailability.find((item) => item.available)?.id;
+    if (!target || !agent) {
+      error = 'Choose a project and install an agent to start a thread.';
+      return;
+    }
+    if (!agentAvailability.some((item) => item.id === agent && item.available)) {
+      error = `${agent} is unavailable. Choose another agent.`;
+      return;
+    }
+    closeCommandPalette(false);
+    if (target !== directory) await loadProject(target);
+    if (!directory) return;
+    focusMainPane();
+    openAgent(agent, thread);
+    promptFocusRequested = !thread;
+    if (thread) {
+      void tick().then(() => document.querySelector<HTMLElement>('[data-pane-id="main"]')?.focus());
+    }
+  }
+
+  function keydownCommandPalette(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeCommandPalette();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!paletteEntries.length) return;
+      paletteIndex =
+        (paletteIndex + (event.key === 'ArrowDown' ? 1 : -1) + paletteEntries.length) %
+        paletteEntries.length;
+      void tick().then(() =>
+        paletteDialog
+          .querySelector<HTMLElement>('.palette-entry.active')
+          ?.scrollIntoView({ block: 'nearest' }),
+      );
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      void choosePaletteEntry(paletteEntries[paletteIndex] ?? null);
+    }
+  }
+
   function saveAgentThread(thread: AgentThread) {
     agentThreads = [
       thread,
@@ -1981,6 +2066,17 @@
     if (
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 'k' &&
+      !event.repeat
+    ) {
+      event.preventDefault();
+      openCommandPalette();
+      return;
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
       event.key.toLowerCase() === 'd' &&
       !event.repeat &&
       !document.querySelector('dialog[open]')
@@ -2387,6 +2483,8 @@
                   acpAgent}
                 {directory}
                 thread={acpThread}
+                focusPrompt={promptFocusRequested}
+                onpromptfocused={() => (promptFocusRequested = false)}
                 running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
                 focused={focusedPane === 'main'}
                 oncreated={createAgentThread}
@@ -2658,3 +2756,47 @@
     />
   </div>
 </div>
+<dialog
+  class="command-palette"
+  bind:this={paletteDialog}
+  aria-label="Jump to project or thread"
+  onclose={commandPaletteClosed}
+>
+  <div class="palette-search">
+    <input
+      bind:this={paletteInput}
+      value={paletteQuery}
+      aria-label="Search projects, worktrees, and threads"
+      placeholder="Jump to project, worktree, or thread…"
+      oninput={(event) => {
+        paletteQuery = event.currentTarget.value;
+        paletteIndex = 0;
+      }}
+      onkeydown={keydownCommandPalette}
+    />
+    <kbd>Esc</kbd>
+  </div>
+  <div class="palette-results">
+    {#each paletteEntries as entry, index (entry.id)}
+      <button
+        class="palette-entry"
+        class:active={index === paletteIndex}
+        aria-current={index === paletteIndex ? 'true' : undefined}
+        onclick={() => void choosePaletteEntry(entry)}
+      >
+        <span><strong>{entry.label}</strong><small>{entry.detail}</small></span>
+        <span class="palette-kind">{entry.kind === 'thread' ? 'Thread' : 'Project'}</span>
+      </button>
+    {:else}
+      <div class="palette-empty">
+        <p>No matches for “{paletteQuery}”.</p>
+        <button
+          disabled={!directory || !agentAvailability.some((agent) => agent.available)}
+          onclick={() => void choosePaletteEntry(null)}
+        >
+          Start a thread in the current project
+        </button>
+      </div>
+    {/each}
+  </div>
+</dialog>

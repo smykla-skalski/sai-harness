@@ -22,6 +22,8 @@
     thread: AgentThread | null;
     running: boolean;
     focused?: boolean;
+    focusPrompt?: boolean;
+    onpromptfocused?: () => void;
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
     onstatus: (thread: AgentThread, running: boolean) => void;
@@ -33,6 +35,8 @@
     thread,
     running,
     focused = true,
+    focusPrompt = false,
+    onpromptfocused,
     oncreated,
     onactivity,
     onstatus,
@@ -54,8 +58,27 @@
   let selectedThreadId: string | null = null;
   let generation = 0;
   let scroll: HTMLDivElement;
+  let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
   const isBusy = $derived(busy || running);
+
+  async function focusPromptWhenReady() {
+    await tick();
+    if (
+      !focusPrompt ||
+      !ready ||
+      !focused ||
+      isBusy ||
+      activeSessionId !== (thread?.sessionId ?? null)
+    )
+      return;
+    prompt.focus();
+    onpromptfocused?.();
+  }
+
+  $effect(() => {
+    if (focusPrompt && ready && focused && !isBusy) void focusPromptWhenReady();
+  });
 
   function describe(cause: unknown): string {
     return cause instanceof Error ? cause.message : String(cause);
@@ -435,6 +458,7 @@
         </div>
       {/each}
       <textarea
+        bind:this={prompt}
         aria-label={`Message ${name}`}
         bind:value={draft}
         onkeydown={keydown}
