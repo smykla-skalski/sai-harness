@@ -128,21 +128,35 @@
         let last = line - 1;
         while (last + 1 < buffer.length && buffer.getLine(last + 1)?.isWrapped) last++;
         let content = '';
+        const cells: { start: { x: number; y: number }; end: { x: number; y: number } }[] = [];
         for (let row = first; row <= last; row++) {
-          content += buffer.getLine(row)?.translateToString(row !== last) ?? '';
+          const bufferLine = buffer.getLine(row);
+          for (let column = 0; column < terminal.cols; column++) {
+            const cell = bufferLine?.getCell(column);
+            if (!cell || cell.getWidth() === 0) continue;
+            const chars = cell.getChars() || ' ';
+            content += chars;
+            for (let index = 0; index < chars.length; index++) {
+              cells.push({
+                start: { x: column + 1, y: row + 1 },
+                end: { x: column + cell.getWidth(), y: row + 1 },
+              });
+            }
+          }
         }
         const links: ILink[] = [];
         for (const link of terminalFileLinks(content)) {
           const start = link.start - 1;
           const end = start + link.text.length - 1;
-          const startRow = first + Math.floor(start / terminal.cols) + 1;
-          const endRow = first + Math.floor(end / terminal.cols) + 1;
-          if (line < startRow || line > endRow) continue;
+          const firstCell = cells[start];
+          const lastCell = cells[end];
+          if (!firstCell || !lastCell || line < firstCell.start.y || line > lastCell.end.y)
+            continue;
           links.push({
             text: link.text,
             range: {
-              start: { x: (start % terminal.cols) + 1, y: startRow },
-              end: { x: (end % terminal.cols) + 1, y: endRow },
+              start: firstCell.start,
+              end: lastCell.end,
             },
             activate: () =>
               void invoke('terminal_open_file', {
