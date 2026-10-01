@@ -58,6 +58,7 @@ struct Connection {
     child: Mutex<Child>,
     input: Mutex<ChildStdin>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
+    permissions: Mutex<HashMap<String, Value>>,
     next_id: AtomicU64,
     alive: AtomicBool,
     capabilities: Mutex<Value>,
@@ -131,7 +132,12 @@ impl Connection {
     }
 
     fn respond(&self, id: Value, result: Value) -> Result<(), String> {
-        self.write(&json!({"jsonrpc":"2.0","id":id,"result":result}))
+        self.write(&json!({"jsonrpc":"2.0","id":id,"result":result}))?;
+        self.permissions
+            .lock()
+            .map_err(|error| error.to_string())?
+            .remove(&id.to_string());
+        Ok(())
     }
 }
 
@@ -371,6 +377,7 @@ fn connect_blocking(
         child: Mutex::new(child),
         input: Mutex::new(input),
         pending: Mutex::new(HashMap::new()),
+        permissions: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         alive: AtomicBool::new(true),
         capabilities: Mutex::new(Value::Null),
@@ -385,6 +392,15 @@ fn connect_blocking(
                 continue;
             };
             if message.get("method").is_some() {
+                if message.get("method").and_then(Value::as_str)
+                    == Some("session/request_permission")
+                {
+                    if let Some(id) = message.get("id") {
+                        if let Ok(mut permissions) = reader.permissions.lock() {
+                            permissions.insert(id.to_string(), message.clone());
+                        }
+                    }
+                }
                 let _ = app.emit(
                     "acp-event",
                     AgentEvent {
@@ -437,6 +453,27 @@ fn connect_blocking(
         .map_err(|error| error.to_string())? = result.clone();
     runtime.ready.notify_all();
     Ok(result)
+}
+
+#[tauri::command]
+pub fn acp_pending_permissions(
+    manager: State<'_, AgentManager>,
+    agent: String,
+    session_id: String,
+) -> Result<Vec<Value>, String> {
+    let runtime = connection(&manager, &agent)?;
+    let permissions = runtime
+        .permissions
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(permissions
+        .values()
+        .filter(|message| {
+            message.pointer("/params/sessionId").and_then(Value::as_str)
+                == Some(session_id.as_str())
+        })
+        .cloned()
+        .collect())
 }
 
 #[tauri::command]

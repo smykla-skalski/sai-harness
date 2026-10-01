@@ -466,12 +466,17 @@
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
     diffPollTimer = setInterval(() => {
+      const visible = !window.matchMedia('(max-width: 850px)').matches || mobileView === 'details';
+      if (acpAgent && agentChangesOpen && visible && !diffLoading) {
+        void refreshAgentDiff();
+        return;
+      }
       if (
         !acpAgent &&
         detailsOpen &&
         activeSideTab === 'changes' &&
         sessionID &&
-        (!window.matchMedia('(max-width: 850px)').matches || mobileView === 'details') &&
+        visible &&
         !diffLoading
       )
         void refreshDiff(sessionID, selection, true);

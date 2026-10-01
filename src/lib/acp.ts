@@ -165,6 +165,8 @@ export const acp = {
   cancel: (agent: AgentId, sessionId: string) => invoke<void>('acp_cancel', { agent, sessionId }),
   permission: (agent: AgentId, requestId: string | number, optionId: string | null) =>
     invoke<void>('acp_permission', { agent, requestId, optionId }),
+  pendingPermissions: (agent: AgentId, sessionId: string) =>
+    invoke<AgentEvent['message'][]>('acp_pending_permissions', { agent, sessionId }),
   setConfig: (agent: AgentId, sessionId: string, configId: string, value: string) =>
     invoke<{ configOptions?: AgentConfigOption[] }>('acp_set_config', {
       agent,

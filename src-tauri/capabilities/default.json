@@ -16,6 +16,7 @@
     "allow-acp-prompt",
     "allow-acp-cancel",
     "allow-acp-permission",
+    "allow-acp-pending-permissions",
     "allow-acp-set-config",
     "allow-acp-authenticate",
     "core:event:allow-listen",

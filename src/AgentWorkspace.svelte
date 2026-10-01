@@ -51,6 +51,28 @@
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
   }
 
+  function queuePermission(message: AgentEvent['message']) {
+    const params = message.params;
+    if (!params || params.sessionId !== activeSessionId || message.id == null) return;
+    if (permissions.some((permission) => String(permission.id) === String(message.id))) return;
+    const tool = params.toolCall;
+    const title =
+      tool && typeof tool === 'object' && 'title' in tool && typeof tool.title === 'string'
+        ? tool.title
+        : 'Allow agent action?';
+    const options = Array.isArray(params.options)
+      ? params.options.filter(
+          (option): option is AgentPermission['options'][number] =>
+            typeof option === 'object' &&
+            option !== null &&
+            typeof option.optionId === 'string' &&
+            typeof option.name === 'string' &&
+            typeof option.kind === 'string',
+        )
+      : [];
+    permissions = [...permissions, { id: message.id, sessionId: activeSessionId!, title, options }];
+  }
+
   async function activate(id: string | null) {
     const current = ++generation;
     const abandoned = permissions;
@@ -79,6 +101,8 @@
         const session = await acp.load(agent, directory, id);
         if (current === generation)
           configOptions = (session.configOptions as AgentConfigOption[] | undefined) ?? [];
+        const waiting = await acp.pendingPermissions(agent, id);
+        if (current === generation) for (const request of waiting) queuePermission(request);
       }
       if (current === generation) ready = true;
     } catch (cause) {
@@ -122,25 +146,7 @@
           void follow();
         }
       } else if (message.method === 'session/request_permission' && message.id != null) {
-        const tool = params.toolCall;
-        const title =
-          tool && typeof tool === 'object' && 'title' in tool && typeof tool.title === 'string'
-            ? tool.title
-            : 'Allow agent action?';
-        const options = Array.isArray(params.options)
-          ? params.options.filter(
-              (option): option is AgentPermission['options'][number] =>
-                typeof option === 'object' &&
-                option !== null &&
-                typeof option.optionId === 'string' &&
-                typeof option.name === 'string' &&
-                typeof option.kind === 'string',
-            )
-          : [];
-        permissions = [
-          ...permissions,
-          { id: message.id, sessionId: activeSessionId!, title, options },
-        ];
+        queuePermission(message);
       }
     })
       .then((unsubscribe) => {

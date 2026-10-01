@@ -13,6 +13,7 @@ fn main() {
             "acp_prompt",
             "acp_cancel",
             "acp_permission",
+            "acp_pending_permissions",
             "acp_set_config",
             "acp_authenticate",
         ]),

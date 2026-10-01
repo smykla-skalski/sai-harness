@@ -103,5 +103,19 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Do a small thing'),
     );
+
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Delayed approval');
+    await $('.agent-actions button').click();
+    await expect($('.session-row .session-item[title="Delayed approval"]')).toBeDisplayed();
+    await $('.agent-launches button:nth-child(2)').click();
+    await browser.pause(1800);
+    await $('.session-row .session-item[title="Delayed approval"]').click();
+    await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Delayed approval'),
+    );
   });
 });

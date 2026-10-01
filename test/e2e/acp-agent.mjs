@@ -28,6 +28,23 @@ function configOptions() {
   ];
 }
 
+function requestPermission(sessionId, text, promptId) {
+  const id = ++nextPermission;
+  permissions.set(id, { sessionId, text, promptId });
+  send({
+    id,
+    method: 'session/request_permission',
+    params: {
+      sessionId,
+      toolCall: { toolCallId: 'review', title: 'Run test action' },
+      options: [
+        { optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+      ],
+    },
+  });
+}
+
 for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
   if (message.method === 'initialize') {
@@ -74,20 +91,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       title: 'Run test action',
       status: 'pending',
     });
-    const id = ++nextPermission;
-    permissions.set(id, { sessionId, text, promptId: message.id });
-    send({
-      id,
-      method: 'session/request_permission',
-      params: {
-        sessionId,
-        toolCall: { toolCallId: 'review', title: 'Run test action' },
-        options: [
-          { optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
-          { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
-        ],
-      },
-    });
+    if (text.startsWith('Delayed'))
+      setTimeout(() => requestPermission(sessionId, text, message.id), 1500);
+    else requestPermission(sessionId, text, message.id);
   } else if (message.method === 'session/cancel') {
     for (const [id, pending] of permissions) {
       if (pending.sessionId === message.params.sessionId) {
