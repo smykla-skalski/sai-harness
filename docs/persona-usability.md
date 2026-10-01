@@ -2,6 +2,8 @@
 
 These are **hypothesis personas** for repeatable expert walkthroughs, not interviews or evidence from real users. Each tester starts with a fresh app profile and a disposable Git repository. Record the OS, Sail commit, available agents, starting state, action sequence, visible result, screenshots or accessibility output, and severity. Mark a task **blocked by environment** when an external agent, provider, or plugin is unavailable; do not call it a product failure without reproducing the product behavior.
 
+**Current priority:** project grouping, worktree creation and removal, and agent conversations scoped to the selected worktree. Test these before secondary layout checks. Compare the interaction with [Orca's worktree lifecycle](https://www.onorca.dev/docs/model/worktrees) and [first three-agent session](https://www.onorca.dev/docs/first-session): add repo → create isolated worktree → start an agent in it → switch/review → clean up. Sail does not need Orca's full feature set for this audit, but each gap in this core path should be recorded.
+
 The scenarios state goals without naming Sail controls. This follows [NN/g's task scenario guidance](https://www.nngroup.com/articles/task-scenarios-usability-testing/) and [usability testing guidance](https://www.nngroup.com/articles/usability-testing-101/). Evaluate feedback, recovery, and discoverability against [NN/g's usability heuristics](https://www.nngroup.com/articles/ten-usability-heuristics/). Accessibility checks use [WCAG 2.2 keyboard operation](https://www.w3.org/WAI/WCAG22/Understanding/keyboard), [focus visibility](https://www.w3.org/WAI/WCAG22/Understanding/focus-visible), and [dragging alternatives](https://www.w3.org/WAI/WCAG22/Understanding/dragging-movements).
 
 ## Maya — AI power user

@@ -59,6 +59,7 @@
   let runtimeSettingsOpen = $state(false);
   let agentAvailability = $state<AgentAvailability[]>([]);
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
+  let runningAgentThreads = $state<Record<string, boolean>>({});
   let agentChangesOpen = $state(false);
   let acpAgent = $state<AgentId | null>(null);
   let acpThread = $state<AgentThread | null>(null);
@@ -565,7 +566,7 @@
       appliedBinaryPath = candidate;
       setSetting('sai-opencode-bin', candidate);
     } catch (cause) {
-      runtimeError = describe(cause);
+      runtimeError = `${describe(cause)}${runtimeState === 'connected' ? ' The current OpenCode connection remains active.' : ''}`;
       runtimeSettingsOpen = true;
       if (runtimeState !== 'connected' && hasConnected)
         recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
@@ -676,6 +677,7 @@
     name: string,
     destinationParent: string | null,
     baseRef: string | null,
+    agent: string | null,
   ) {
     const created = await invoke<{ path: string; branch: string; base: string }>(
       'create_worktree',
@@ -688,6 +690,12 @@
     );
     saveProjectCatalog(addWorktree(projectCatalog, path, created));
     await loadProject(created.path);
+    if (agent === 'opencode') {
+      if (workReady) newWork();
+      else error = 'Complete OpenCode setup in this worktree before starting an agent.';
+    } else if (agent) {
+      openAgent(agent);
+    }
   }
 
   async function deleteProjectWorktree(repository: string, path: string, branch: string) {
@@ -709,8 +717,10 @@
       if (wasSelected) await loadProject(repository);
       await invoke('delete_worktree', { repository, worktree: path });
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
+      const removedThreads = agentThreads.filter((thread) => thread.directory === path);
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
       saveAgentThreads(agentThreads);
+      for (const thread of removedThreads) updateAgentThreadStatus(thread, false);
       removeSetting(`sai-session:${path}`);
     } catch (cause) {
       if (wasSelected) await loadProject(path);
@@ -1002,11 +1012,19 @@
     agentThreads = [
       thread,
       ...agentThreads.filter(
-        (item) => item.agent !== thread.agent || item.sessionId !== thread.sessionId,
+        (item) =>
+          item.agent !== thread.agent ||
+          item.directory !== thread.directory ||
+          item.sessionId !== thread.sessionId,
       ),
     ].toSorted((a, b) => b.updated - a.updated);
     saveAgentThreads(agentThreads);
-    if (acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId) acpThread = thread;
+    if (
+      acpAgent === thread.agent &&
+      acpThread?.sessionId === thread.sessionId &&
+      acpThread.directory === thread.directory
+    )
+      acpThread = thread;
   }
 
   function createAgentThread(thread: AgentThread) {
@@ -1017,11 +1035,33 @@
 
   function removeAgentThread(thread: AgentThread) {
     agentThreads = agentThreads.filter(
-      (item) => item.agent !== thread.agent || item.sessionId !== thread.sessionId,
+      (item) =>
+        item.agent !== thread.agent ||
+        item.directory !== thread.directory ||
+        item.sessionId !== thread.sessionId,
     );
     saveAgentThreads(agentThreads);
-    if (acpThread?.sessionId === thread.sessionId && acpAgent === thread.agent)
+    updateAgentThreadStatus(thread, false);
+    if (
+      acpThread?.sessionId === thread.sessionId &&
+      acpThread.directory === thread.directory &&
+      acpAgent === thread.agent
+    )
       openAgent(thread.agent);
+  }
+
+  function agentThreadKey(thread: AgentThread): string {
+    return JSON.stringify([thread.agent, thread.directory, thread.sessionId]);
+  }
+
+  function updateAgentThreadStatus(thread: AgentThread, active: boolean) {
+    const key = agentThreadKey(thread);
+    if (active) runningAgentThreads = { ...runningAgentThreads, [key]: true };
+    else {
+      const next = { ...runningAgentThreads };
+      delete next[key];
+      runningAgentThreads = next;
+    }
   }
 
   async function selectSession(id: string) {
@@ -1853,6 +1893,8 @@
       catalog={projectCatalog}
       {directory}
       disabled={runtimeState !== 'connected' && !agentAvailability.some((agent) => agent.available)}
+      agents={agentAvailability}
+      openCodeAvailable={runtimeState === 'connected'}
       onselect={(path) => {
         if (path !== directory) void loadProject(path);
       }}
@@ -1912,7 +1954,9 @@
         >
           <span class="session-symbol">◇</span><span class="session-details"
             ><strong>{thread.title}</strong><small
-              >{thread.agent} · {new Date(thread.updated).toLocaleString()}</small
+              >{thread.agent} · {runningAgentThreads[agentThreadKey(thread)]
+                ? 'Running…'
+                : new Date(thread.updated).toLocaleString()}</small
             ></span
           >
         </button>
@@ -1975,7 +2019,7 @@
           {sessionLoading
             ? 'Loading sessions…'
             : directory
-              ? 'No sessions found'
+              ? 'No OpenCode sessions found'
               : 'Choose a repository to begin'}
         </p>{/each}
     </nav>
@@ -2137,8 +2181,10 @@
               agentName={agentAvailability.find((agent) => agent.id === acpAgent)?.name ?? acpAgent}
               {directory}
               thread={acpThread}
+              running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
               oncreated={createAgentThread}
               onactivity={saveAgentThread}
+              onstatus={updateAgentThreadStatus}
             />
           {/key}
         {:else}

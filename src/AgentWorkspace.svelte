@@ -20,10 +20,13 @@
     agentName: string;
     directory: string;
     thread: AgentThread | null;
+    running: boolean;
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
+    onstatus: (thread: AgentThread, running: boolean) => void;
   }
-  let { agent, agentName, directory, thread, oncreated, onactivity }: Props = $props();
+  let { agent, agentName, directory, thread, running, oncreated, onactivity, onstatus }: Props =
+    $props();
   let mounted = $state(false);
   let ready = $state(false);
   let busy = $state(false);
@@ -42,9 +45,18 @@
   let generation = 0;
   let scroll: HTMLDivElement;
   const name = $derived(agentName);
+  const isBusy = $derived(busy || running);
 
   function describe(cause: unknown): string {
     return cause instanceof Error ? cause.message : String(cause);
+  }
+
+  function markTools(status: string, from: readonly string[]) {
+    entries = entries.map((entry) =>
+      entry.type === 'tool' && from.includes(entry.status)
+        ? Object.assign({}, entry, { status })
+        : entry,
+    );
   }
 
   async function follow() {
@@ -132,6 +144,7 @@
       if (message.method === 'sail/disconnected') {
         ready = false;
         busy = false;
+        if (thread) onstatus(thread, false);
         error = `${name} stopped. Reopen the thread to reconnect.`;
         return;
       }
@@ -173,10 +186,11 @@
 
   async function send() {
     const text = draft.trim();
-    if (!text || !ready || busy || !directory) return;
+    if (!text || !ready || isBusy || !directory) return;
     const current = generation;
     let activityThread = thread;
     busy = true;
+    if (activityThread) onstatus(activityThread, true);
     stopRequested = false;
     error = '';
     draft = '';
@@ -196,6 +210,7 @@
         };
         activityThread = created;
         oncreated(created);
+        onstatus(created, true);
       }
       const id = activeSessionId;
       if (stopRequested) {
@@ -204,15 +219,23 @@
       }
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
       void follow();
-      await acp.prompt(agent, id!, text);
+      const result = await acp.prompt(agent, id!, text);
+      if (current === generation && stopRequested)
+        markTools(result.stopReason === 'cancelled' ? 'cancelled' : 'status unconfirmed', [
+          'pending',
+          'in_progress',
+          'stopping',
+        ]);
       if (activityThread) onactivity({ ...activityThread, updated: Date.now() });
     } catch (cause) {
       if (current === generation) {
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
         if (!activeSessionId) draft = text;
+        if (stopRequested) markTools('status unconfirmed', ['stopping']);
       }
     } finally {
+      if (activityThread) onstatus(activityThread, false);
       if (current === generation) busy = false;
     }
   }
@@ -220,14 +243,17 @@
   async function stop() {
     stopRequested = true;
     if (!activeSessionId) return;
+    const current = generation;
+    const sessionId = activeSessionId;
+    const pending = permissions;
     try {
-      await acp.cancel(agent, activeSessionId);
-      await Promise.all(
-        permissions.map((permission) => acp.permission(agent, permission.id, null)),
-      );
+      await acp.cancel(agent, sessionId);
+      await Promise.all(pending.map((permission) => acp.permission(agent, permission.id, null)));
+      if (current !== generation || activeSessionId !== sessionId) return;
       permissions = [];
+      markTools('stopping', ['pending', 'in_progress']);
     } catch (cause) {
-      error = describe(cause);
+      if (current === generation && activeSessionId === sessionId) error = describe(cause);
     }
   }
 
@@ -286,7 +312,7 @@
       event.ctrlKey ||
       event.altKey ||
       event.shiftKey ||
-      !busy ||
+      !isBusy ||
       document.querySelector('dialog[open]')
     )
       return;
@@ -304,7 +330,7 @@
         <label
           >{option.name}<select
             value={option.currentValue}
-            disabled={busy}
+            disabled={isBusy}
             onchange={(event) => void setConfig(option.id, event.currentTarget.value)}
           >
             {#each option.options as choice (choice.value)}<option value={choice.value}
@@ -314,8 +340,8 @@
         >
       {/each}
     </div>
-    <Badge tone={ready ? 'success' : 'neutral'}
-      >{connecting ? 'Connecting' : ready ? 'Ready' : 'Offline'}</Badge
+    <Badge tone={isBusy ? 'warning' : ready ? 'success' : 'neutral'}
+      >{connecting ? 'Connecting' : isBusy ? 'Working' : ready ? 'Ready' : 'Offline'}</Badge
     >
   </div>
   <div
@@ -362,7 +388,7 @@
         </article>
       {/if}
     {/each}
-    {#if busy}<div class="agent-busy" role="status">
+    {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}
   </div>
@@ -403,12 +429,12 @@
         onkeydown={keydown}
         rows="3"
         placeholder={`Message ${name}…`}
-        disabled={!ready || busy || !directory}></textarea>
+        disabled={!ready || isBusy || !directory}></textarea>
       <div class="agent-actions composer-bottom">
         <span>Enter to send · Shift+Enter for newline</span><Button
           onclick={send}
-          disabled={!ready || busy || !draft.trim()}
-          loading={busy}>Send ↗</Button
+          disabled={!ready || isBusy || !draft.trim()}
+          loading={isBusy}>Send ↗</Button
         >
       </div>
     </div>

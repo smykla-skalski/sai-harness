@@ -50,6 +50,9 @@ describe('OpenCode runtime', () => {
     await $('#opencode-bin').setValue(join(tmpdir(), 'no-such-opencode-for-sai'));
     await $('.runtime-settings button').click();
     await expect($('.runtime-diagnostic')).toBeDisplayed();
+    await expect($('.runtime-diagnostic')).toHaveText(
+      expect.stringContaining('The current OpenCode connection remains active.'),
+    );
     await expect($('.sidebar-footer')).toHaveText('OpenCode connected');
     expect((await runtimeInfo()).url).toBe(initial.url);
 

@@ -1,13 +1,17 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
+  import type { AgentAvailability } from './lib/acp';
   import type { ProjectCatalog } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
+  import { getSetting, setSetting } from './lib/settings';
 
   type Props = {
     catalog: ProjectCatalog;
     directory: string;
     disabled: boolean;
+    agents: AgentAvailability[];
+    openCodeAvailable: boolean;
     onselect: (path: string) => void;
     onaddrepository: (groupID: string | null) => void;
     onaddgroup: (name: string) => void;
@@ -21,6 +25,7 @@
       name: string,
       destinationParent: string | null,
       baseRef: string | null,
+      agent: string | null,
     ) => Promise<void>;
     ondeleteworktree: (repository: string, path: string, branch: string) => Promise<void>;
   };
@@ -29,6 +34,8 @@
     catalog,
     directory,
     disabled,
+    agents,
+    openCodeAvailable,
     onselect,
     onaddrepository,
     onaddgroup,
@@ -43,6 +50,8 @@
   let creatingGroup = $state(false);
   let editingGroupID = $state<string | null>(null);
   let groupName = $state('');
+  let addGroupButton: HTMLButtonElement;
+  let groupNameInput = $state<HTMLInputElement>();
   let menuGroupID = $state<string | null>(null);
   let menuRepository = $state<string | null>(null);
   let menuWorktree = $state<string | null>(null);
@@ -52,6 +61,7 @@
   let worktreeName = $state('');
   let worktreeDestination = $state<string | null>(null);
   let worktreeBase = $state('');
+  let worktreeAgent = $state('');
   let worktreeBusy = $state(false);
   let worktreeError = $state('');
   let ungrouped = $derived(ungroupedRepositories(catalog));
@@ -75,16 +85,27 @@
     groupName = '';
   }
 
-  function startRename(id: string, name: string) {
+  async function startGroup() {
+    creatingGroup = true;
+    editingGroupID = null;
+    groupName = '';
+    await tick();
+    groupNameInput?.focus();
+  }
+
+  async function startRename(id: string, name: string) {
     editingGroupID = id;
     groupName = name;
     menuGroupID = null;
+    await tick();
+    groupNameInput?.focus();
   }
 
   function cancelGroup() {
     creatingGroup = false;
     editingGroupID = null;
     groupName = '';
+    void tick().then(() => addGroupButton?.focus());
   }
 
   async function startWorktree(path: string) {
@@ -92,6 +113,12 @@
     worktreeName = '';
     worktreeDestination = null;
     worktreeBase = '';
+    const savedAgent = getSetting('sai-worktree-agent') ?? '';
+    worktreeAgent =
+      (savedAgent === 'opencode' && openCodeAvailable) ||
+      agents.some((agent) => agent.id === savedAgent && agent.available)
+        ? savedAgent
+        : '';
     worktreeError = '';
     menuRepository = null;
     await tick();
@@ -118,7 +145,9 @@
         worktreeName.trim(),
         worktreeDestination,
         worktreeBase.trim() || null,
+        worktreeAgent || null,
       );
+      setSetting('sai-worktree-agent', worktreeAgent);
       worktreeDialog.close();
     } catch (cause) {
       worktreeError = cause instanceof Error ? cause.message : String(cause);
@@ -142,13 +171,10 @@
     <span class="label">PROJECTS</span>
     <button
       class="project-control"
+      bind:this={addGroupButton}
       aria-label="Add project group"
       title="Add project group"
-      onclick={() => {
-        creatingGroup = true;
-        editingGroupID = null;
-        groupName = '';
-      }}>+ Group</button
+      onclick={startGroup}>+ Group</button
     >
     <button
       class="project-control"
@@ -165,7 +191,18 @@
         saveGroup();
       }}
     >
-      <input aria-label="New project group name" placeholder="Group name" bind:value={groupName} />
+      <input
+        aria-label="New project group name"
+        placeholder="Group name"
+        bind:value={groupName}
+        bind:this={groupNameInput}
+        onkeydown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            cancelGroup();
+          }
+        }}
+      />
       <button type="submit" aria-label="Save project group">✓</button>
       <button type="button" aria-label="Cancel project group" onclick={cancelGroup}>×</button>
     </form>{/if}
@@ -179,7 +216,17 @@
               saveGroup();
             }}
           >
-            <input aria-label={`Rename ${group.name}`} bind:value={groupName} />
+            <input
+              aria-label={`Rename ${group.name}`}
+              bind:value={groupName}
+              bind:this={groupNameInput}
+              onkeydown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  cancelGroup();
+                }
+              }}
+            />
             <button type="submit" aria-label="Save group name">✓</button>
             <button type="button" aria-label="Cancel rename" onclick={cancelGroup}>×</button>
           </form>{:else}<div class="project-group-heading">
@@ -442,6 +489,20 @@
           bind:value={worktreeBase}
           disabled={worktreeBusy}
         />
+      </label>
+      <label
+        >Start with agent
+        <select
+          aria-label="Agent for new worktree"
+          bind:value={worktreeAgent}
+          disabled={worktreeBusy}
+        >
+          <option value="">Choose after creation</option>
+          <option value="opencode" disabled={!openCodeAvailable}>OpenCode</option>
+          {#each agents as agent (agent.id)}<option value={agent.id} disabled={!agent.available}
+              >{agent.name}</option
+            >{/each}
+        </select>
       </label>
       <div class="worktree-destination">
         <div>

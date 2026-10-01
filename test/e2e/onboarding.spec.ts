@@ -67,6 +67,11 @@ describe('repository setup', () => {
     await $('.project-group-toggle').click();
     await expect($('.project-group-toggle')).toHaveAttribute('aria-expanded', 'false');
     await $('[aria-label="Add project group"]').click();
+    await expect($('[aria-label="New project group name"]')).toBeFocused();
+    await browser.keys('Escape');
+    await expect($('[aria-label="New project group name"]')).not.toExist();
+    await expect($('[aria-label="Add project group"]')).toBeFocused();
+    await $('[aria-label="Add project group"]').click();
     await $('[aria-label="New project group name"]').setValue('Personal');
     await $('[aria-label="Save project group"]').click();
     await expect($('[title="Personal"].project-group-toggle')).toBeDisplayed();
@@ -243,6 +248,34 @@ describe('repository setup', () => {
     expect(
       execFileSync('git', ['-C', repository, 'worktree', 'list'], { encoding: 'utf8' }),
     ).not.toContain(worktree);
+  });
+
+  it('opens the selected agent in a newly created worktree', async () => {
+    const path = realpathSync(repository);
+    await $(`.project-repository-select[title="${path}"]`).click();
+    const name = path.split('/').at(-1);
+    await $(`[aria-label="Create worktree for ${name}"]`).click();
+    await $(`[aria-label="Worktree name for ${name}"]`).setValue('agent-launch');
+    await browser.execute(() => {
+      const select = document.querySelector<HTMLSelectElement>(
+        '[aria-label="Agent for new worktree"]',
+      );
+      if (!select) throw new Error('Agent selection missing from worktree dialog');
+      select.value = 'claude';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await $('.worktree-form button[type="submit"]').click();
+    await expect($('.worktree-dialog')).not.toBeDisplayed();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
+    const worktree = await browser.execute(() => localStorage.getItem('sai-directory'));
+    expect(worktree).toMatch(/\/agent-launch$/);
+    await expect($(`.project-worktree-select[title="${worktree}"]`)).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await $(`[aria-label="Create worktree for ${name}"]`).click();
+    await expect($('[aria-label="Agent for new worktree"]')).toHaveValue('claude');
+    await $('.worktree-dialog .worktree-cancel').click();
   });
 
   it('shows an actionable error for a saved invalid path', async () => {

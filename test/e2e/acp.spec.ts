@@ -109,7 +109,11 @@ describe('ACP agent threads', () => {
     await $('.agent-composer textarea').setValue('Delayed approval');
     await $('.agent-actions button').click();
     await expect($('.session-row .session-item[title="Delayed approval"]')).toBeDisplayed();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-launches button:nth-child(2)').click();
+    await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
+      expect.stringContaining('Running'),
+    );
     await browser.pause(1800);
     await $('.session-row .session-item[title="Delayed approval"]').click();
     await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
@@ -121,9 +125,23 @@ describe('ACP agent threads', () => {
     await $('.agent-composer textarea').setValue('Escape stop');
     await $('.agent-actions button').click();
     await expect($('.agent-permission')).toBeDisplayed();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await browser.keys('Escape');
     await expect($('.agent-permission')).not.toBeDisplayed();
     await expect($('.agent-busy')).not.toBeDisplayed();
+    await expect($('.agent-tool')).toHaveText(expect.stringContaining('cancelled'));
+
+    await $('.agent-composer textarea').setValue('Slow cancel');
+    await $('.agent-actions button').click();
+    await expect($('.agent-permission')).toBeDisplayed();
+    await browser.keys('Escape');
+    await expect($('.agent-tool')).toHaveText(expect.stringContaining('stopping'));
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
+    await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
+      expect.stringContaining('Running'),
+    );
+    await expect($('.agent-tool')).toHaveText(expect.stringContaining('cancelled'));
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
 
     await $('.agent-composer textarea').setValue('Long answer');
     await $('.agent-actions button').click();

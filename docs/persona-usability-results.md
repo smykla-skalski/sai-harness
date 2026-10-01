@@ -1,0 +1,31 @@
+# Persona walkthrough results — 2026-10-01
+
+Four agents ran separate, task-based walkthroughs of the macOS Tauri app at commit `dcd9283`. Each used a disposable Git repository and the real Sail UI through embedded WebDriver. Claude and Codex were exercised with the repo's local ACP test agent; no provider credential or paid model was used. These are **simulated persona expert audits**, not tests with representative people.
+
+The main reference flow was [Orca's documented repo → worktree → agent → review → cleanup path](https://www.onorca.dev/docs/first-session). Sail's tested path is summarized below.
+
+| Persona                           | Tasks completed                                                                                                                                                                                                                      | Limit                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Maya, AI power user               | Created worktree; ran Claude and Codex conversations; approved and stopped agent actions; switched repositories; checked live diff, reverted file, and saw Changes clear; restored both threads.                                     | Architect plan/diagram unavailable without plan-review plugin and provider.                    |
+| Alex, first-time user             | Found repository setup, runtime path, group and worktree controls; saw repair steps for missing plugin/provider; restored repo and theme after reload; recovered from invalid runtime path.                                          | Native macOS repository picker is outside embedded WebDriver.                                  |
+| Jordan, multi-repo maintainer     | Grouped two repositories; created worktrees in Sail's folder; ran separate Claude/Codex threads; switched and reloaded without thread crossover; dirty deletion refused; clean deletion removed only the chosen worktree and thread. | WebDriver's select helper failed to send a native change event; explicit select change worked. |
+| Sam, keyboard and low-vision user | Enlarged UI, used the worktree dialog and Escape, opened/closed Changes with Cmd+L.                                                                                                                                                  | WebDriver did not advance focus with Tab; plan/diagram unavailable without plugin/provider.    |
+
+## Findings and response
+
+1. **Medium — Worktree creation did not offer an agent.** Compared with Orca's worktree launcher, Sail required a second navigation step. The dialog now offers available agents and remembers the choice. The selected agent opens in the new checkout.
+2. **Medium — ACP activity was unclear.** The header showed “Ready” during a running prompt and the sidebar gave no running cue after a switch. The header and active thread row now show working state.
+3. **Medium — Cancelled tool looked pending.** Escape cleared the permission but left the tool row marked pending. Tools now show “stopping” until the agent confirms cancellation, then “cancelled.”
+4. **Medium — Group editor focus and Escape.** Opening `+ Group` left focus on the trigger; Escape did not dismiss the editor. The input now receives focus, and Escape closes it and restores focus.
+5. **Low — Session empty state.** “No sessions found” appeared beside an active ACP thread. It now says “No OpenCode sessions found.”
+6. **Low — Runtime override error.** An invalid binary error appeared beside “OpenCode connected,” although the old connection correctly remained live. The error now says the current connection remains active.
+
+## Coverage limits
+
+- No credentialed Architect plan, generated diagram, or live model execution was available in the disposable profile. The [release validation script](validation.md) remains the procedure for that flow.
+- Embedded WebDriver cannot operate the native macOS folder picker or provide reliable Tab traversal here. Those need a separate native accessibility pass.
+- The test agent simulates ACP protocol behavior; the installed Claude/Codex CLIs and their remote authentication were not used in this audit.
+
+## Final verification
+
+The rebuilt macOS desktop app passed all 5 WebDriver spec files (13 tests). These cover repository grouping and switching; worktree creation from the default or selected base; agent selection in the worktree dialog; dirty-file protection and deletion; separate Claude and Codex conversations; thread restore; running and cancellation states; runtime recovery; settings persistence; and zoom. The 22 unit tests, Svelte check, and lint also passed. A review found a delayed ACP cancellation could update a different thread after switching; generation and session guards now prevent that cross-thread update.

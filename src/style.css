@@ -318,7 +318,8 @@ button:disabled {
   color: var(--sui-muted);
   font-weight: 400;
 }
-.worktree-form input {
+.worktree-form input,
+.worktree-form select {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--shell-divider);

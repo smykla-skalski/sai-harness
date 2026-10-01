@@ -101,7 +101,9 @@ for await (const line of createInterface({ input: process.stdin })) {
     for (const [id, pending] of permissions) {
       if (pending.sessionId === message.params.sessionId) {
         permissions.delete(id);
-        send({ id: pending.promptId, result: { stopReason: 'cancelled' } });
+        const finish = () => send({ id: pending.promptId, result: { stopReason: 'cancelled' } });
+        if (pending.text === 'Slow cancel') setTimeout(finish, 5000);
+        else finish();
       }
     }
   } else if (message.id != null && permissions.has(message.id)) {
