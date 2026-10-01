@@ -15,8 +15,8 @@ export function paneRatioBounds(span: number): { min: number; max: number } {
     return { min: midpoint, max: midpoint };
   }
   return {
-    min: Math.min(0.5, Math.max(0.1, minPaneSpan / span)),
-    max: Math.max(0.5, Math.min(0.9, (span - 8 - minPaneSpan) / span)),
+    min: Math.max(0.1, minPaneSpan / span),
+    max: Math.min(0.9, (span - 8 - minPaneSpan) / span),
   };
 }
 

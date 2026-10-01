@@ -18,6 +18,10 @@ void test('split ratios keep both panes usable at narrow sizes', () => {
   assert.equal(Math.round(370 * bounds.min), 120);
   assert.equal(Math.round(370 - 8 - 370 * bounds.max), 120);
   assert.equal(clampPaneRatio(0.9, 370), bounds.max);
+  const threshold = paneRatioBounds(248);
+  assert.equal(threshold.min, threshold.max);
+  assert.equal(Math.round(248 * threshold.min), 120);
+  assert.equal(Math.round(248 - 8 - 248 * threshold.max), 120);
   const narrow = paneRatioBounds(240);
   assert.equal(narrow.min, narrow.max);
   assert.equal(Math.round(240 * narrow.min), 116);
