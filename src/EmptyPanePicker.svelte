@@ -7,11 +7,13 @@
     focused,
     onselect,
     onterminal,
+    onbrowser,
   }: {
     agents: AgentAvailability[];
     focused: boolean;
     onselect: (agent: AgentId) => void;
     onterminal: () => void;
+    onbrowser: () => void;
   } = $props();
   let stage = $state<'kind' | 'agent'>('kind');
   let picker: HTMLElement;
@@ -53,6 +55,9 @@
     } else if (stage === 'kind' && event.key.toLowerCase() === 't') {
       event.preventDefault();
       onterminal();
+    } else if (stage === 'kind' && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      onbrowser();
     } else if (stage === 'agent' && event.key === 'Escape') {
       event.preventDefault();
       void showKinds();
@@ -98,9 +103,9 @@
         <span><strong>Agent</strong><small>Start a conversation</small></span>
         <kbd>A</kbd>
       </button>
-      <button class="pane-picker-choice" disabled>
+      <button class="pane-picker-choice" onclick={onbrowser}>
         <span class="pane-picker-choice-icon" aria-hidden="true">◎</span>
-        <span><strong>Browser</strong><small>Coming soon</small></span>
+        <span><strong>Browser</strong><small>Open a page here</small></span>
         <kbd>B</kbd>
       </button>
       <button class="pane-picker-choice" onclick={onterminal}>

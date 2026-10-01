@@ -30,6 +30,15 @@ fn main() {
             "terminal_resize",
             "terminal_close",
             "terminal_open_file",
+            "browser_open",
+            "browser_bounds",
+            "browser_navigate",
+            "browser_reload",
+            "browser_visibility",
+            "browser_devtools",
+            "browser_close",
+            "browser_shortcut",
+            "browser_route",
         ]),
     ))
     .expect("failed to build Tauri permissions")

@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser",
+  "description": "Allow browser pages to pass pane shortcuts to Sail",
+  "webviews": ["browser-*"],
+  "remote": { "urls": ["http://*", "https://*"] },
+  "local": false,
+  "permissions": ["allow-browser-shortcut", "allow-browser-route"]
+}

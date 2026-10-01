@@ -6,9 +6,48 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::State;
+#[cfg(any(target_os = "macos", windows))]
+use tauri::{Emitter, Manager};
+
+#[cfg(any(target_os = "macos", windows))]
+fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+
+    let menu = Menu::default(app)?;
+    let close_pane = MenuItem::with_id(app, "close-pane", "Close Pane", true, Some("CmdOrCtrl+W"))?;
+    for item in menu.items()? {
+        if let Some(submenu) = item.as_submenu() {
+            for (index, entry) in submenu.items()?.into_iter().enumerate().rev() {
+                if let Some(predefined) = entry.as_predefined_menuitem() {
+                    if ["Close", "C&lose Window"].contains(&predefined.text()?.as_str()) {
+                        submenu.remove_at(index)?;
+                    }
+                }
+            }
+            if submenu.text()? == "File" {
+                submenu.insert(&close_pane, 0)?;
+            }
+        }
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id() != "close-pane" {
+            return;
+        }
+        if let Some(settings) = app.get_webview_window("settings") {
+            if settings.is_focused().unwrap_or(false) {
+                let _ = settings.close();
+                return;
+            }
+        }
+        let _ = app.emit_to("main", "pane:close", ());
+    });
+    Ok(())
+}
 
 mod acp;
 mod attention;
+mod browser;
 mod settings;
 mod terminal;
 
@@ -665,6 +704,11 @@ fn local_plugin_version(path: String) -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .setup(|_app| {
+            #[cfg(any(target_os = "macos", windows))]
+            configure_pane_menu(_app.handle())?;
+            Ok(())
+        })
         .manage(RuntimeManager::default())
         .manage(acp::AgentManager::default())
         .manage(terminal::TerminalManager::default())
@@ -698,7 +742,16 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_close,
-            terminal::terminal_open_file
+            terminal::terminal_open_file,
+            browser::browser_open,
+            browser::browser_bounds,
+            browser::browser_navigate,
+            browser::browser_reload,
+            browser::browser_visibility,
+            browser::browser_devtools,
+            browser::browser_close,
+            browser::browser_shortcut,
+            browser::browser_route
         ]);
     #[cfg(feature = "e2e")]
     let builder = builder

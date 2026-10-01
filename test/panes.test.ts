@@ -80,13 +80,21 @@ void test('pane layouts survive serialization and reject malformed saved trees',
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': layout }))['/repo'], layout);
   const terminal = updatePane(layout, leaves(layout)[1].id, { kind: 'terminal' });
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': terminal }))['/repo'], terminal);
+  const browserTab = { id: 'tab-1', history: ['http://localhost:3000/'], index: 0 };
+  const browser = updatePane(layout, leaves(layout)[1].id, {
+    kind: 'browser',
+    tabs: [browserTab],
+    activeTab: browserTab.id,
+  });
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': browser }))['/repo'], browser);
+  const invalidBrowser = updatePane(browser, leaves(browser)[1].id, {
+    tabs: [{ ...browserTab, history: ['javascript:alert(1)'] }],
+  });
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': invalidBrowser })), {});
   const hybrid = { id: 'main', kind: 'terminal', agent: 'claude', thread: null };
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': hybrid })), {});
   const mainTerminal = updatePane(mainPane(), 'main', { kind: 'terminal' });
-  assert.deepEqual(
-    loadPaneLayouts(JSON.stringify({ '/repo': mainTerminal }))['/repo'],
-    mainTerminal,
-  );
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': mainTerminal })), {});
   const duplicate = {
     id: 'split',
     direction: 'row',

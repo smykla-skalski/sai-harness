@@ -57,8 +57,10 @@
     mainPane,
     minPaneSpan,
     migratePaneDirectory,
+    newBrowserTab,
     splitPane,
     updatePane,
+    type BrowserTab,
     type Pane,
   } from './lib/panes';
   import {
@@ -634,7 +636,11 @@
     let stopSettingsRequest: (() => void) | undefined;
     let stopSettingsAction: (() => void) | undefined;
     let stopCloseRequest: (() => void) | undefined;
+    let stopPaneClose: (() => void) | undefined;
     if (isTauri()) {
+      void listen('pane:close', () => {
+        if (!document.querySelector('dialog[open]')) closeCurrentPane();
+      }).then((unlisten) => (stopPaneClose = unlisten));
       void getCurrentWindow()
         .onCloseRequested((event) => {
           event.preventDefault();
@@ -717,6 +723,7 @@
       stopSettingsRequest?.();
       stopSettingsAction?.();
       stopCloseRequest?.();
+      stopPaneClose?.();
       disposed = true;
       eventController?.abort();
       clearTimeout(refreshTimer);
@@ -1765,7 +1772,7 @@
     persistPaneLayouts();
   }
 
-  function splitFocusedPane(direction: 'row' | 'column', kind?: 'terminal') {
+  function splitFocusedPane(direction: 'row' | 'column', kind?: 'terminal' | 'browser') {
     if (!directory) return;
     const focusedElement = document.querySelector<HTMLElement>(`[data-pane-id="${focusedPane}"]`);
     const bounds = focusedElement?.getBoundingClientRect();
@@ -1779,7 +1786,18 @@
     const old = new Set(leaves(paneLayout).map((leaf) => leaf.id));
     const created = leaves(layout).find((leaf) => !old.has(leaf.id));
     if (!created) return;
-    savePaneLayout(kind ? updatePane(layout, created.id, { kind }) : layout);
+    const browserTab = kind === 'browser' ? newBrowserTab() : null;
+    savePaneLayout(
+      browserTab
+        ? updatePane(layout, created.id, {
+            kind: 'browser',
+            tabs: [browserTab],
+            activeTab: browserTab.id,
+          })
+        : kind
+          ? updatePane(layout, created.id, { kind })
+          : layout,
+    );
     focusPaneForTyping(created.id);
   }
 
@@ -1812,7 +1830,7 @@
     if (focusedPane !== id || promptFocusPane !== id) return;
     const pane = document.querySelector<HTMLElement>(`[data-pane-id="${id}"]`);
     const prompt = pane?.querySelector<HTMLTextAreaElement>(
-      '[data-pane-prompt]:not(:disabled), .xterm-helper-textarea',
+      '[data-pane-prompt]:not(:disabled), .xterm-helper-textarea, .browser-toolbar input',
     );
     const picker = pane?.querySelector<HTMLButtonElement>(
       '[data-agent-choice]:not(:disabled), [data-pane-picker]',
@@ -1884,6 +1902,24 @@
   function choosePaneTerminal(id: string) {
     savePaneLayout(updatePane(paneLayout, id, { agent: null, thread: null, kind: 'terminal' }));
     focusPaneForTyping(id);
+  }
+
+  function choosePaneBrowser(id: string) {
+    const tab = newBrowserTab();
+    savePaneLayout(
+      updatePane(paneLayout, id, {
+        agent: null,
+        thread: null,
+        kind: 'browser',
+        tabs: [tab],
+        activeTab: tab.id,
+      }),
+    );
+    focusPaneForTyping(id);
+  }
+
+  function updatePaneBrowser(id: string, tabs: BrowserTab[], activeTab: string) {
+    savePaneLayout(updatePane(paneLayout, id, { tabs, activeTab }));
   }
 
   function focusMainPane() {
@@ -3610,6 +3646,8 @@
       oncreated={createPaneThread}
       onchooseagent={choosePaneAgent}
       onchooseterminal={choosePaneTerminal}
+      onchoosebrowser={choosePaneBrowser}
+      onbrowserstate={updatePaneBrowser}
       onshortcut={keydownWorkspace}
       onactivity={saveAgentThread}
       focusPromptPane={promptFocusPane}

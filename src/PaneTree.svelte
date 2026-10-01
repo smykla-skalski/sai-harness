@@ -7,9 +7,10 @@
   import DiffPanel from './DiffPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
   import TerminalPane from './TerminalPane.svelte';
+  import BrowserPane from './BrowserPane.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
-  import { clampPaneRatio, paneRatioBounds, type Pane } from './lib/panes';
+  import { clampPaneRatio, paneRatioBounds, type BrowserTab, type Pane } from './lib/panes';
 
   type Props = {
     pane: Pane;
@@ -25,6 +26,8 @@
     oncreated: (id: string, thread: AgentThread) => void;
     onchooseagent: (id: string, agent: string) => void;
     onchooseterminal: (id: string) => void;
+    onchoosebrowser: (id: string) => void;
+    onbrowserstate: (id: string, tabs: BrowserTab[], activeTab: string) => void;
     onshortcut: (event: KeyboardEvent) => void;
     onactivity: (thread: AgentThread) => void;
     focusPromptPane: string | null;
@@ -48,6 +51,8 @@
     oncreated,
     onchooseagent,
     onchooseterminal,
+    onchoosebrowser,
+    onbrowserstate,
     onshortcut,
     onactivity,
     focusPromptPane,
@@ -152,6 +157,8 @@
       {oncreated}
       {onchooseagent}
       {onchooseterminal}
+      {onchoosebrowser}
+      {onbrowserstate}
       {onshortcut}
       {onactivity}
       {focusPromptPane}
@@ -202,6 +209,8 @@
       {oncreated}
       {onchooseagent}
       {onchooseterminal}
+      {onchoosebrowser}
+      {onbrowserstate}
       {onshortcut}
       {onactivity}
       {focusPromptPane}
@@ -221,9 +230,11 @@
       ? 'Main pane'
       : pane.kind === 'terminal'
         ? 'Terminal pane'
-        : pane.agent
-          ? `${pane.agent} pane`
-          : 'Empty pane'}
+        : pane.kind === 'browser'
+          ? 'Browser pane'
+          : pane.agent
+            ? `${pane.agent} pane`
+            : 'Empty pane'}
     tabindex="-1"
     onfocusin={() => onfocus(pane.id)}
     onpointerdown={(event) => {
@@ -232,6 +243,7 @@
         pane.id === 'main' ||
         pane.agent ||
         pane.kind === 'terminal' ||
+        pane.kind === 'browser' ||
         !(event.target instanceof Element)
       )
         return;
@@ -248,8 +260,10 @@
         <span
           >{pane.kind === 'terminal'
             ? 'Terminal'
-            : (pane.thread?.title ??
-              (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
+            : pane.kind === 'browser'
+              ? 'Browser'
+              : (pane.thread?.title ??
+                (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
         ><small>⌘⌥ + arrow to switch</small><button
           aria-label="Close pane"
           onclick={() => onclose(pane.id)}>×</button
@@ -268,6 +282,15 @@
     {:else if pane.kind === 'terminal'}
       {#key `${directory}:${pane.id}`}
         <TerminalPane id={pane.id} {directory} focused={focused === pane.id} {onshortcut} />
+      {/key}
+    {:else if pane.kind === 'browser'}
+      {#key `${directory}:${pane.id}`}
+        <BrowserPane
+          {pane}
+          onstate={(tabs, activeTab) => onbrowserstate(pane.id, tabs, activeTab)}
+          onfocus={() => onfocus(pane.id)}
+          {onshortcut}
+        />
       {/key}
     {:else if pane.agent}
       {#key `${pane.id}:${pane.agent}`}
@@ -305,6 +328,7 @@
         focused={focused === pane.id}
         onselect={(agent) => onchooseagent(pane.id, agent)}
         onterminal={() => onchooseterminal(pane.id)}
+        onbrowser={() => onchoosebrowser(pane.id)}
       />
     {/if}
   </section>

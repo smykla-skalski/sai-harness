@@ -3,7 +3,21 @@ import type { AgentId, AgentThread } from './acp';
 export type Pane =
   | { id: string; agent: AgentId | null; thread: AgentThread | null; kind?: undefined }
   | { id: string; agent: null; thread: null; kind: 'terminal' }
+  | {
+      id: string;
+      agent: null;
+      thread: null;
+      kind: 'browser';
+      tabs: BrowserTab[];
+      activeTab: string;
+    }
   | { id: string; direction: 'row' | 'column'; ratio: number; first: Pane; second: Pane };
+
+export type BrowserTab = { id: string; history: string[]; index: number };
+
+export function newBrowserTab(): BrowserTab {
+  return { id: crypto.randomUUID(), history: [], index: -1 };
+}
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
 
@@ -111,7 +125,16 @@ export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane 
   const next = { ...pane, ...update };
   return next.kind === 'terminal'
     ? { id: next.id, kind: 'terminal', agent: null, thread: null }
-    : { id: next.id, agent: next.agent ?? null, thread: next.thread ?? null };
+    : next.kind === 'browser'
+      ? {
+          id: next.id,
+          kind: 'browser',
+          agent: null,
+          thread: null,
+          tabs: next.tabs ?? [],
+          activeTab: next.activeTab ?? '',
+        }
+      : { id: next.id, agent: next.agent ?? null, thread: next.thread ?? null };
 }
 
 export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane {
@@ -121,7 +144,7 @@ export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane
       first: migratePaneDirectory(pane.first, from, to),
       second: migratePaneDirectory(pane.second, from, to),
     };
-  if (pane.kind === 'terminal') return pane;
+  if (pane.kind === 'terminal' || pane.kind === 'browser') return pane;
   return pane.thread?.directory === from
     ? { ...pane, thread: { ...pane.thread, directory: to } }
     : pane;
@@ -157,7 +180,34 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
       validPane(pane.first, ids) &&
       validPane(pane.second, ids)
     );
-  if (pane.kind === 'terminal') return pane.agent === null && pane.thread === null;
+  if (pane.kind === 'terminal')
+    return pane.id !== 'main' && pane.agent === null && pane.thread === null;
+  if (pane.kind === 'browser')
+    return (
+      pane.id !== 'main' &&
+      pane.agent === null &&
+      pane.thread === null &&
+      Array.isArray(pane.tabs) &&
+      pane.tabs.length > 0 &&
+      pane.tabs.length <= 30 &&
+      new Set(pane.tabs.map((tab) => tab?.id)).size === pane.tabs.length &&
+      pane.tabs.every(
+        (tab) =>
+          tab &&
+          typeof tab === 'object' &&
+          typeof tab.id === 'string' &&
+          tab.id.length > 0 &&
+          Array.isArray(tab.history) &&
+          tab.history.length <= 100 &&
+          tab.history.every((url: unknown) => validBrowserUrl(url)) &&
+          typeof tab.index === 'number' &&
+          Number.isInteger(tab.index) &&
+          tab.index >= (tab.history.length ? 0 : -1) &&
+          tab.index < tab.history.length,
+      ) &&
+      typeof pane.activeTab === 'string' &&
+      pane.tabs.some((tab) => tab.id === pane.activeTab)
+    );
   return (
     pane.kind === undefined &&
     (pane.agent === null || typeof pane.agent === 'string') &&
@@ -167,4 +217,13 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
         'sessionId' in pane.thread &&
         typeof pane.thread.sessionId === 'string'))
   );
+}
+
+function validBrowserUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
 }

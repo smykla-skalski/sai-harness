@@ -20,9 +20,10 @@
       "capabilities": [
         "default",
         "settings",
+        "browser",
         {
           "identifier": "e2e",
-          "windows": ["main", "settings"],
+          "webviews": ["main", "settings"],
           "permissions": ["wdio:default", "wdio-webdriver:default"]
         }
       ]
