@@ -7,6 +7,7 @@ A desktop workspace for planning and reviewing coding-agent work. OpenCode runs 
 - Pick a repository, start an Architect chat, and resume earlier plan sessions.
 - Organize repositories into named sidebar groups and switch between them without losing each repository's last session.
 - Create a Git worktree from a repository row; Sail opens the new checkout and lists it beneath its repository.
+- Resize the entire interface with Command/Ctrl + minus or plus; Command/Ctrl + 0 resets it.
 - See live OpenCode messages alongside structured questions, Mermaid diagrams, alternatives, and per-step decisions.
 - Send answers, request revisions, or approve a plan for the build agent through [opencode-plugin-plan-review](https://github.com/smykla-skalski/opencode-plugin-plan-review).
 - The desktop app starts a local, password-protected OpenCode server and stops it on exit.

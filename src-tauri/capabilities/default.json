@@ -8,6 +8,7 @@
     "allow-validate-repository",
     "allow-create-worktree",
     "allow-local-plugin-version",
+    "core:webview:allow-set-webview-zoom",
     "dialog:allow-open",
     "dialog:allow-message"
   ]
