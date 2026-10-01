@@ -72,6 +72,12 @@ export interface AgentActivity {
   finished: Record<string, { status: 'done' | 'failed'; notify: boolean }>;
 }
 
+export interface AcpPendingInboxItem {
+  agent: AgentId;
+  message: AgentEvent['message'];
+  receivedAt: number;
+}
+
 const storageKey = 'sail-agent-threads';
 
 export function loadAgentThreads(): AgentThread[] {
@@ -176,6 +182,7 @@ export const acp = {
     invoke<void>('acp_permission', { agent, requestId, optionId }),
   pendingPermissions: (agent: AgentId, sessionId: string) =>
     invoke<AgentEvent['message'][]>('acp_pending_permissions', { agent, sessionId }),
+  pendingInbox: () => invoke<AcpPendingInboxItem[]>('acp_pending_inbox'),
   activity: () => invoke<Record<AgentId, AgentActivity>>('acp_activity'),
   setConfig: (agent: AgentId, sessionId: string, configId: string, value: string) =>
     invoke<{ configOptions?: AgentConfigOption[] }>('acp_set_config', {

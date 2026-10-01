@@ -186,7 +186,12 @@
       }
       const params = message.params;
       if (!params || params.sessionId !== activeSessionId) return;
-      if (message.method === 'session/update') {
+      if (message.method === 'sail/permission_resolved') {
+        permissions = permissions.filter(
+          (permission) => String(permission.id) !== String(params.requestId),
+        );
+        if (thread && running && permissions.length === 0) onstatus(thread, 'working');
+      } else if (message.method === 'session/update') {
         const update = params.update;
         if (!update || typeof update !== 'object') return;
         const data = update as Record<string, unknown>;
@@ -464,7 +469,13 @@
         </div>
       {/if}
       {#each permissions as permission (String(permission.id))}
-        <div class="agent-permission" role="group" aria-label="Agent permission request">
+        <div
+          class="agent-permission"
+          role="group"
+          aria-label="Agent permission request"
+          data-request-id={permission.id}
+          tabindex="-1"
+        >
           <strong>{permission.title}</strong>
           <div>
             {#each permission.options as option (option.optionId)}<Button

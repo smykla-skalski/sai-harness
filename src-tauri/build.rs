@@ -18,6 +18,7 @@ fn main() {
             "acp_cancel",
             "acp_permission",
             "acp_pending_permissions",
+            "acp_pending_inbox",
             "acp_activity",
             "acp_set_config",
             "acp_authenticate",

@@ -685,6 +685,7 @@ pub fn run() {
             acp::acp_cancel,
             acp::acp_permission,
             acp::acp_pending_permissions,
+            acp::acp_pending_inbox,
             acp::acp_activity,
             acp::acp_set_config,
             acp::acp_authenticate,

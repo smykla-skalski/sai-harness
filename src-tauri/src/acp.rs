@@ -58,13 +58,26 @@ struct Connection {
     child: Mutex<Child>,
     input: Mutex<ChildStdin>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
-    permissions: Mutex<HashMap<String, Value>>,
+    permissions: Mutex<HashMap<String, PendingPermission>>,
     prompt_state: Mutex<PromptState>,
     cancelled_prompts: Mutex<HashSet<String>>,
     next_id: AtomicU64,
     alive: AtomicBool,
     capabilities: Mutex<Value>,
     ready: Condvar,
+}
+
+struct PendingPermission {
+    message: Value,
+    received_at: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPermissionInfo {
+    agent: String,
+    message: Value,
+    received_at: u64,
 }
 
 impl Drop for Connection {
@@ -186,7 +199,12 @@ pub fn acp_activity(
                 .lock()
                 .map_err(|error| error.to_string())?
                 .values()
-                .filter_map(|message| message.pointer("/params/sessionId").and_then(Value::as_str))
+                .filter_map(|pending| {
+                    pending
+                        .message
+                        .pointer("/params/sessionId")
+                        .and_then(Value::as_str)
+                })
                 .map(str::to_string)
                 .collect();
             Ok((
@@ -200,6 +218,30 @@ pub fn acp_activity(
             ))
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn acp_pending_inbox(
+    manager: State<'_, AgentManager>,
+) -> Result<Vec<PendingPermissionInfo>, String> {
+    let agents = manager.0.lock().map_err(|error| error.to_string())?;
+    let mut pending = Vec::new();
+    for (agent, runtime) in agents.iter() {
+        for permission in runtime
+            .permissions
+            .lock()
+            .map_err(|error| error.to_string())?
+            .values()
+        {
+            pending.push(PendingPermissionInfo {
+                agent: agent.clone(),
+                message: permission.message.clone(),
+                received_at: permission.received_at,
+            });
+        }
+    }
+    pending.sort_by_key(|item| item.received_at);
+    Ok(pending)
 }
 
 impl Drop for AgentManager {
@@ -457,7 +499,17 @@ fn connect_blocking(
                 {
                     if let Some(id) = message.get("id") {
                         if let Ok(mut permissions) = reader.permissions.lock() {
-                            permissions.insert(id.to_string(), message.clone());
+                            let received_at = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            permissions.insert(
+                                id.to_string(),
+                                PendingPermission {
+                                    message: message.clone(),
+                                    received_at,
+                                },
+                            );
                         }
                     }
                 }
@@ -528,11 +580,14 @@ pub fn acp_pending_permissions(
         .map_err(|error| error.to_string())?;
     Ok(permissions
         .values()
-        .filter(|message| {
-            message.pointer("/params/sessionId").and_then(Value::as_str)
+        .filter(|pending| {
+            pending
+                .message
+                .pointer("/params/sessionId")
+                .and_then(Value::as_str)
                 == Some(session_id.as_str())
         })
-        .cloned()
+        .map(|pending| pending.message.clone())
         .collect())
 }
 
@@ -665,6 +720,7 @@ pub fn acp_cancel(
 
 #[tauri::command]
 pub fn acp_permission(
+    app: AppHandle,
     manager: State<'_, AgentManager>,
     agent: String,
     request_id: Value,
@@ -673,7 +729,32 @@ pub fn acp_permission(
     let outcome = option_id
         .map(|id| json!({"outcome":"selected","optionId":id}))
         .unwrap_or_else(|| json!({"outcome":"cancelled"}));
-    connection(&manager, &agent)?.respond(request_id, json!({"outcome":outcome}))
+    let runtime = connection(&manager, &agent)?;
+    let session_id = runtime
+        .permissions
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&request_id.to_string())
+        .and_then(|pending| {
+            pending
+                .message
+                .pointer("/params/sessionId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    runtime.respond(request_id.clone(), json!({"outcome":outcome}))?;
+    if let Some(session_id) = session_id {
+        let _ = app.emit(
+            "acp-event",
+            AgentEvent {
+                agent,
+                message: json!({"method":"sail/permission_resolved","params":{
+                    "sessionId":session_id,"requestId":request_id
+                }}),
+            },
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]

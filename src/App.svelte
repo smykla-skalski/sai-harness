@@ -7,7 +7,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
-  import { isSessionNotFoundError } from '@opencode/client';
+  import { isPermissionNotFoundError, isSessionNotFoundError } from '@opencode/client';
   import type { FileDiffInfo, FormInfo, PermissionRequest } from '@opencode/client';
   import type { ModelRef } from '@opencode/client';
   import { Badge, Button } from '@smykla-skalski/sui';
@@ -19,6 +19,8 @@
   import ProjectSidebar from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import PaneTree from './PaneTree.svelte';
+  import InboxPanel from './InboxPanel.svelte';
+  import { inboxLocations, loadInboxSeen, sortInbox, type InboxItem } from './lib/inbox';
   import {
     newestAvailableThread,
     searchCommandPalette,
@@ -108,6 +110,13 @@
   let attentionRevision = 0;
   let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
   let notificationSound = $state(getSetting('sai-notification-sound') !== 'false');
+  let inboxItems = $state<InboxItem[]>([]);
+  let inboxLoading = $state(false);
+  let inboxError = $state('');
+  let inboxDialog: HTMLDialogElement;
+  let inboxRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let inboxGeneration = 0;
+  const inboxSeen = loadInboxSeen(getSetting('sai-inbox-seen'));
   let recentThreadKeys = $state<string[]>(
     loadRecentThreadKeys(getSetting('sai-recent-agent-threads'), savedAgentThreads),
   );
@@ -665,6 +674,7 @@
           else {
             unlistenAgentEvents = unlisten;
             void restoreAgentActivity();
+            scheduleInboxRefresh();
           }
           return undefined;
         },
@@ -705,6 +715,7 @@
       clearTimeout(refreshTimer);
       clearTimeout(diffTimer);
       clearTimeout(recoveryTimer);
+      clearTimeout(inboxRefreshTimer);
       clearInterval(healthTimer);
       clearInterval(diffPollTimer);
       unlistenAgentEvents?.();
@@ -739,6 +750,7 @@
     await resync().catch((cause) => {
       error = describe(cause);
     });
+    scheduleInboxRefresh();
     eventController = new AbortController();
     connecting = false;
     void watchEvents(nextClient, eventController.signal);
@@ -760,6 +772,7 @@
     } catch (cause) {
       if (disposed) return;
       client = null;
+      scheduleInboxRefresh();
       runtimeState = 'error';
       runtimeError = describe(cause);
       if (hasConnected) recoveryTimer = setTimeout(() => void recoverRuntime(), 5000);
@@ -854,6 +867,139 @@
   function saveProjectCatalog(next: ProjectCatalog) {
     projectCatalog = next;
     setSetting('sai-project-catalog', JSON.stringify(next));
+    scheduleInboxRefresh();
+  }
+
+  function inboxTime(key: string, observed = Date.now()) {
+    if (inboxSeen[key] === undefined || observed < inboxSeen[key]) {
+      inboxSeen[key] = observed;
+      setSetting('sai-inbox-seen', JSON.stringify(inboxSeen));
+    }
+    return inboxSeen[key];
+  }
+
+  function scheduleInboxRefresh() {
+    ++inboxGeneration;
+    clearTimeout(inboxRefreshTimer);
+    inboxRefreshTimer = setTimeout(() => void refreshInbox(), 150);
+  }
+
+  async function refreshInbox() {
+    if (disposed) return;
+    const generation = ++inboxGeneration;
+    inboxLoading = true;
+    const locations = inboxLocations(projectCatalog);
+    const byDirectory = new Map(locations.map((location) => [location.directory, location]));
+    const source = client;
+    const [acpResult, ...openCodeResults] = await Promise.allSettled([
+      acp.pendingInbox(),
+      ...(source
+        ? locations.map(async (location) => {
+            const [permissions, forms] = await Promise.all([
+              source.permission.request.list({ location: { directory: location.directory } }),
+              source.form.list({ location: { directory: location.directory } }),
+            ]);
+            const ids = [
+              ...new Set([...permissions.data, ...forms.data].map((item) => item.sessionID)),
+            ];
+            const agents = new Map(
+              await Promise.all(
+                ids.map(async (id) => {
+                  const agent = await source.session
+                    .get({ sessionID: id })
+                    .then((session) => session.agent)
+                    .catch(() => null);
+                  return [id, agent] as const;
+                }),
+              ),
+            );
+            return { location, permissions: permissions.data, forms: forms.data, agents };
+          })
+        : []),
+    ]);
+    if (generation !== inboxGeneration || disposed) return;
+    const items: InboxItem[] = [];
+    if (acpResult.status === 'fulfilled') {
+      for (const pending of acpResult.value) {
+        const sessionId = pending.message.params?.sessionId;
+        const requestId = pending.message.id;
+        if (typeof sessionId !== 'string' || requestId == null) continue;
+        const thread = agentThreads.find(
+          (item) => item.agent === pending.agent && item.sessionId === sessionId,
+        );
+        if (!thread) continue;
+        const location = byDirectory.get(thread.directory);
+        if (!location) continue;
+        const tool = pending.message.params?.toolCall;
+        const title =
+          tool && typeof tool === 'object' && 'title' in tool && typeof tool.title === 'string'
+            ? tool.title
+            : 'Allow agent action?';
+        const options = Array.isArray(pending.message.params?.options)
+          ? pending.message.params.options.filter(
+              (option): option is NonNullable<InboxItem['options']>[number] =>
+                typeof option === 'object' &&
+                option !== null &&
+                typeof option.optionId === 'string' &&
+                typeof option.name === 'string' &&
+                typeof option.kind === 'string',
+            )
+          : [];
+        const key = `acp:${pending.agent}:${requestId}`;
+        items.push({
+          ...location,
+          key,
+          kind: 'acp-permission',
+          agent: agentAvailability.find((item) => item.id === pending.agent)?.name ?? pending.agent,
+          agentId: pending.agent,
+          sessionId,
+          requestId,
+          text: title,
+          receivedAt: inboxTime(key, pending.receivedAt),
+          options,
+        });
+      }
+    }
+    for (const result of openCodeResults) {
+      if (result.status !== 'fulfilled') continue;
+      const { location, permissions, forms, agents } = result.value;
+      for (const request of permissions) {
+        const key = `opencode:permission:${request.id}`;
+        items.push({
+          ...location,
+          key,
+          kind: 'opencode-permission',
+          agent: agents.get(request.sessionID) ?? 'OpenCode',
+          sessionId: request.sessionID,
+          requestId: request.id,
+          text:
+            request.message?.trim() ||
+            `Allow ${request.action} on ${request.resources.join(', ')}?`,
+          receivedAt: inboxTime(key),
+        });
+      }
+      for (const form of forms) {
+        const key = `opencode:form:${form.id}`;
+        items.push({
+          ...location,
+          key,
+          kind: 'question',
+          agent: agents.get(form.sessionID) ?? 'OpenCode',
+          sessionId: form.sessionID,
+          requestId: form.id,
+          text: [form.title, ...form.fields.map((field) => field.title ?? field.key)].join(' · '),
+          receivedAt: inboxTime(key),
+        });
+      }
+    }
+    inboxItems = sortInbox(items);
+    inboxError =
+      !source ||
+      acpResult.status === 'rejected' ||
+      openCodeResults.some((result) => result.status === 'rejected')
+        ? 'Some projects could not be checked.'
+        : '';
+    inboxLoading = false;
   }
 
   function addProjectGroup(name: string) {
@@ -1505,6 +1651,72 @@
     focusPaneForTyping('main');
   }
 
+  function openInbox() {
+    if (!inboxDialog.open) inboxDialog.showModal();
+    scheduleInboxRefresh();
+  }
+
+  async function focusInboxRequest(requestId: string | number, attempts = 40): Promise<void> {
+    await tick();
+    const request = [...document.querySelectorAll<HTMLElement>('[data-request-id]')].find(
+      (element) =>
+        element.dataset.requestId === String(requestId) && element.getClientRects().length,
+    );
+    if (request) {
+      request.scrollIntoView({ block: 'center' });
+      request.focus();
+      return;
+    }
+    if (attempts === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return focusInboxRequest(requestId, attempts - 1);
+  }
+
+  async function openInboxItem(item: InboxItem) {
+    inboxDialog.close();
+    if (item.kind === 'acp-permission') {
+      const thread = agentThreads.find(
+        (entry) => entry.agent === item.agentId && entry.sessionId === item.sessionId,
+      );
+      if (thread) await jumpToRecentThread(threadKey(thread));
+    } else {
+      if (directory !== item.directory) await loadProject(item.directory, false);
+      if (directory === item.directory) await selectSession(item.sessionId);
+    }
+    await focusInboxRequest(item.requestId);
+  }
+
+  async function decideInbox(item: InboxItem, optionId: string | null) {
+    if (item.kind === 'acp-permission') {
+      const thread = agentThreads.find(
+        (entry) =>
+          entry.agent === item.agentId &&
+          entry.sessionId === item.sessionId &&
+          entry.directory === item.directory,
+      );
+      if (!thread) throw new Error('Thread is no longer available.');
+      await acp.permission(thread.agent, item.requestId, optionId);
+    } else if (item.kind === 'opencode-permission') {
+      if (!client) throw new Error('OpenCode is not connected.');
+      try {
+        await client.permission.get({
+          sessionID: item.sessionId,
+          requestID: String(item.requestId),
+        });
+        await client.permission.reply({
+          sessionID: item.sessionId,
+          requestID: String(item.requestId),
+          decision: optionId === 'reject' ? 'reject' : 'once',
+        });
+      } catch (cause) {
+        if (!isPermissionNotFoundError(cause)) throw cause;
+      }
+    }
+    await refreshInbox();
+    if (item.kind === 'acp-permission') void restoreAgentActivity();
+    if (item.kind === 'opencode-permission' && item.sessionId === sessionID) void refreshPrompts();
+  }
+
   function createAgentThread(thread: AgentThread) {
     saveAgentThread(thread);
     rememberRecentThread(thread);
@@ -1801,6 +2013,12 @@
   }
 
   function handleAgentEvent(event: AgentEvent) {
+    if (
+      event.message.method === 'session/request_permission' ||
+      event.message.method === 'sail/permission_resolved' ||
+      event.message.method === 'sail/disconnected'
+    )
+      scheduleInboxRefresh();
     if (event.message.method === 'sail/prompt_finished') {
       const sessionId = event.message.params?.sessionId;
       const status = event.message.params?.status;
@@ -2494,8 +2712,14 @@
           event.type === 'form.created' ||
           event.type === 'form.replied' ||
           event.type === 'form.cancelled'
-        )
+        ) {
+          if (event.type === 'permission.asked')
+            inboxTime(`opencode:permission:${event.data.id}`, event.created);
+          if (event.type === 'form.created')
+            inboxTime(`opencode:form:${event.data.form.id}`, event.created);
           scheduleRefresh();
+          scheduleInboxRefresh();
+        }
       }
     } catch {
       // A new subscription reloads missed state after the live stream fails.
@@ -2780,6 +3004,9 @@
     bind:this={sidebarElement}
   >
     <div class="brand"><span class="brand-mark">S.</span><span>Sail</span></div>
+    <button class="inbox-launch" aria-label="Pending requests" onclick={openInbox}>
+      Waiting for you <span>{inboxItems.length}</span>
+    </button>
     <div class="sidebar-content">
       <ProjectSidebar
         catalog={projectCatalog}
@@ -3380,4 +3607,18 @@
       </div>
     {/each}
   </div>
+</dialog>
+<dialog class="inbox-dialog" bind:this={inboxDialog} aria-label="Pending requests across projects">
+  <div class="inbox-dialog-top">
+    <span>All projects</span>
+    <button aria-label="Close pending requests" onclick={() => inboxDialog.close()}>×</button>
+  </div>
+  {#if inboxError}<p class="notice error" role="alert">{inboxError}</p>{/if}
+  <InboxPanel
+    items={inboxItems}
+    loading={inboxLoading}
+    error={inboxError}
+    onopen={(item) => void openInboxItem(item)}
+    ondecide={decideInbox}
+  />
 </dialog>
