@@ -301,12 +301,17 @@
   }
 
   async function answer(permission: AgentPermission, optionId: string) {
+    const lastRequest = permissions.length === 1 && permissions[0]?.id === permission.id;
+    if (thread && lastRequest) onstatus(thread, 'working');
     try {
       await acp.permission(agent, permission.id, optionId);
       permissions = permissions.filter((item) => item.id !== permission.id);
-      if (thread && permissions.length === 0) onstatus(thread, 'working');
     } catch (cause) {
       error = describe(cause);
+      if (thread && lastRequest) {
+        const pending = await acp.pendingPermissions(agent, permission.sessionId).catch(() => []);
+        if (pending.some((message) => message.id === permission.id)) onstatus(thread, 'waiting');
+      }
     }
   }
 

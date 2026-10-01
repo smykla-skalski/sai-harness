@@ -11,11 +11,17 @@ pub fn show_attention_notification(
 ) -> Result<(), String> {
     let app = window.app_handle().clone();
     let mut notification = Notification::new();
-    notification.appname("Sail").summary(&title).body(&body);
+    notification
+        .appname("Sail")
+        .summary(&title)
+        .body(&body)
+        .action("default", "Open thread");
 
     #[cfg(target_os = "macos")]
     {
-        let _ = notify_rust::set_application(&app.config().identifier);
+        if !notify_rust::request_auth_blocking().map_err(|error| error.to_string())? {
+            return Ok(());
+        }
         if sound {
             notification.sound_name("Ping");
         }
