@@ -781,6 +781,7 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    padding-inline: 20px;
   }
   .agent-welcome {
     max-width: 650px;
@@ -788,15 +789,13 @@
     text-align: center;
   }
   .agent-message {
-    max-width: 740px;
-    margin: 0 auto;
+    width: 100%;
   }
   .agent-message.thought {
     opacity: 0.65;
   }
   .agent-tool {
-    max-width: 740px;
-    margin: 0 auto 16px;
+    margin-bottom: 16px;
     padding: 10px 14px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -809,14 +808,13 @@
     overflow-wrap: anywhere;
   }
   .agent-busy {
-    max-width: 820px;
-    margin: 0 auto;
     display: flex;
     align-items: center;
     gap: 12px;
   }
   .agent-composer {
     flex: 0 0 auto;
+    padding-inline: 20px;
   }
   .agent-composer textarea {
     width: 100%;
@@ -839,8 +837,7 @@
     color: var(--danger, #d66);
   }
   .agent-permission {
-    max-width: 820px;
-    margin: 0 auto 10px;
+    margin-bottom: 10px;
     padding: 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
