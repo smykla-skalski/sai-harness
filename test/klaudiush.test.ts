@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { klaudiushRules, splitKlaudiushMessage } from '../src/lib/klaudiush.ts';
+import { blockedHookRules, klaudiushRules, splitKlaudiushMessage } from '../src/lib/klaudiush.ts';
 
 const notice = [
   '**Notice:** PreToolUse:Bash says: ❌ GIT010: Git commit missing required flags: -s -S',
@@ -26,4 +26,22 @@ void test('assistant notice leaves subsequent response visible', () => {
     remainder: 'Adjusting the setup.',
   });
   assert.equal(splitKlaudiushMessage('Ordinary assistant response'), null);
+  const spacedNotice = [
+    '**Notice:** PreToolUse:Bash says: ❌ GIT010: Commit flags missing',
+    'PreToolUse:Bash says: ❌ GIT020: Invalid branch name',
+    'Adjusting the setup.',
+  ].join('\n\n');
+  assert.deepEqual(splitKlaudiushMessage(spacedNotice)?.rules, [
+    { code: 'GIT010', reason: 'Commit flags missing' },
+    { code: 'GIT020', reason: 'Invalid branch name' },
+  ]);
+  assert.equal(splitKlaudiushMessage(spacedNotice)?.remainder, 'Adjusting the setup.');
+});
+
+void test('successful tools printing hook examples do not show blocked notices', () => {
+  assert.deepEqual(blockedHookRules([{ status: 'completed', content: notice }]), []);
+  assert.deepEqual(
+    blockedHookRules([{ status: 'failed', content: notice }]),
+    klaudiushRules(notice),
+  );
 });

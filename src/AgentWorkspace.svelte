@@ -50,7 +50,7 @@
     notificationStats,
     splitTaskNotifications,
   } from './lib/task-notification';
-  import { klaudiushRules, splitKlaudiushMessage, type KlaudiushRule } from './lib/klaudiush';
+  import { blockedHookRules, splitKlaudiushMessage, type KlaudiushRule } from './lib/klaudiush';
 
   interface Props {
     agent: AgentId;
@@ -1082,7 +1082,7 @@
     {/snippet}
     {#each displayEntries as entry (entry.id)}
       {#if entry.type === 'tool-group'}
-        {@const hookRules = klaudiushRules(entry.tools.map((tool) => tool.content).join('\n'))}
+        {@const hookRules = blockedHookRules(entry.tools)}
         {#if hookRules.length}{@render hookNotice(hookRules)}{/if}
         {#if isBusy && (entry.id === displayEntries.at(-1)?.id || entry.tools.some(toolRunning))}
           {#if entry.tools.length > 1}

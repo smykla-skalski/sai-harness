@@ -16,15 +16,27 @@ export function klaudiushRules(text: string): KlaudiushRule[] {
   return [...rules.values()];
 }
 
+export function blockedHookRules(tools: { status: string; content: string }[]): KlaudiushRule[] {
+  return klaudiushRules(
+    tools
+      .filter((tool) => /fail|error|reject/i.test(tool.status))
+      .map((tool) => tool.content)
+      .join('\n'),
+  );
+}
+
 export function splitKlaudiushMessage(text: string): {
   rules: KlaudiushRule[];
   notice: string;
   remainder: string;
 } | null {
   if (!text.startsWith('**Notice:**')) return null;
-  const firstBreak = text.search(/\n\s*\n/);
-  const notice = firstBreak < 0 ? text : text.slice(0, firstBreak);
+  const paragraphs = text.split(/\n\s*\n/);
+  let noticeEnd = 1;
+  while (noticeEnd < paragraphs.length && /^\s*PreToolUse:\w+ says:/.test(paragraphs[noticeEnd]))
+    noticeEnd++;
+  const notice = paragraphs.slice(0, noticeEnd).join('\n\n');
   const rules = klaudiushRules(notice);
   if (!rules.length) return null;
-  return { rules, notice, remainder: firstBreak < 0 ? '' : text.slice(firstBreak).trim() };
+  return { rules, notice, remainder: paragraphs.slice(noticeEnd).join('\n\n').trim() };
 }
