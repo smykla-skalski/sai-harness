@@ -7,10 +7,12 @@
   import OptionPicker from './OptionPicker.svelte';
   import {
     acp,
+    groupAgentEntries,
     loadRecentTranscript,
     saveRecentTranscript,
     updateEntries,
     type AgentEntry,
+    type AgentTool,
     type AgentEvent,
     type AgentConfigOption,
     type AgentAuthMethod,
@@ -89,6 +91,10 @@
   let historyLoading = $state(false);
   let expandedTools = $state<string[]>([]);
   const visibleEntries = $derived(entries.slice(-visibleCount));
+  const displayEntries = $derived(groupAgentEntries(visibleEntries));
+  const toolFailed = (tool: AgentTool) => /fail|error|reject/i.test(tool.status);
+  const toolRunning = (tool: AgentTool) =>
+    !/^(completed|failed|error|cancelled)$/i.test(tool.status);
   let replaying = false;
   let replayEntries: AgentEntry[] = [];
   let pendingUpdates: Record<string, unknown>[] = [];
@@ -113,6 +119,7 @@
   let selectedThreadId: string | null = null;
   let generation = 0;
   let scroll: HTMLDivElement;
+  let autoFollow = true;
   let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
   const isBusy = $derived(busy || running);
@@ -197,6 +204,7 @@
     for (const update of pendingUpdates) next = updateEntries(next, update);
     pendingUpdates = [];
     entries = next;
+    if (autoFollow) void follow();
   }
 
   function applyUpdate(update: Record<string, unknown>) {
@@ -725,6 +733,9 @@
   <div
     class="agent-conversation conversation"
     bind:this={scroll}
+    onscroll={() => {
+      autoFollow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+    }}
     aria-label={`${name} conversation`}
   >
     {#if entries.length === 0 && !connecting}
@@ -749,23 +760,67 @@
         >Show earlier messages ({entries.length - visibleCount} remaining)</button
       >
     {/if}
-    {#each visibleEntries as entry (entry.id)}
-      {#if entry.type === 'tool'}
-        <details
-          class="agent-tool tool-card"
-          ontoggle={(event) => {
-            expandedTools = event.currentTarget.open
-              ? [...expandedTools, entry.id]
-              : expandedTools.filter((id) => id !== entry.id);
-          }}
-        >
-          <summary>{entry.title} · {entry.status}</summary>{#if expandedTools.includes(entry.id)}
-            {#if entry.content}<pre>{entry.content}</pre>{/if}
-            {#each entry.terminalIds as terminalId (terminalId)}
-              <button onclick={() => onterminal(terminalId)}>Open terminal</button>
-            {/each}
+    {#snippet toolRow(tool: AgentTool)}
+      <details
+        class="agent-tool-item"
+        ontoggle={(event) => {
+          expandedTools = event.currentTarget.open
+            ? [...expandedTools, tool.id]
+            : expandedTools.filter((id) => id !== tool.id);
+        }}
+      >
+        <summary>
+          <span class="agent-tool-status" class:failed={toolFailed(tool)}
+            >{tool.status.replaceAll('_', ' ')}</span
+          >
+          <span>{tool.title}</span>
+        </summary>
+        {#if expandedTools.includes(tool.id)}
+          {#if tool.content}<pre>{tool.content}</pre>{/if}
+          {#each tool.terminalIds as terminalId (terminalId)}
+            <button onclick={() => onterminal(terminalId)}>Open terminal</button>
+          {/each}
+        {/if}
+      </details>
+    {/snippet}
+    {#each displayEntries as entry (entry.id)}
+      {#if entry.type === 'tool-group'}
+        {#if isBusy && entry.id === displayEntries.at(-1)?.id}
+          {#if entry.tools.length > 1}
+            <details class="agent-tool-group">
+              <summary
+                >{entry.tools.length - 1} earlier {entry.tools.length === 2
+                  ? 'action'
+                  : 'actions'}</summary
+              >
+              <div class="agent-tool-list">
+                {#each entry.tools.slice(0, -1) as tool (tool.id)}
+                  {@render toolRow(tool)}
+                {/each}
+              </div>
+            </details>
           {/if}
-        </details>
+          {@const latest = entry.tools.at(-1)}
+          {#if latest}
+            <div class="agent-tool-current" class:running={toolRunning(latest)}>
+              <span class="agent-tool-current-label">Latest action</span>
+              {@render toolRow(latest)}
+            </div>
+          {/if}
+        {:else}
+          <details class="agent-tool-group">
+            <summary>
+              <span>{entry.tools.length} {entry.tools.length === 1 ? 'action' : 'actions'}</span>
+              <span class="agent-tool-group-last">{entry.tools.at(-1)?.title}</span>
+              {#if entry.tools.some(toolFailed)}<span class="agent-tool-error">Failed</span>{/if}
+            </summary>
+            <div class="agent-tool-list">
+              {#each entry.tools as tool (tool.id)}
+                {@render toolRow(tool)}
+              {/each}
+            </div>
+          </details>
+        {/if}
       {:else}
         <article
           class:user-message={entry.type === 'user'}
@@ -978,18 +1033,72 @@
   .agent-message.thought {
     opacity: 0.65;
   }
-  .agent-tool {
-    margin-bottom: 16px;
-    padding: 10px 14px;
+  .agent-tool-group,
+  .agent-tool-current {
+    margin: 0 0 8px 42px;
     border: 1px solid var(--border);
     border-radius: 8px;
   }
-  .agent-tool summary {
+  .agent-tool-group > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    color: var(--text-muted, #888);
+  }
+  .agent-tool-group-last {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .agent-tool-group > summary,
+  .agent-tool-item > summary {
     cursor: pointer;
   }
-  .agent-tool pre {
+  .agent-tool-group > summary::before,
+  .agent-tool-item > summary::before {
+    content: '▸';
+    flex: 0 0 auto;
+  }
+  .agent-tool-group[open] > summary::before,
+  .agent-tool-item[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .agent-tool-list {
+    padding: 0 12px 10px;
+  }
+  .agent-tool-item {
+    padding: 5px 0;
+  }
+  .agent-tool-item > summary {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+  }
+  .agent-tool-item pre {
+    margin: 8px 0 4px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .agent-tool-status,
+  .agent-tool-current-label {
+    color: var(--text-muted, #888);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+  .agent-tool-status.failed,
+  .agent-tool-error {
+    color: var(--danger, #d66);
+  }
+  .agent-tool-current {
+    padding: 7px 12px;
+  }
+  .agent-tool-current.running {
+    border-color: var(--accent, var(--border));
+  }
+  .agent-tool-current-label {
+    display: block;
+    margin-bottom: 2px;
   }
   .agent-busy {
     display: flex;

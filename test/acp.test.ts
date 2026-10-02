@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   forgetRecentTranscript,
+  groupAgentEntries,
   loadRecentTranscript,
   saveRecentTranscript,
   updateEntries,
+  type AgentEntry,
   type AgentThread,
 } from '../src/lib/acp.ts';
 
@@ -136,4 +138,40 @@ void test('recent transcript cache keeps the latest entries within a size budget
     if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
     else Reflect.deleteProperty(globalThis, 'localStorage');
   }
+});
+
+void test('consecutive ACP tools form a stable group between visible messages', () => {
+  const entries: AgentEntry[] = [
+    { id: 'message-1', type: 'assistant', text: 'Checking files.' },
+    {
+      id: 'read',
+      type: 'tool',
+      title: 'Read files',
+      status: 'completed',
+      content: '',
+      terminalIds: [],
+    },
+    {
+      id: 'test',
+      type: 'tool',
+      title: 'Run tests',
+      status: 'in_progress',
+      content: '',
+      terminalIds: [],
+    },
+    { id: 'message-2', type: 'assistant', text: 'I found the issue.' },
+  ];
+  const grouped = groupAgentEntries(entries);
+  assert.equal(grouped.length, 3);
+  assert.deepEqual(grouped[0], entries[0]);
+  assert.deepEqual(grouped[1], {
+    id: 'tool-group:read',
+    type: 'tool-group',
+    tools: [entries[1], entries[2]],
+  });
+  assert.deepEqual(grouped[2], entries[3]);
+  assert.deepEqual(
+    entries.map((entry) => entry.id),
+    ['message-1', 'read', 'test', 'message-2'],
+  );
 });

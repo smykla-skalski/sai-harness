@@ -36,6 +36,31 @@ export interface AgentTool {
 
 export type AgentEntry = AgentMessage | AgentTool;
 
+export interface AgentToolGroup {
+  id: string;
+  type: 'tool-group';
+  tools: AgentTool[];
+}
+
+export type AgentDisplayEntry = AgentMessage | AgentToolGroup;
+
+export function groupAgentEntries(entries: AgentEntry[]): AgentDisplayEntry[] {
+  const grouped: AgentDisplayEntry[] = [];
+  for (const entry of entries) {
+    if (entry.type !== 'tool') {
+      grouped.push(entry);
+      continue;
+    }
+    const last = grouped.at(-1);
+    if (last?.type === 'tool-group') {
+      last.tools.push(entry);
+    } else {
+      grouped.push({ id: `tool-group:${entry.id}`, type: 'tool-group', tools: [entry] });
+    }
+  }
+  return grouped;
+}
+
 export interface AgentPermission {
   id: string | number;
   sessionId: string;
