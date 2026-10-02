@@ -146,6 +146,20 @@ void test('saved commands remain searchable at the root only', () => {
   assert.equal(search({ kind: 'projects' }, 'build', { commands })[0]?.command?.id, 'alpha');
   assert.equal(search({ kind: 'projects' }, 'tests', { commands })[0]?.command?.id, 'global');
   assert.equal(search({ kind: 'projects' }, 'npm test', { commands })[0]?.command?.id, 'global');
+  const crowdedCatalog: ProjectCatalog = {
+    repositories: Array.from({ length: 55 }, (_, index) => `/work/build-${index}`),
+    groups: [],
+    worktrees: {},
+  };
+  const globalBuild = loadSavedCommands(
+    JSON.stringify([{ id: 'build', name: 'Build', command: 'npm run build', project: null }]),
+  );
+  assert.ok(
+    search({ kind: 'projects' }, 'build', {
+      catalog: crowdedCatalog,
+      commands: globalBuild,
+    }).some((entry) => entry.command?.id === 'build'),
+  );
   assert.ok(
     !search({ kind: 'worktrees', repository: '/work/alpha' }, 'build', { commands }).some(
       (entry) => entry.kind === 'command',

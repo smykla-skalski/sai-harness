@@ -131,7 +131,8 @@ export function searchCommandPalette({
       query,
       (entry) => `${entry.label} ${entry.detail} ${entry.command?.command ?? ''}`,
     );
-    return [...projects, ...saved].slice(0, 50);
+    const projectSlots = 50 - Math.min(saved.length, 10);
+    return [...projects.slice(0, projectSlots), ...saved.slice(0, 50 - projectSlots)];
   }
 
   if (step.kind === 'worktrees') {

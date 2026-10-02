@@ -1876,25 +1876,43 @@
       paletteError = 'OpenCode is unavailable.';
       return;
     }
+    const sessionSource = source.session;
     const generation = ++paletteSessionGeneration;
     paletteLoading = true;
     paletteError = '';
     try {
-      const result = await source.session.list({
-        directory: path,
-        limit: 50,
-        order: 'desc',
-        parentID: null,
-        ...(search.trim() ? { search: search.trim() } : {}),
-      });
-      if (generation === paletteSessionGeneration)
-        paletteOpenCodeSessions = result.data.map((session) => ({
-          id: session.id,
-          title: session.title ?? 'Untitled session',
-          directory: session.location.directory,
-          parentID: session.parentID ?? null,
-          updated: session.time.updated,
-        }));
+      async function collect(
+        cursor: string | null,
+        matches: PaletteOpenCodeSession[],
+        seen: Set<string>,
+      ): Promise<PaletteOpenCodeSession[]> {
+        const result = await sessionSource.list({
+          directory: path,
+          limit: 50,
+          order: 'desc',
+          parentID: null,
+          ...(search.trim() ? { search: search.trim() } : {}),
+          ...(cursor ? { cursor } : {}),
+        });
+        if (generation !== paletteSessionGeneration) return matches;
+        matches.push(
+          ...result.data
+            .filter((session) => session.location.directory === path && !session.parentID)
+            .map((session) => ({
+              id: session.id,
+              title: session.title ?? 'Untitled session',
+              directory: session.location.directory,
+              parentID: session.parentID ?? null,
+              updated: session.time.updated,
+            })),
+        );
+        const next = result.cursor.next ?? null;
+        if (matches.length >= 50 || !next || next === cursor || seen.has(next)) return matches;
+        seen.add(next);
+        return collect(next, matches, seen);
+      }
+      const matches = await collect(null, [], new Set());
+      if (generation === paletteSessionGeneration) paletteOpenCodeSessions = matches.slice(0, 50);
     } catch (cause) {
       if (generation === paletteSessionGeneration) paletteError = describe(cause);
     } finally {
@@ -1904,7 +1922,10 @@
 
   function updatePaletteQuery(value: string) {
     paletteQuery = value;
-    paletteIndex = 0;
+    paletteIndex = Math.max(
+      0,
+      paletteEntries.findIndex((entry) => !entry.disabled),
+    );
     paletteError = '';
     clearTimeout(paletteSearchTimer);
     if (paletteStep.kind === 'sessions' && paletteStep.agent === 'opencode') {
@@ -1914,7 +1935,14 @@
       const path = paletteStep.directory;
       paletteSearchTimer = setTimeout(() => void loadPaletteOpenCodeSessions(path, value), 180);
     }
-    scrollToActivePaletteEntry();
+    void tick().then(() => {
+      paletteIndex = Math.max(
+        0,
+        paletteEntries.findIndex((entry) => !entry.disabled),
+      );
+      scrollToActivePaletteEntry();
+      return undefined;
+    });
   }
 
   function reopenCommandPalette(step: PaletteStep) {
@@ -2075,7 +2103,12 @@
       scrollToActivePaletteEntry();
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      void choosePaletteEntry(paletteEntries[paletteIndex] ?? null);
+      const selected = paletteEntries[paletteIndex];
+      void choosePaletteEntry(
+        selected && !selected.disabled
+          ? selected
+          : (paletteEntries.find((entry) => !entry.disabled) ?? null),
+      );
     }
   }
 
