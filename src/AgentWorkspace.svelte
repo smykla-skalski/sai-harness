@@ -111,6 +111,7 @@
   let skills = $state<SkillChoice[]>([]);
   const commandUpdates: Record<string, unknown[]> = {};
   let skillSelected = $state(0);
+  const skillMenuId = crypto.randomUUID();
   const skillMatches = $derived(matchingSkills(skills, draft));
   $effect(() => {
     if (skillQuery(draft) !== null && ready && directory && !activeSessionId && !creatingSession)
@@ -725,6 +726,7 @@
     let finalStatus: ThreadStatus = 'done';
     let notifyOnDone = true;
     let keepImages = false;
+    let deliverySessionId = activeSessionId;
     busy = true;
     if (activityThread) onstatus(activityThread, 'working');
     stopRequested = false;
@@ -749,6 +751,7 @@
       if (configFailure) throw new Error(configFailure);
       if (activityThread) onactivity(activityThread);
       const id = activeSessionId;
+      deliverySessionId = id;
       if (stopRequested) {
         notifyOnDone = false;
         if (external && !queuedMessage) throw new Error('Agent turn was cancelled.');
@@ -794,14 +797,28 @@
       if (activityThread) onactivity({ ...activityThread, updated: Date.now() });
     } catch (cause) {
       finalStatus = 'failed';
-      if (queuedMessage && activeSessionId) {
-        queuePaused = true;
-        setAgentQueuePaused(agent, directory, activeSessionId, true);
+      const following = deliverySessionId
+        ? queuedAgentMessages(turnAgent, directory, deliverySessionId)
+        : [];
+      const retryQueued =
+        !!deliverySessionId && (queuedMessage !== undefined || following.length > 0);
+      if (retryQueued && deliverySessionId) {
+        const retry = { text, images: sentImages, attachments: sentClipboard };
+        const messages = [retry, ...following];
+        saveQueuedAgentMessages(turnAgent, directory, deliverySessionId, messages);
+        setAgentQueuePaused(turnAgent, directory, deliverySessionId, true);
+        keepImages = true;
+        if (current === generation && activeSessionId === deliverySessionId) {
+          queued = messages;
+          queuePaused = true;
+        }
       }
       if (current === generation) {
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
-        if (!external || queuedMessage) {
+        if (retryQueued) {
+          entries = entries.filter((entry) => entry.id !== userEntryId);
+        } else if (!external || queuedMessage) {
           entries = entries.filter((entry) => entry.id !== userEntryId);
           draft = [text, draft.trim()].filter(Boolean).join('\n\n');
           images = [...sentImages, ...images];
@@ -825,11 +842,23 @@
       if (activeTurnId === turnId) activeTurnId = null;
       if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
-      if (!external && finalStatus === 'done' && activeSessionId && queuePaused) {
+      if (
+        !external &&
+        finalStatus === 'done' &&
+        deliverySessionId &&
+        deliverySessionId === activeSessionId &&
+        queuePaused
+      ) {
         queuePaused = false;
-        setAgentQueuePaused(agent, directory, activeSessionId, false);
+        setAgentQueuePaused(agent, directory, deliverySessionId, false);
       }
     }
+  }
+
+  function retryQueue() {
+    if (!activeSessionId || !ready || isBusy || !queued.length) return;
+    queuePaused = false;
+    setAgentQueuePaused(agent, directory, activeSessionId, false);
   }
 
   async function stop() {
@@ -1203,7 +1232,15 @@
       <textarea
         bind:this={prompt}
         data-pane-prompt
+        role="combobox"
+        aria-autocomplete="list"
         aria-label={`Message ${name}`}
+        aria-haspopup="listbox"
+        aria-controls={skillMatches.length ? skillMenuId : undefined}
+        aria-expanded={skillMatches.length > 0}
+        aria-activedescendant={skillMatches.length
+          ? `${skillMenuId}-option-${Math.min(skillSelected, skillMatches.length - 1)}`
+          : undefined}
         bind:value={draft}
         onpaste={(event) => {
           pendingPaste = Promise.all([pendingPaste, pasteFiles(event)]).then(() => {});
@@ -1212,9 +1249,17 @@
         rows="3"
         placeholder={`Message ${name}…`}
         disabled={!ready || !directory}></textarea>
-      <SkillMenu skills={skillMatches} selected={skillSelected} choose={chooseSkill} />
+      <SkillMenu
+        id={skillMenuId}
+        skills={skillMatches}
+        selected={skillSelected}
+        choose={chooseSkill}
+      />
       {#if queued.length}<div class="queued-messages" role="status">
           Queued: {queued.length}
+          {#if queuePaused}<Button size="sm" variant="secondary" onclick={retryQueue}
+              >Retry queue</Button
+            >{/if}
           {#each queued as message, index (index)}<div>
               {index + 1}. {message.text || 'Attachments'}{message.attachments.length
                 ? ` · ${message.attachments.length} files`

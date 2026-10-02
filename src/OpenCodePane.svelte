@@ -9,6 +9,7 @@
   import PathPicker from './PathPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
   import { matchingSkills, promptSkill, type SkillChoice } from './lib/skills';
+  import { runSerialOpenCodeTurn } from './lib/opencode-turns';
   import PromptPanel from './PromptPanel.svelte';
   import type { AgentThread } from './lib/acp';
   import type { BrowserAttachment } from './lib/browser-pick';
@@ -68,6 +69,7 @@
   let draft = $state('');
   let skills = $state<SkillChoice[]>([]);
   let skillSelected = $state(0);
+  const skillMenuId = crypto.randomUUID();
   const skillMatches = $derived(matchingSkills(skills, draft));
   $effect(() => {
     const source = client;
@@ -120,6 +122,7 @@
   let selectedThreadId: string | null | undefined;
   let selectedClient: OpenCodeClient | null = null;
   const pickedImages = new SvelteSet<string>();
+  const inFlightCaptures = new SvelteSet<string>();
   let generation = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
@@ -223,10 +226,11 @@
     const current = ++generation;
     clearTimeout(refreshTimer);
     refreshTimer = undefined;
-    if (!sending) {
-      for (const path of pickedImages) void invoke('browser_remove_capture', { path });
-      pickedImages.clear();
-    }
+    for (const path of pickedImages)
+      if (!inFlightCaptures.has(path)) {
+        pickedImages.delete(path);
+        void invoke('browser_remove_capture', { path });
+      }
     draft = '';
     files = [];
     selectedThreadId = id;
@@ -370,8 +374,8 @@
       mounted = false;
       ++generation;
       clearTimeout(refreshTimer);
-      if (!sending)
-        for (const path of pickedImages) void invoke('browser_remove_capture', { path });
+      for (const path of pickedImages)
+        if (!inFlightCaptures.has(path)) void invoke('browser_remove_capture', { path });
     };
   });
 
@@ -384,6 +388,7 @@
     }
     const source = client;
     const paths = external ? [] : [...files];
+    for (const path of paths) if (pickedImages.has(path)) inFlightCaptures.add(path);
     const current = generation;
     let accepted = false;
     if (!external) {
@@ -419,15 +424,17 @@
       }
       running = true;
       if (session) onstatus(summary(session), 'working');
-      await invoke('record_turn_snapshot', { path: directory, thread: `opencode:${id}` });
-      const promptRequest = source.session.prompt({
-        sessionID: id,
-        text,
-        skills: promptSkill(skills, text)?.id
-          ? [{ id: promptSkill(skills, text)!.id! }]
-          : undefined,
-        delivery: queued ? 'queue' : undefined,
-        files: paths.map((path) => ({ uri: fileUri(path), name: path.split(/[\\/]/).at(-1) })),
+      const promptRequest = runSerialOpenCodeTurn(id, async () => {
+        await invoke('record_turn_snapshot', { path: directory, thread: `opencode:${id}` });
+        return source.session.prompt({
+          sessionID: id,
+          text,
+          skills: promptSkill(skills, text)?.id
+            ? [{ id: promptSkill(skills, text)!.id! }]
+            : undefined,
+          delivery: queued ? 'queue' : undefined,
+          files: paths.map((path) => ({ uri: fileUri(path), name: path.split(/[\\/]/).at(-1) })),
+        });
       });
       sending = false;
       await promptRequest;
@@ -463,6 +470,7 @@
       }
       if (external) throw cause;
     } finally {
+      for (const path of paths) inFlightCaptures.delete(path);
       if (current === generation) sending = false;
       if (disposed || current !== generation)
         for (const path of paths)
@@ -671,6 +679,14 @@
         }}
       />
       <textarea
+        role="combobox"
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
+        aria-controls={skillMatches.length ? skillMenuId : undefined}
+        aria-expanded={skillMatches.length > 0}
+        aria-activedescendant={skillMatches.length
+          ? `${skillMenuId}-option-${Math.min(skillSelected, skillMatches.length - 1)}`
+          : undefined}
         bind:this={prompt}
         data-pane-prompt
         aria-label="Message OpenCode"
@@ -680,7 +696,12 @@
         wrap="soft"
         placeholder="Message OpenCode…"
         disabled={!inputReady || loading}></textarea>
-      <SkillMenu skills={skillMatches} selected={skillSelected} choose={chooseSkill} />
+      <SkillMenu
+        id={skillMenuId}
+        skills={skillMatches}
+        selected={skillSelected}
+        choose={chooseSkill}
+      />
       {#if files.length}<div class="attachments">
           {#each files as file (file)}<span
               >{file.split(/[\\/]/).at(-1)}<button

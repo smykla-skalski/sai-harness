@@ -21,6 +21,7 @@
   import OptionPicker from './OptionPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
   import { matchingSkills, promptSkill, type SkillChoice } from './lib/skills';
+  import { runSerialOpenCodeTurn } from './lib/opencode-turns';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import type { Confirmation } from './ConfirmDialog.svelte';
   import PathPicker from './PathPicker.svelte';
@@ -513,6 +514,7 @@
   let draft = $state('');
   let skills = $state<SkillChoice[]>([]);
   let skillSelected = $state(0);
+  const skillMenuId = crypto.randomUUID();
   const skillMatches = $derived(matchingSkills(skills, draft));
   $effect(() => {
     const source = client;
@@ -4876,6 +4878,7 @@
       return;
     }
     if (!client || !canSend) return;
+    const source = client;
     let current = selection;
     const path = directory;
     const text = draft.trim();
@@ -4931,18 +4934,20 @@
         activity = 'Thinking';
         activityTool = '';
       }
-      await invoke('record_turn_snapshot', { path, thread: `opencode:${id}` });
-      const promptRequest = client.session.prompt({
-        sessionID: id,
-        text,
-        skills: promptSkill(skills, text)?.id
-          ? [{ id: promptSkill(skills, text)!.id! }]
-          : undefined,
-        delivery: queueTurn ? 'queue' : undefined,
-        files: files.map((filePath) => ({
-          uri: fileUri(filePath),
-          name: clipboardAttachmentNames.get(filePath) ?? filePath.split(/[\\/]/).at(-1),
-        })),
+      const promptRequest = runSerialOpenCodeTurn(id, async () => {
+        await invoke('record_turn_snapshot', { path, thread: `opencode:${id}` });
+        return source.session.prompt({
+          sessionID: id,
+          text,
+          skills: promptSkill(skills, text)?.id
+            ? [{ id: promptSkill(skills, text)!.id! }]
+            : undefined,
+          delivery: queueTurn ? 'queue' : undefined,
+          files: files.map((filePath) => ({
+            uri: fileUri(filePath),
+            name: clipboardAttachmentNames.get(filePath) ?? filePath.split(/[\\/]/).at(-1),
+          })),
+        });
       });
       sending = false;
       await promptRequest;
@@ -5775,6 +5780,14 @@
                         >{/each}
                     </div>{/if}
                   <textarea
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-haspopup="listbox"
+                    aria-controls={skillMatches.length ? skillMenuId : undefined}
+                    aria-expanded={skillMatches.length > 0}
+                    aria-activedescendant={skillMatches.length
+                      ? `${skillMenuId}-option-${Math.min(skillSelected, skillMatches.length - 1)}`
+                      : undefined}
                     data-pane-prompt
                     aria-label="Message"
                     bind:value={draft}
@@ -5788,7 +5801,12 @@
                       ? 'Describe the work or ask a question…'
                       : 'OpenCode needs a connected model…'}
                     disabled={!inputReady || sending}></textarea>
-                  <SkillMenu skills={skillMatches} selected={skillSelected} choose={chooseSkill} />
+                  <SkillMenu
+                    id={skillMenuId}
+                    skills={skillMatches}
+                    selected={skillSelected}
+                    choose={chooseSkill}
+                  />
                   <div class="composer-bottom">
                     <div class="composer-controls">
                       <OptionPicker
