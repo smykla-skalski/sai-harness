@@ -30,6 +30,7 @@
   } = $props();
 
   let viewport: HTMLDivElement;
+  let paneRoot: HTMLDivElement;
   let address = $state('');
   let error = $state('');
   let loading = $state(false);
@@ -174,7 +175,15 @@
   }
 
   function cancelPickerOnEscape(event: KeyboardEvent) {
-    if (!picking || event.key !== 'Escape' || !liveLabel) return;
+    if (
+      !picking ||
+      event.key !== 'Escape' ||
+      !liveLabel ||
+      document.querySelector('dialog[open]') ||
+      !(event.target instanceof Node) ||
+      !paneRoot.contains(event.target)
+    )
+      return;
     event.preventDefault();
     event.stopImmediatePropagation();
     void invoke('browser_picker', { label: liveLabel, enabled: false }).catch((cause) => {
@@ -464,7 +473,7 @@
   });
 </script>
 
-<div class="browser-pane" aria-label="Browser pane">
+<div class="browser-pane" aria-label="Browser pane" bind:this={paneRoot}>
   <div class="browser-tabs" role="tablist" aria-label="Browser tabs">
     {#each pane.tabs as tab (tab.id)}
       {@const url = tab.history[tab.index] ?? ''}
