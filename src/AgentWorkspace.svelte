@@ -396,7 +396,11 @@
     } finally {
       if (current === generation) connecting = false;
     }
-    void follow();
+    if (current === generation) {
+      await follow();
+      if (scroll.scrollHeight <= scroll.clientHeight && entries.length > visibleCount)
+        void showEarlier();
+    }
   }
 
   $effect(() => {

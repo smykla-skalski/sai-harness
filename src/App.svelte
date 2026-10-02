@@ -320,6 +320,7 @@
   let messages = $state<SessionMessageInfo[]>([]);
   let olderMessageCursor = $state<string | null>(null);
   let loadingOlder = $state(false);
+  let restoringTimelineSelection: number | null = null;
   let liveText = $state<Record<string, Record<number, string>>>({});
   let pendingTextDeltas: Record<string, Record<number, string[]>> = {};
   let textTimer: ReturnType<typeof setTimeout> | undefined;
@@ -3116,11 +3117,18 @@
     if (!automatic) mobileView = 'chat';
     error = '';
     setSetting(`sai-session:${directory}`, id);
-    await refreshSession(id, current);
-    if (current === selection) {
-      await restoreViewState();
-      if (!automatic && window.matchMedia('(max-width: 850px)').matches) chatArea?.focus();
+    restoringTimelineSelection = current;
+    try {
+      await refreshSession(id, current);
+      if (current === selection) {
+        await restoreViewState();
+        if (!automatic && window.matchMedia('(max-width: 850px)').matches) chatArea?.focus();
+      }
+    } finally {
+      if (restoringTimelineSelection === current) restoringTimelineSelection = null;
     }
+    if (current === selection && chatScroll && chatScroll.scrollHeight <= chatScroll.clientHeight)
+      void loadOlderMessages();
   }
 
   function syncSessionChoice(session: SessionInfo) {
@@ -3433,8 +3441,6 @@
       olderMessageCursor = first.cursor.next ?? null;
       await tick();
       scrollToLatest();
-      if (chatScroll && chatScroll.scrollHeight <= chatScroll.clientHeight)
-        void loadOlderMessages();
       return;
     }
     const known = new Set(messages.map((message) => message.id));
@@ -3456,7 +3462,14 @@
   }
 
   async function loadOlderMessages() {
-    if (!client || !sessionID || !olderMessageCursor || loadingOlder) return;
+    if (
+      !client ||
+      !sessionID ||
+      !olderMessageCursor ||
+      loadingOlder ||
+      restoringTimelineSelection === selection
+    )
+      return;
     const id = sessionID;
     const current = selection;
     const cursor = olderMessageCursor;
