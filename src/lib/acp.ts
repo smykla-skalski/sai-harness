@@ -117,14 +117,15 @@ export function loadRecentTranscript(thread: AgentThread): AgentEntry[] {
 export function saveRecentTranscript(thread: AgentThread, entries: AgentEntry[]): void {
   const id = transcriptId(thread.agent, thread.directory, thread.sessionId);
   const recent: AgentEntry[] = [];
-  let remaining = 128 * 1024 - JSON.stringify({ id, entries: [] }).length;
+  const encoder = new TextEncoder();
+  let remaining = 128 * 1024 - encoder.encode(JSON.stringify({ id, entries: [] })).length;
   if (remaining <= 0) return;
   for (const entry of entries.slice(-transcriptLimit).toReversed()) {
     const saved: AgentEntry =
       entry.type === 'tool'
         ? { ...entry, content: entry.content.slice(0, 4096), terminalIds: [] }
         : { ...entry, text: entry.text.slice(-20000) };
-    const size = JSON.stringify(saved).length + Number(recent.length > 0);
+    const size = encoder.encode(JSON.stringify(saved)).length + Number(recent.length > 0);
     if (size > remaining) continue;
     recent.push(saved);
     remaining -= size;
