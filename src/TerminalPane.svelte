@@ -137,6 +137,12 @@
         data: [...data].map((character) => character.codePointAt(0) ?? 0),
       }).catch((cause) => (error = String(cause)));
     });
+    const copySelection = () => {
+      const selection = terminal.getSelection();
+      if (selection?.trim()) void navigator.clipboard?.writeText(selection).catch(() => {});
+    };
+    container.addEventListener('pointerup', copySelection);
+    container.addEventListener('keyup', copySelection);
     terminal.registerLinkProvider({
       provideLinks(line, callback) {
         const buffer = terminal.buffer.active;
@@ -194,6 +200,8 @@
       disposed = true;
       ++generation;
       observer.disconnect();
+      container.removeEventListener('pointerup', copySelection);
+      container.removeEventListener('keyup', copySelection);
       terminal.dispose();
       void invoke('terminal_detach', { id, attachment });
     };

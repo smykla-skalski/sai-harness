@@ -70,6 +70,8 @@
     "allow-browser-capture",
     "allow-browser-save-capture",
     "allow-browser-remove-capture",
+    "allow-clipboard-save-file",
+    "allow-clipboard-remove-file",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:event:allow-emit-to",

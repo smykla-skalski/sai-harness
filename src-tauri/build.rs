@@ -70,6 +70,8 @@ fn main() {
             "browser_capture",
             "browser_save_capture",
             "browser_remove_capture",
+            "clipboard_save_file",
+            "clipboard_remove_file",
             "browser_detected_servers",
         ]),
     ))

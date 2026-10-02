@@ -4,6 +4,12 @@
   import Markdown from './Markdown.svelte';
   import type { OpenCodeClient, SessionMessageInfo } from './lib/opencode';
   import type { AgentId } from './lib/acp';
+  import {
+    clipboardFiles,
+    fileUri,
+    removeClipboardFile,
+    stageClipboardFile,
+  } from './lib/attachments';
 
   type Source =
     { kind: 'opencode'; sessionID: string } | { kind: 'acp'; agent: AgentId; context: string };
@@ -29,11 +35,45 @@
   let busy = $state(false);
   let error = $state('');
   let draft = $state('');
+  let attachments = $state<{ path: string; name: string }[]>([]);
   let replies = $state<{ id: string; role: string; text: string }[]>([]);
   let baseline = new Set<string>();
   let inboxID: string | null = null;
   let prompt = $state<HTMLTextAreaElement>();
   let disposed = false;
+
+  async function pasteFiles(event: ClipboardEvent) {
+    const files = clipboardFiles(event);
+    if (!files.length) return;
+    event.preventDefault();
+    const staged = await Promise.all(
+      files.map(async (file) => {
+        try {
+          return {
+            path: await stageClipboardFile(file),
+            name: file.name || 'clipboard-image.png',
+            failure: null,
+          };
+        } catch (cause) {
+          return { path: null, name: file.name, failure: String(cause) };
+        }
+      }),
+    );
+    const ready: { path: string; name: string }[] = [];
+    for (const item of staged) {
+      if (item.failure) error = `Could not paste ${item.name}: ${item.failure}`;
+      else if (item.path) {
+        if (disposed) void removeClipboardFile(item.path);
+        else ready.push({ path: item.path, name: item.name });
+      }
+    }
+    attachments = [...attachments, ...ready];
+  }
+
+  function removeAttachment(path: string) {
+    attachments = attachments.filter((item) => item.path !== path);
+    void removeClipboardFile(path);
+  }
 
   function messageText(message: SessionMessageInfo): string {
     return message.type === 'user'
@@ -92,6 +132,7 @@
     }
     return () => {
       disposed = true;
+      attachments.forEach((item) => void removeClipboardFile(item.path));
       if (forkID && forkClient) {
         const sessionID = forkID;
         const pending = inboxID;
@@ -116,13 +157,19 @@
 
   async function send() {
     const text = draft.trim();
-    if (!text || !client || !forkID || busy) return;
+    if ((!text && !attachments.length) || !client || !forkID || busy) return;
+    const files = [...attachments];
     busy = true;
     error = '';
     draft = '';
+    attachments = [];
     let accepted = false;
     try {
-      const inbox = await client.session.prompt({ sessionID: forkID, text });
+      const inbox = await client.session.prompt({
+        sessionID: forkID,
+        text,
+        files: files.map((item) => ({ uri: fileUri(item.path), name: item.name })),
+      });
       accepted = true;
       if (disposed) {
         await client.session.inbox.cancel({ sessionID: forkID, inboxID: inbox.id }).catch(() => {});
@@ -130,12 +177,16 @@
       }
       inboxID = inbox.id;
       await client.session.wait({ sessionID: forkID });
+      files.forEach((item) => void removeClipboardFile(item.path));
       inboxID = null;
       await refresh();
     } catch (cause) {
       if (!disposed) {
         error = String(cause);
-        if (!accepted) draft = text;
+        if (!accepted) {
+          draft = text;
+          attachments = [...files, ...attachments];
+        }
       }
     } finally {
       if (!disposed) busy = false;
@@ -174,9 +225,18 @@
       {#if error}<p role="alert">{error}</p>{/if}
     </div>
     <div class="side-chat-composer">
+      {#if attachments.length}<div class="attachments">
+          {#each attachments as attachment (attachment.path)}<span
+              >{attachment.name}<button
+                aria-label={`Remove ${attachment.name}`}
+                onclick={() => removeAttachment(attachment.path)}>×</button
+              ></span
+            >{/each}
+        </div>{/if}
       <textarea
         bind:this={prompt}
         bind:value={draft}
+        onpaste={(event) => void pasteFiles(event)}
         data-pane-prompt
         aria-label="Side chat question"
         placeholder="Ask about this thread…"
@@ -187,8 +247,9 @@
             void send();
           }
         }}></textarea>
-      <button disabled={loading || busy || !draft.trim() || !forkID} onclick={() => void send()}
-        >Send</button
+      <button
+        disabled={loading || busy || (!draft.trim() && !attachments.length) || !forkID}
+        onclick={() => void send()}>Send</button
       >
     </div>
   </div>

@@ -89,7 +89,13 @@
   } from './lib/opencode';
   import { getHistory, getPlan, type HistoryEntry, type PlanSnapshot } from './lib/plan';
   import { mergeMessages, nearBottom } from './lib/timeline';
-  import { fileUri } from './lib/attachments';
+  import {
+    clipboardFiles,
+    fileUri,
+    removeClipboardFile,
+    stageClipboardFile,
+  } from './lib/attachments';
+  import { copyCompletedSelection } from './lib/auto-copy';
   import {
     coordinationKey,
     coordinationMessageForText,
@@ -336,6 +342,7 @@
   });
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
+  const clipboardAttachmentPaths = new SvelteSet<string>();
   let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
   let diffComments = $state<Record<string, DiffComment[]>>({});
   let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
@@ -3079,6 +3086,7 @@
 
   function removeAttachedFile(path: string) {
     attachedFiles = attachedFiles.filter((item) => item !== path);
+    if (clipboardAttachmentPaths.delete(path)) void removeClipboardFile(path);
     const pickedText = pickedImageText.get(path);
     if (pickedText) {
       draft = draft.replace(pickedText, '').trim();
@@ -3090,6 +3098,7 @@
   function clearDraftAttachments() {
     draft = draftWithoutPickedImages(draft);
     for (const path of attachedFiles) {
+      if (clipboardAttachmentPaths.delete(path)) void removeClipboardFile(path);
       if (inFlightCaptures.has(path)) continue;
       if (!pickedImageText.delete(path)) continue;
       void invoke('browser_remove_capture', { path });
@@ -3870,6 +3879,36 @@
     if (current !== selection || originalSessionID !== sessionID || path !== directory) return;
     const paths = typeof selected === 'string' ? [selected] : (selected ?? []);
     attachedFiles = [...new Set([...attachedFiles, ...paths])];
+  }
+
+  async function pasteFiles(event: ClipboardEvent) {
+    const files = clipboardFiles(event);
+    if (!files.length) return;
+    event.preventDefault();
+    const current = selection;
+    const currentDirectory = directory;
+    const staged = await Promise.all(
+      files.map(async (file) => {
+        try {
+          return { file, path: await stageClipboardFile(file), failure: null };
+        } catch (cause) {
+          return { file, path: null, failure: describe(cause) };
+        }
+      }),
+    );
+    for (const { file, path, failure } of staged) {
+      if (failure) {
+        error = `Could not paste ${file.name}: ${failure}`;
+        continue;
+      }
+      if (!path) continue;
+      if (current !== selection || currentDirectory !== directory) {
+        void removeClipboardFile(path);
+        continue;
+      }
+      clipboardAttachmentPaths.add(path);
+      attachedFiles = [...attachedFiles, path];
+    }
   }
 
   function changeSearch() {
@@ -4743,7 +4782,11 @@
 <svelte:head><title>Sail · Plan workspace</title></svelte:head>
 <svelte:window
   onkeydown={keydownWorkspace}
-  onkeyup={keyupWorkspace}
+  onkeyup={(event) => {
+    keyupWorkspace(event);
+    copyCompletedSelection();
+  }}
+  onpointerup={copyCompletedSelection}
   onblur={() => (recentCycleKeys = null)}
   onfocus={focusWorkspace}
   onfocusin={cancelPendingPromptFocus}
@@ -5259,6 +5302,7 @@
                     data-pane-prompt
                     aria-label="Message"
                     bind:value={draft}
+                    onpaste={(event) => void pasteFiles(event)}
                     onkeydown={keydown}
                     rows="3"
                     placeholder={inputReady

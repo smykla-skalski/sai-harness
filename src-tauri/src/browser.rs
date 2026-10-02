@@ -110,6 +110,7 @@ pub struct PickViewport {
 pub struct CaptureStore {
     root: PathBuf,
     files: Mutex<HashSet<PathBuf>>,
+    attachments: Mutex<HashSet<PathBuf>>,
 }
 
 impl Default for CaptureStore {
@@ -117,8 +118,50 @@ impl Default for CaptureStore {
         Self {
             root: std::env::temp_dir().join(format!("sail-picks-{}", uuid::Uuid::new_v4())),
             files: Mutex::new(HashSet::new()),
+            attachments: Mutex::new(HashSet::new()),
         }
     }
+}
+
+#[tauri::command]
+pub fn clipboard_save_file(
+    store: State<'_, CaptureStore>,
+    name: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
+        return Err("Clipboard file must be between 1 byte and 20 MiB".to_string());
+    }
+    let name = std::path::Path::new(&name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .ok_or("Invalid clipboard file name")?;
+    let name = name.replace(['/', '\\', ':'], "_");
+    let root = store.root.join("clipboard");
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let path = root.join(format!("{}-{name}", uuid::Uuid::new_v4()));
+    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    store
+        .attachments
+        .lock()
+        .map_err(|error| error.to_string())?
+        .insert(path.clone());
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn clipboard_remove_file(store: State<'_, CaptureStore>, path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !store
+        .attachments
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&path)
+    {
+        return Err("Unknown clipboard file".to_string());
+    }
+    std::fs::remove_file(path).map_err(|error| error.to_string())
 }
 
 impl Drop for CaptureStore {
