@@ -50,6 +50,7 @@
     notificationStats,
     splitTaskNotifications,
   } from './lib/task-notification';
+  import { klaudiushRules, splitKlaudiushMessage, type KlaudiushRule } from './lib/klaudiush';
 
   interface Props {
     agent: AgentId;
@@ -1031,6 +1032,16 @@
       </div>
     {/if}
     {#if historyLoading}<div class="agent-history-status" role="status">Loading history…</div>{/if}
+    {#snippet hookNotice(rules: KlaudiushRule[])}
+      <div class="agent-hook-notice">
+        <strong>Action blocked by hook</strong>
+        <ul>
+          {#each rules as rule (rule.code)}
+            <li><code>{rule.code}</code> {rule.reason}</li>
+          {/each}
+        </ul>
+      </div>
+    {/snippet}
     {#snippet toolRow(tool: AgentTool, revealed: boolean)}
       {#if revealed}
         <div class="agent-tool-item">
@@ -1071,6 +1082,8 @@
     {/snippet}
     {#each displayEntries as entry (entry.id)}
       {#if entry.type === 'tool-group'}
+        {@const hookRules = klaudiushRules(entry.tools.map((tool) => tool.content).join('\n'))}
+        {#if hookRules.length}{@render hookNotice(hookRules)}{/if}
         {#if isBusy && (entry.id === displayEntries.at(-1)?.id || entry.tools.some(toolRunning))}
           {#if entry.tools.length > 1}
             <details class="agent-tool-group">
@@ -1137,6 +1150,7 @@
             </div>
           {:else}
             {@const text = segment.text}
+            {@const hookMessage = entry.type === 'assistant' ? splitKlaudiushMessage(text) : null}
             {@const attribution =
               entry.type === 'user'
                 ? coordinationMessageForText(text, coordinationMessages)
@@ -1164,11 +1178,20 @@
                       ? `${name} · thinking`
                       : name}
                 </div>
-                <Markdown
-                  source={attribution
-                    ? text.replace(coordinationPrompt(attribution), attribution.text)
-                    : text}
-                />
+                {#if hookMessage}
+                  {@render hookNotice(hookMessage.rules)}
+                  <details class="agent-hook-details">
+                    <summary>Full hook notice</summary>
+                    <Markdown source={hookMessage.notice} />
+                  </details>
+                  {#if hookMessage.remainder}<Markdown source={hookMessage.remainder} />{/if}
+                {:else}
+                  <Markdown
+                    source={attribution
+                      ? text.replace(coordinationPrompt(attribution), attribution.text)
+                      : text}
+                  />
+                {/if}
               </div>
             </article>
           {/if}
@@ -1410,6 +1433,29 @@
     margin: 0 0 8px 42px;
     border: 1px solid var(--border);
     border-radius: 8px;
+  }
+  .agent-hook-notice {
+    margin: 0 0 8px 42px;
+    padding: 9px 12px;
+    border: 1px solid var(--danger, #d66);
+    border-radius: 8px;
+  }
+  .message-body .agent-hook-notice {
+    margin-left: 0;
+  }
+  .agent-hook-notice strong {
+    color: var(--danger, #d66);
+  }
+  .agent-hook-notice ul {
+    margin: 5px 0 0;
+    padding-left: 20px;
+  }
+  .agent-hook-notice code {
+    margin-right: 4px;
+  }
+  .agent-hook-details {
+    margin-bottom: 8px;
+    color: var(--text-muted, #888);
   }
   .agent-tool-group > summary {
     display: flex;
