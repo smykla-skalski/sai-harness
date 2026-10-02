@@ -467,7 +467,8 @@ impl BrowserManager {
     ) -> Result<Value, String> {
         let setting = match name {
             "worktree_create" | "worktree_list" | "worktree_info" | "agent_spawn"
-            | "agent_status" | "agent_wait" | "agent_result" => "sai-agent-worktrees-enabled",
+            | "agent_status" | "agent_wait" | "agent_result" | "terminal_list"
+            | "terminal_read" | "terminal_wait" => "sai-agent-worktrees-enabled",
             "worktree_status" => "sai-agent-status-enabled",
             "project_threads" => "sai-agent-thread-list-enabled",
             "thread_message" => "sai-agent-messages-enabled",
@@ -544,6 +545,9 @@ impl BrowserManager {
                 | "agent_status"
                 | "agent_wait"
                 | "agent_result"
+                | "terminal_list"
+                | "terminal_read"
+                | "terminal_wait"
                 | "worktree_status"
                 | "project_threads"
                 | "thread_message"
@@ -1097,6 +1101,21 @@ const TOOLS: &[(&str, &str, &str)] = &[
         "receiptId,accessKey",
     ),
     (
+        "terminal_list",
+        "List Sail-owned shell and agent command terminals in this project and its known worktrees.",
+        "",
+    ),
+    (
+        "terminal_read",
+        "Read up to 65536 bytes of terminal output from a byte cursor. Returns the next cursor, state, exit code, and truncation marker.",
+        "terminalId",
+    ),
+    (
+        "terminal_wait",
+        "Wait up to 30 seconds for new terminal output or exit, then read a bounded page from a byte cursor.",
+        "terminalId",
+    ),
+    (
         "worktree_status",
         "Set a short status comment on the current worktree in the Sail sidebar. Empty text clears it.",
         "comment",
@@ -1181,6 +1200,18 @@ pub fn run_mcp_stdio() {
                             "accessKey":{"type":"string"},
                             "timeoutMs":{"type":"integer","minimum":0,"maximum":30000}
                         },"required":["receiptId","accessKey"]
+                    }});
+                }
+                if *name == "terminal_read" || *name == "terminal_wait" {
+                    let mut properties = serde_json::Map::new();
+                    properties.insert("terminalId".into(), json!({"type":"string"}));
+                    properties.insert("cursor".into(), json!({"type":"integer","minimum":0}));
+                    properties.insert("maxBytes".into(), json!({"type":"integer","minimum":1,"maximum":65536}));
+                    if *name == "terminal_wait" {
+                        properties.insert("timeoutMs".into(), json!({"type":"integer","minimum":0,"maximum":30000}));
+                    }
+                    return json!({"name":name,"description":description,"inputSchema":{
+                        "type":"object","properties":properties,"required":["terminalId"]
                     }});
                 }
                 let properties: serde_json::Map<String, Value> = fields.split(',').filter(|field| !field.is_empty()).map(|field| (field.to_string(), json!({"type":"string"}))).collect();

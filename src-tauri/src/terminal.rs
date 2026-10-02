@@ -1,12 +1,15 @@
+use base64::Engine;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
+use uuid::Uuid;
 
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
@@ -41,6 +44,7 @@ struct TerminalExitNotice {
 
 struct TerminalOutput {
     history: VecDeque<u8>,
+    start: u64,
     #[cfg(windows)]
     current_directory: PathBuf,
     #[cfg(windows)]
@@ -50,12 +54,14 @@ struct TerminalOutput {
 }
 
 struct TerminalSession {
+    inspect_id: String,
     directory: PathBuf,
     process_id: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     output: Arc<Mutex<TerminalOutput>>,
+    changed: Arc<Condvar>,
 }
 
 impl TerminalSession {
@@ -101,13 +107,51 @@ fn default_editor() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::default_editor;
+    use super::{canonical_terminal_paths, default_editor, output_page, TerminalOutput};
+    use std::collections::VecDeque;
+    use std::path::Path;
 
     #[test]
     fn default_editor_path_survives_argument_parsing() {
         let editor = default_editor();
         let parts = shell_words::split(&editor).expect("valid default editor");
         assert_eq!(parts.len(), 1);
+    }
+
+    #[test]
+    fn inspected_output_pages_and_marks_lost_history() {
+        let output = TerminalOutput {
+            history: VecDeque::from(b"abcdef".to_vec()),
+            start: 3,
+            #[cfg(windows)]
+            current_directory: Path::new("/repo").to_path_buf(),
+            #[cfg(windows)]
+            osc_tail: Vec::new(),
+            exit_code: Some(0),
+            subscriber: None,
+        };
+        let first = output_page("one", Path::new("/repo"), &output, 0, 2, false);
+        assert_eq!(first.output, "ab");
+        assert_eq!(first.cursor, 5);
+        assert!(first.truncated);
+        assert_eq!(first.exit_code, Some(0));
+        let second = output_page("one", Path::new("/repo"), &output, first.cursor, 2, false);
+        assert_eq!(second.output, "cd");
+        assert_eq!(second.cursor, 7);
+        assert!(!second.truncated);
+        let stale = output_page("one", Path::new("/repo"), &output, 99, 2, false);
+        assert!(stale.reset);
+        assert_eq!(stale.output, "ab");
+    }
+
+    #[test]
+    fn terminal_allowlist_resolves_path_aliases() {
+        let root = std::env::temp_dir();
+        let alias = format!("{}/.", root.display());
+        assert_eq!(
+            canonical_terminal_paths(&[alias]),
+            vec![root.canonicalize().unwrap()]
+        );
     }
 }
 
@@ -157,6 +201,193 @@ impl TerminalManager {
             })
             .unwrap_or_default()
     }
+
+    fn inspect(&self, id: &str, allowed: &[PathBuf]) -> Result<Arc<TerminalSession>, String> {
+        let session = self
+            .0
+            .lock()
+            .map_err(|error| error.to_string())?
+            .values()
+            .find(|session| session.inspect_id == id)
+            .cloned()
+            .ok_or("Unknown terminal ID.")?;
+        if !allowed.contains(&session.directory) {
+            return Err("Unknown terminal ID.".to_string());
+        }
+        Ok(session)
+    }
+}
+
+pub(crate) fn canonical_terminal_paths(allowed: &[String]) -> Vec<PathBuf> {
+    allowed
+        .iter()
+        .filter_map(|path| Path::new(path).canonicalize().ok())
+        .collect()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectedTerminal {
+    terminal_id: String,
+    pane_id: String,
+    worktree: String,
+    state: &'static str,
+    exit_code: Option<u32>,
+    cursor: u64,
+    base_cursor: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectedOutput {
+    terminal_id: String,
+    worktree: String,
+    state: &'static str,
+    exit_code: Option<u32>,
+    output: String,
+    output_base64: String,
+    cursor: u64,
+    base_cursor: u64,
+    truncated: bool,
+    reset: bool,
+    timed_out: bool,
+}
+
+fn output_page(
+    id: &str,
+    directory: &Path,
+    output: &TerminalOutput,
+    cursor: u64,
+    max_bytes: usize,
+    timed_out: bool,
+) -> InspectedOutput {
+    let end = output.start + output.history.len() as u64;
+    let truncated = cursor < output.start;
+    let reset = cursor > end;
+    let offset = if truncated || reset {
+        0
+    } else {
+        (cursor - output.start) as usize
+    };
+    let bytes: Vec<_> = output
+        .history
+        .iter()
+        .skip(offset)
+        .take(max_bytes)
+        .copied()
+        .collect();
+    InspectedOutput {
+        terminal_id: format!("shell:{id}"),
+        worktree: directory.to_string_lossy().into_owned(),
+        state: if output.exit_code.is_some() {
+            "exited"
+        } else {
+            "running"
+        },
+        exit_code: output.exit_code,
+        output: String::from_utf8_lossy(&bytes).into_owned(),
+        output_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        cursor: output.start + offset as u64 + bytes.len() as u64,
+        base_cursor: output.start,
+        truncated,
+        reset,
+        timed_out,
+    }
+}
+
+#[tauri::command]
+pub fn terminal_inspect_list(
+    manager: State<'_, TerminalManager>,
+    allowed: Vec<String>,
+) -> Result<Vec<InspectedTerminal>, String> {
+    let allowed = canonical_terminal_paths(&allowed);
+    let sessions = manager.0.lock().map_err(|error| error.to_string())?;
+    sessions
+        .iter()
+        .filter(|(_, session)| allowed.contains(&session.directory))
+        .map(|(id, session)| {
+            let output = session.output.lock().map_err(|error| error.to_string())?;
+            Ok(InspectedTerminal {
+                terminal_id: format!("shell:{}", session.inspect_id),
+                pane_id: id.clone(),
+                worktree: session.directory.to_string_lossy().into_owned(),
+                state: if output.exit_code.is_some() {
+                    "exited"
+                } else {
+                    "running"
+                },
+                exit_code: output.exit_code,
+                cursor: output.start + output.history.len() as u64,
+                base_cursor: output.start,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn terminal_inspect_read(
+    manager: State<'_, TerminalManager>,
+    id: String,
+    allowed: Vec<String>,
+    cursor: u64,
+    max_bytes: usize,
+) -> Result<InspectedOutput, String> {
+    let id = id.strip_prefix("shell:").ok_or("Unknown terminal ID.")?;
+    let allowed = canonical_terminal_paths(&allowed);
+    let session = manager.inspect(id, &allowed)?;
+    let output = session.output.lock().map_err(|error| error.to_string())?;
+    Ok(output_page(
+        id,
+        &session.directory,
+        &output,
+        cursor,
+        max_bytes.clamp(1, 65_536),
+        false,
+    ))
+}
+
+#[tauri::command(async)]
+pub fn terminal_inspect_wait(
+    manager: State<'_, TerminalManager>,
+    id: String,
+    allowed: Vec<String>,
+    cursor: u64,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<InspectedOutput, String> {
+    let id = id.strip_prefix("shell:").ok_or("Unknown terminal ID.")?;
+    let allowed = canonical_terminal_paths(&allowed);
+    let session = manager.inspect(id, &allowed)?;
+    let output = session.output.lock().map_err(|error| error.to_string())?;
+    let end = output.start + output.history.len() as u64;
+    let (output, timed_out) = if cursor >= output.start
+        && cursor == end
+        && output.exit_code.is_none()
+        && timeout_ms > 0
+    {
+        let (state, result) = session
+            .changed
+            .wait_timeout_while(
+                output,
+                Duration::from_millis(timeout_ms.min(30_000)),
+                |state| {
+                    state.start + state.history.len() as u64 == cursor && state.exit_code.is_none()
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        (state, result.timed_out())
+    } else {
+        let timed_out = cursor == end && timeout_ms == 0 && output.exit_code.is_none();
+        (output, timed_out)
+    };
+    Ok(output_page(
+        id,
+        &session.directory,
+        &output,
+        cursor,
+        max_bytes.clamp(1, 65_536),
+        timed_out,
+    ))
 }
 
 fn shell() -> PathBuf {
@@ -219,6 +450,7 @@ fn spawn(
         .map_err(|error| error.to_string())?;
     let output = Arc::new(Mutex::new(TerminalOutput {
         history: VecDeque::new(),
+        start: 0,
         #[cfg(windows)]
         current_directory: directory.clone(),
         #[cfg(windows)]
@@ -226,10 +458,12 @@ fn spawn(
         exit_code: None,
         subscriber: None,
     }));
+    let changed = Arc::new(Condvar::new());
     let process_id = child.process_id();
     let killer = child.clone_killer();
     let child = Arc::new(Mutex::new(child));
     let background_output = Arc::clone(&output);
+    let background_changed = Arc::clone(&changed);
     let background_child = Arc::clone(&child);
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
@@ -241,6 +475,8 @@ fn spawn(
                         state.history.extend(&buffer[..size]);
                         let excess = state.history.len().saturating_sub(MAX_OUTPUT);
                         state.history.drain(..excess);
+                        state.start += excess as u64;
+                        background_changed.notify_all();
                         #[cfg(windows)]
                         update_windows_directory(&mut state, &buffer[..size]);
                         if let Some((_, channel)) = &state.subscriber {
@@ -260,6 +496,7 @@ fn spawn(
             .unwrap_or(1);
         if let Ok(mut state) = background_output.lock() {
             state.exit_code = Some(code);
+            background_changed.notify_all();
             if let Some((_, channel)) = &state.subscriber {
                 let _ = channel.send(TerminalEvent::Exit { code });
             }
@@ -267,12 +504,14 @@ fn spawn(
         let _ = app.emit("terminal:exit", TerminalExitNotice { id, code });
     });
     Ok(TerminalSession {
+        inspect_id: Uuid::new_v4().to_string(),
         directory,
         process_id,
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
         killer: Mutex::new(killer),
         output,
+        changed,
     })
 }
 
