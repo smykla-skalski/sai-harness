@@ -5,5 +5,10 @@
   "webviews": ["browser-*"],
   "remote": { "urls": ["http://*:*", "https://*:*"] },
   "local": false,
-  "permissions": ["allow-browser-shortcut", "allow-browser-route"]
+  "permissions": [
+    "allow-browser-shortcut",
+    "allow-browser-route",
+    "allow-browser-pick-selection",
+    "allow-browser-pick-cancel"
+  ]
 }

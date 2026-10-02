@@ -10,6 +10,7 @@
   import { isPermissionNotFoundError, isSessionNotFoundError } from '@opencode/client';
   import type { FileDiffInfo, FormInfo, PermissionRequest } from '@opencode/client';
   import type { ModelRef } from '@opencode/client';
+  import type { BrowserAttachment } from './lib/browser-pick';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
   import PlanPanel from './PlanPanel.svelte';
@@ -220,6 +221,9 @@
   let selectedModelKey = $state('');
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
+  let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
+  const pickedImageText = new SvelteMap<string, string>();
+  const inFlightCaptures = new SvelteSet<string>();
   let setup = $state<SetupReport | null>(null);
   let setupError = $state('');
   let setupLoading = $state(false);
@@ -1380,7 +1384,7 @@
     setup = null;
     selectedAgentID = '';
     selectedModelKey = '';
-    attachedFiles = [];
+    clearDraftAttachments();
     sessionID = null;
     mobileView = 'chat';
     newSessionMode = null;
@@ -1655,7 +1659,7 @@
     selectedSession = null;
     resetTimeline();
     snapshot = { plan: null, questions: null };
-    attachedFiles = [];
+    clearDraftAttachments();
     running = false;
     pendingPermissions = [];
     pendingForms = [];
@@ -2091,6 +2095,67 @@
     void focusPanePromptAfterTick(id);
   }
 
+  function attachPickedElement(browserId: string, attachment: BrowserAttachment) {
+    const candidates = leaves(paneLayout).filter(
+      (leaf) => leaf.id !== browserId && (leaf.id === 'main' || !!leaf.agent),
+    );
+    const source = document.querySelector<HTMLElement>(`[data-pane-id="${browserId}"]`);
+    if (!source || !candidates.length)
+      throw new Error('Open an agent pane next to the browser first.');
+    const bounds = source.getBoundingClientRect();
+    const centerX = (bounds.left + bounds.right) / 2;
+    const centerY = (bounds.top + bounds.bottom) / 2;
+    const next = candidates
+      .map((leaf) => {
+        const element = document.querySelector<HTMLElement>(`[data-pane-id="${leaf.id}"]`);
+        const rect = element?.getBoundingClientRect();
+        return {
+          id: leaf.id,
+          distance: rect
+            ? Math.hypot(
+                (rect.left + rect.right) / 2 - centerX,
+                (rect.top + rect.bottom) / 2 - centerY,
+              )
+            : Infinity,
+        };
+      })
+      .toSorted((a, b) => a.distance - b.distance)[0];
+    if (!next || !Number.isFinite(next.distance)) throw new Error('Agent pane is unavailable.');
+    if (next.id === 'main' && !acpAgent) {
+      draft = [draft.trim(), attachment.text].filter(Boolean).join('\n\n');
+      attachedFiles = [...attachedFiles, attachment.imagePath];
+      pickedImageText.set(attachment.imagePath, attachment.text);
+    } else {
+      pickedAttachments = { ...pickedAttachments, [next.id]: attachment };
+    }
+    focusPaneForTyping(next.id);
+  }
+
+  function removeAttachedFile(path: string) {
+    attachedFiles = attachedFiles.filter((item) => item !== path);
+    const pickedText = pickedImageText.get(path);
+    if (pickedText) {
+      draft = draft.replace(pickedText, '').trim();
+      pickedImageText.delete(path);
+      void invoke('browser_remove_capture', { path });
+    }
+  }
+
+  function clearDraftAttachments() {
+    for (const path of attachedFiles) {
+      if (inFlightCaptures.has(path)) continue;
+      if (!pickedImageText.delete(path)) continue;
+      void invoke('browser_remove_capture', { path });
+    }
+    attachedFiles = [];
+  }
+
+  function markPickConsumed(id: string) {
+    pickedAttachments = Object.fromEntries(
+      Object.entries(pickedAttachments).filter(([, attachment]) => attachment.id !== id),
+    );
+  }
+
   function focusPane(id: string) {
     if (focusedPane === id) return;
     ++recentJumpGeneration;
@@ -2426,7 +2491,7 @@
     selectedSession = info;
     syncSessionChoice(info);
     newSessionMode = null;
-    attachedFiles = [];
+    clearDraftAttachments();
     resetTimeline();
     followChat = viewStates.get(viewKey())?.follow ?? true;
     running = activeSessionIDs.includes(id);
@@ -2488,7 +2553,7 @@
     historyLoading = false;
     pendingPermissions = [];
     pendingForms = [];
-    attachedFiles = [];
+    clearDraftAttachments();
     running = false;
     draft = viewStates.get(viewKey())?.draft ?? '';
     mobileView = 'chat';
@@ -3097,6 +3162,9 @@
     const path = directory;
     const text = draft.trim();
     const files = [...attachedFiles];
+    for (const file of files) {
+      if (pickedImageText.has(file)) inFlightCaptures.add(file);
+    }
     draft = '';
     viewStates.delete(viewKey());
     attachedFiles = [];
@@ -3146,6 +3214,10 @@
           name: filePath.split(/[\\/]/).at(-1),
         })),
       });
+      for (const file of files) {
+        if (!pickedImageText.delete(file)) continue;
+        void invoke('browser_remove_capture', { path: file });
+      }
       if (current === selection && path === directory) await refreshSession(id);
     } catch (cause) {
       if (current === selection && path === directory) {
@@ -3153,8 +3225,14 @@
         attachedFiles = files;
         running = false;
         error = describe(cause);
+      } else {
+        for (const file of files) {
+          if (!pickedImageText.delete(file)) continue;
+          void invoke('browser_remove_capture', { path: file });
+        }
       }
     } finally {
+      for (const file of files) inFlightCaptures.delete(file);
       sending = false;
     }
   }
@@ -3672,6 +3750,8 @@
                 {directory}
                 thread={acpThread}
                 focusPrompt={promptFocusPane === 'main'}
+                picked={pickedAttachments.main}
+                onpickedconsumed={markPickConsumed}
                 onpromptfocused={() => (promptFocusPane = null)}
                 running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
                 focused={focusedPane === 'main'}
@@ -3827,9 +3907,7 @@
                       {#each attachedFiles as path (path)}<span
                           >{path.split(/[\\/]/).at(-1)}<button
                             aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
-                            onclick={() =>
-                              (attachedFiles = attachedFiles.filter((item) => item !== path))}
-                            >×</button
+                            onclick={() => removeAttachedFile(path)}>×</button
                           ></span
                         >{/each}
                     </div>{/if}
@@ -3951,6 +4029,9 @@
       onchooseterminal={choosePaneTerminal}
       onchoosebrowser={choosePaneBrowser}
       onbrowserstate={updatePaneBrowser}
+      onbrowserpick={attachPickedElement}
+      {pickedAttachments}
+      onpickedconsumed={markPickConsumed}
       onshortcut={keydownWorkspace}
       onactivity={saveAgentThread}
       focusPromptPane={promptFocusPane}

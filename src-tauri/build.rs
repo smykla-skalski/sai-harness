@@ -49,6 +49,12 @@ fn main() {
             "browser_pane_register",
             "browser_shortcut",
             "browser_route",
+            "browser_picker",
+            "browser_pick_selection",
+            "browser_pick_cancel",
+            "browser_capture",
+            "browser_save_capture",
+            "browser_remove_capture",
             "browser_detected_servers",
         ]),
     ))

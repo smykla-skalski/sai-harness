@@ -1,5 +1,9 @@
 use crate::browser_agent::BrowserManager;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, Window};
 
@@ -76,6 +80,38 @@ struct BrowserRouteEvent {
     mode: String,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedElement {
+    #[serde(default)]
+    label: String,
+    url: String,
+    html: String,
+    styles: serde_json::Value,
+    rect: serde_json::Value,
+    viewport: serde_json::Value,
+}
+
+pub struct CaptureStore {
+    root: PathBuf,
+    files: Mutex<HashSet<PathBuf>>,
+}
+
+impl Default for CaptureStore {
+    fn default() -> Self {
+        Self {
+            root: std::env::temp_dir().join(format!("sail-picks-{}", uuid::Uuid::new_v4())),
+            files: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+impl Drop for CaptureStore {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 const SHORTCUT_SCRIPT: &str = r#"
   (() => {
     const route = (mode) => window.__TAURI_INTERNALS__?.invoke('browser_route', {
@@ -112,6 +148,60 @@ const SHORTCUT_SCRIPT: &str = r#"
   document.addEventListener('pointerdown', () => {
     window.__TAURI_INTERNALS__?.invoke('browser_shortcut', { action: 'focus' });
   }, true);
+  (() => {
+    let active = false;
+    let overlay;
+    const clear = () => {
+      active = false;
+      overlay?.remove();
+      overlay = undefined;
+    };
+    window.__sailPicker = (enabled) => {
+      clear();
+      active = enabled;
+      if (!enabled) return;
+      overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #60a5fa;background:#60a5fa33;box-sizing:border-box';
+      document.documentElement.append(overlay);
+    };
+    document.addEventListener('pointermove', (event) => {
+      if (!active || !overlay) return;
+      const rect = event.target.getBoundingClientRect();
+      Object.assign(overlay.style, {
+        left: `${rect.left}px`, top: `${rect.top}px`,
+        width: `${rect.width}px`, height: `${rect.height}px`,
+      });
+    }, true);
+    document.addEventListener('click', (event) => {
+      if (!active) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const element = event.target;
+      if (!(element instanceof Element)) return;
+      const box = element.getBoundingClientRect();
+      const computed = getComputedStyle(element);
+      const styles = Object.fromEntries([
+        'display', 'position', 'color', 'backgroundColor', 'fontFamily',
+        'fontSize', 'fontWeight', 'lineHeight', 'padding', 'margin',
+        'border', 'borderRadius', 'width', 'height',
+      ].map((key) => [key, computed[key]]));
+      const selection = {
+        url: location.href, html: element.outerHTML.slice(0, 3000),
+        styles,
+        rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+        viewport: { width: innerWidth, height: innerHeight },
+      };
+      clear();
+      window.__TAURI_INTERNALS__?.invoke('browser_pick_selection', { selection });
+    }, true);
+    document.addEventListener('keydown', (event) => {
+      if (!active || event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clear();
+      window.__TAURI_INTERNALS__?.invoke('browser_pick_cancel');
+    }, true);
+  })();
 "#;
 
 #[cfg(target_os = "linux")]
@@ -178,6 +268,7 @@ pub async fn browser_open(
                 if !navigation_manager.allow_navigation(&navigation_pane_id, url) {
                     return false;
                 }
+                navigation_manager.cancel_picker(&navigation_label);
                 let _ = navigation_window.emit_to(
                     "main",
                     "browser:navigate",
@@ -329,6 +420,109 @@ pub fn browser_shortcut(webview: tauri::Webview, action: String) -> Result<(), S
             },
         )
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn browser_picker(
+    window: Window,
+    manager: State<'_, BrowserManager>,
+    label: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let webview = window
+        .get_webview(validate_label(&label)?)
+        .ok_or("Browser page is missing")?;
+    manager.set_picker(&label, enabled)?;
+    let result = webview
+        .eval(format!("window.__sailPicker?.({enabled})"))
+        .map_err(|error| error.to_string());
+    if result.is_err() {
+        manager.cancel_picker(&label);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn browser_pick_selection(
+    webview: tauri::Webview,
+    manager: State<'_, BrowserManager>,
+    mut selection: PickedElement,
+) -> Result<(), String> {
+    selection.label = validate_label(webview.label())?.to_string();
+    let url = parse_url(&selection.url)?;
+    if url.origin() != webview.url().map_err(|error| error.to_string())?.origin() {
+        return Err("Browser selection changed origin".to_string());
+    }
+    if selection.html.len() > 12000 {
+        return Err("Browser selection is too large".to_string());
+    }
+    manager.take_picker(&selection.label)?;
+    webview
+        .emit_to("main", "browser:picked", selection)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn browser_pick_cancel(
+    webview: tauri::Webview,
+    manager: State<'_, BrowserManager>,
+) -> Result<(), String> {
+    let label = validate_label(webview.label())?;
+    manager.cancel_picker(label);
+    webview
+        .emit_to("main", "browser:pick-cancel", label)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn browser_capture(window: Window, label: String) -> Result<String, String> {
+    let webview = window
+        .get_webview(validate_label(&label)?)
+        .ok_or("Browser page is missing")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let png = crate::browser_agent::screenshot(&webview)?;
+        if png.len() > 20 * 1024 * 1024 {
+            return Err("Browser snapshot exceeds 20 MiB.".to_string());
+        }
+        Ok(base64::engine::general_purpose::STANDARD.encode(png))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn browser_save_capture(store: State<'_, CaptureStore>, png: String) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("Invalid browser capture".to_string());
+    }
+    std::fs::create_dir_all(&store.root).map_err(|error| error.to_string())?;
+    let path = store
+        .root
+        .join(format!("picked-{}.png", uuid::Uuid::new_v4()));
+    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    store
+        .files
+        .lock()
+        .map_err(|error| error.to_string())?
+        .insert(path.clone());
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn browser_remove_capture(store: State<'_, CaptureStore>, path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !store
+        .files
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&path)
+    {
+        return Err("Unknown browser capture".to_string());
+    }
+    std::fs::remove_file(path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -756,7 +756,20 @@ pub async fn acp_prompt(
     session_id: String,
     text: String,
     turn_id: String,
+    image_paths: Vec<String>,
 ) -> Result<Value, String> {
+    let mut content = vec![json!({"type":"text","text":text})];
+    for path in image_paths {
+        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err("Invalid prompt image".to_string());
+        }
+        content.push(json!({
+            "type":"image",
+            "data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+            "mimeType":"image/png"
+        }));
+    }
     let runtime = connection(&manager, &agent)?;
     {
         let mut prompts = runtime
@@ -770,7 +783,7 @@ pub async fn acp_prompt(
         let result = runtime.request(
             "session/prompt",
             json!({
-                "sessionId":session_id,"prompt":[{"type":"text","text":text}]
+                "sessionId":session_id,"prompt":content
             }),
             Duration::from_secs(60 * 60 * 3),
         );

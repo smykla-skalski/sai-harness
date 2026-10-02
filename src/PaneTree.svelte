@@ -10,6 +10,7 @@
   import AgentTerminalPane from './AgentTerminalPane.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
+  import type { BrowserAttachment } from './lib/browser-pick';
   import type { ThreadStatus } from './lib/attention';
   import { clampPaneRatio, paneRatioBounds, type BrowserTab, type Pane } from './lib/panes';
 
@@ -29,6 +30,9 @@
     onchooseterminal: (id: string) => void;
     onchoosebrowser: (id: string) => void;
     onbrowserstate: (id: string, tabs: BrowserTab[], activeTab: string) => void;
+    onbrowserpick: (id: string, attachment: BrowserAttachment) => void;
+    pickedAttachments: Record<string, BrowserAttachment>;
+    onpickedconsumed: (id: string) => void;
     onshortcut: (event: KeyboardEvent) => void;
     onactivity: (thread: AgentThread) => void;
     focusPromptPane: string | null;
@@ -58,6 +62,9 @@
     onchooseterminal,
     onchoosebrowser,
     onbrowserstate,
+    onbrowserpick,
+    pickedAttachments,
+    onpickedconsumed,
     onshortcut,
     onactivity,
     focusPromptPane,
@@ -168,6 +175,9 @@
       {onchooseterminal}
       {onchoosebrowser}
       {onbrowserstate}
+      {onbrowserpick}
+      {pickedAttachments}
+      {onpickedconsumed}
       {onshortcut}
       {onactivity}
       {focusPromptPane}
@@ -224,6 +234,9 @@
       {onchooseterminal}
       {onchoosebrowser}
       {onbrowserstate}
+      {onbrowserpick}
+      {pickedAttachments}
+      {onpickedconsumed}
       {onshortcut}
       {onactivity}
       {focusPromptPane}
@@ -321,6 +334,7 @@
           {pane}
           {directory}
           onstate={(tabs, activeTab) => onbrowserstate(pane.id, tabs, activeTab)}
+          onpick={(attachment) => onbrowserpick(pane.id, attachment)}
           onfocus={() => onfocus(pane.id)}
           {onshortcut}
         />
@@ -336,6 +350,8 @@
             running={running(pane.thread)}
             focused={focused === pane.id}
             focusPrompt={focusPromptPane === pane.id}
+            picked={pickedAttachments[pane.id]}
+            {onpickedconsumed}
             {onpromptfocused}
             oncreated={(thread) => oncreated(pane.id, thread)}
             {onactivity}

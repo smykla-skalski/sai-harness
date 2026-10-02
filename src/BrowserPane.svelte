@@ -3,6 +3,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { BrowserTab, Pane } from './lib/panes';
+  import type { PickedBrowserElement, BrowserAttachment } from './lib/browser-pick';
+  import { describePickedElement } from './lib/browser-pick';
   import { browserPopIndex, newBrowserTab } from './lib/panes';
 
   type BrowserLeaf = Extract<Pane, { kind: 'browser' }>;
@@ -17,12 +19,14 @@
     onstate,
     onfocus,
     onshortcut,
+    onpick,
   }: {
     pane: BrowserLeaf;
     directory: string;
     onstate: (tabs: BrowserTab[], activeTab: string) => void;
     onfocus: () => void;
     onshortcut: (event: KeyboardEvent) => void;
+    onpick: (attachment: BrowserAttachment) => void;
   } = $props();
 
   let viewport: HTMLDivElement;
@@ -42,6 +46,7 @@
   let expectedUrl: string | null = null;
   let popDirection: -1 | 1 = -1;
   let mounted = false;
+  let picking = $state(false);
 
   async function refreshServers() {
     if (serverScanRunning) return;
@@ -152,7 +157,70 @@
     const label = liveLabel;
     liveLabel = null;
     ready = false;
+    picking = false;
     if (label) await invoke('browser_close', { label });
+  }
+
+  async function togglePicker() {
+    if (!liveLabel || !ready) return;
+    try {
+      const enabled = !picking;
+      await invoke('browser_picker', { label: liveLabel, enabled });
+      picking = enabled;
+      error = '';
+    } catch (cause) {
+      error = String(cause);
+    }
+  }
+
+  async function attachPickedElement(element: PickedBrowserElement) {
+    picking = false;
+    try {
+      const encoded = await invoke<string>('browser_capture', { label: element.label });
+      const image = new Image();
+      image.src = `data:image/png;base64,${encoded}`;
+      await image.decode();
+      const scaleX = image.naturalWidth / element.viewport.width;
+      const scaleY = image.naturalHeight / element.viewport.height;
+      const left = Math.max(0, Math.floor(element.rect.x * scaleX));
+      const top = Math.max(0, Math.floor(element.rect.y * scaleY));
+      const right = Math.min(
+        image.naturalWidth,
+        Math.ceil((element.rect.x + element.rect.width) * scaleX),
+      );
+      const bottom = Math.min(
+        image.naturalHeight,
+        Math.ceil((element.rect.y + element.rect.height) * scaleY),
+      );
+      if (right <= left || bottom <= top)
+        throw new Error('Selected element is outside the visible page.');
+      const canvas = document.createElement('canvas');
+      canvas.width = right - left;
+      canvas.height = bottom - top;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Cannot crop browser capture.');
+      context.drawImage(
+        image,
+        left,
+        top,
+        canvas.width,
+        canvas.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
+      const png = canvas.toDataURL('image/png').split(',')[1];
+      const imagePath = await invoke<string>('browser_save_capture', { png });
+      try {
+        onpick({ id: crypto.randomUUID(), text: describePickedElement(element), imagePath });
+      } catch (cause) {
+        await invoke('browser_remove_capture', { path: imagePath });
+        throw cause;
+      }
+    } catch (cause) {
+      error = String(cause);
+    }
   }
 
   async function mountCurrent() {
@@ -308,6 +376,7 @@
       }),
       listen<BrowserEvent>('browser:navigate', ({ payload }) => {
         if (payload.label !== liveLabel) return;
+        picking = false;
         beginLoading(payload.url);
         address = payload.url;
         recordNavigation(payload.url);
@@ -335,6 +404,12 @@
           ? `Arrow${payload.action.slice(5, 6).toUpperCase()}${payload.action.slice(6)}`
           : 'w';
         onshortcut(new KeyboardEvent('keydown', { key, metaKey: true, altKey: direction }));
+      }),
+      listen<PickedBrowserElement>('browser:picked', ({ payload }) => {
+        if (payload.label === liveLabel) void attachPickedElement(payload);
+      }),
+      listen<string>('browser:pick-cancel', ({ payload }) => {
+        if (payload === liveLabel) picking = false;
       }),
     ]);
     void unlisten.then(async () => {
@@ -430,6 +505,13 @@
       aria-label="Developer tools"
       disabled={!ready}
       onclick={() => void invoke('browser_devtools', { label: liveLabel })}>⌘⌥I</button
+    >
+    <button
+      type="button"
+      aria-label={picking ? 'Cancel element picker' : 'Pick page element'}
+      aria-pressed={picking}
+      disabled={!ready}
+      onclick={() => void togglePicker()}>{picking ? 'Cancel pick' : 'Pick element'}</button
     >
   </form>
   {#if servers.length}

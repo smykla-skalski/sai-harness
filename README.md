@@ -63,6 +63,8 @@ Agents can use the browser pane in their own worktree to navigate, read, click, 
 
 The browser pane lists HTTP ports started by Sail terminals and agents for its worktree. Select a port to open that server; stopped servers disappear automatically.
 
+Select **Pick element** in a browser pane to highlight a page element, then click it. Sail adds its HTML, computed styles, and a cropped screenshot to the nearest agent prompt so you can add a comment before sending. Press Escape to cancel picking.
+
 Sail saves repositories, groups, selected sessions, drafts, and preferences to `sail/settings.json` in the OS config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, `%APPDATA%` on Windows). `mise run dev` and packaged Sail use the same file. Existing WebView settings migrate on first launch from each origin.
 
 Other tasks:

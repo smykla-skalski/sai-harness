@@ -43,6 +43,7 @@ struct Inner {
     origins: Mutex<HashSet<(String, String)>>,
     pending: Mutex<HashMap<String, mpsc::Sender<bool>>>,
     policies: Mutex<HashMap<PathBuf, bool>>,
+    pickers: Mutex<HashSet<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -251,6 +252,7 @@ impl BrowserManager {
     }
 
     pub fn unregister(&self, label: &str) {
+        self.cancel_picker(label);
         if let Ok(mut pages) = self.0.pages.lock() {
             let pane_id = pages
                 .iter()
@@ -266,6 +268,36 @@ impl BrowserManager {
                 }
             }
             self.0.page_ready.notify_all();
+        }
+    }
+
+    pub fn set_picker(&self, label: &str, enabled: bool) -> Result<(), String> {
+        let mut pickers = self.0.pickers.lock().map_err(|error| error.to_string())?;
+        if enabled {
+            pickers.insert(label.to_string());
+        } else {
+            pickers.remove(label);
+        }
+        Ok(())
+    }
+
+    pub fn take_picker(&self, label: &str) -> Result<(), String> {
+        if self
+            .0
+            .pickers
+            .lock()
+            .map_err(|error| error.to_string())?
+            .remove(label)
+        {
+            Ok(())
+        } else {
+            Err("Element picker is not active".to_string())
+        }
+    }
+
+    pub fn cancel_picker(&self, label: &str) {
+        if let Ok(mut pickers) = self.0.pickers.lock() {
+            pickers.remove(label);
         }
     }
 
@@ -665,7 +697,7 @@ fn evaluate(webview: &tauri::Webview, script: &str) -> Result<Value, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
+pub(crate) fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
     use objc2::runtime::AnyObject;
     use objc2::AnyThread;
     use objc2_app_kit::{
@@ -707,7 +739,7 @@ fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
+pub(crate) fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
     use webkit2gtk::WebViewExt;
 
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -738,7 +770,7 @@ fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
+pub(crate) fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
     use webview2_com::{
         CapturePreviewCompletedHandler,
         Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
@@ -998,4 +1030,22 @@ fn call_bridge(params: &Value) -> Value {
         serde_json::from_str(&line).map_err(|error| error.to_string())
     })();
     response.unwrap_or_else(|error| json!({"content":[{"type":"text","text":format!("Sail browser bridge: {error}")}],"isError":true}))
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::BrowserManager;
+
+    #[test]
+    fn selection_requires_one_active_picker() {
+        let manager = BrowserManager::default();
+        assert!(manager.take_picker("browser-one").is_err());
+        manager.set_picker("browser-one", true).unwrap();
+        assert!(manager.take_picker("browser-two").is_err());
+        assert!(manager.take_picker("browser-one").is_ok());
+        assert!(manager.take_picker("browser-one").is_err());
+        manager.set_picker("browser-one", true).unwrap();
+        manager.cancel_picker("browser-one");
+        assert!(manager.take_picker("browser-one").is_err());
+    }
 }

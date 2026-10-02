@@ -804,6 +804,7 @@ pub fn run() {
         .manage(acp_terminal::AcpTerminalManager::default())
         .manage(terminal::TerminalManager::default())
         .manage(browser_agent::BrowserManager::default())
+        .manage(browser::CaptureStore::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             settings::load_settings,
@@ -850,6 +851,12 @@ pub fn run() {
             browser::browser_focus,
             browser::browser_shortcut,
             browser::browser_route,
+            browser::browser_picker,
+            browser::browser_pick_selection,
+            browser::browser_pick_cancel,
+            browser::browser_capture,
+            browser::browser_save_capture,
+            browser::browser_remove_capture,
             browser_agent::browser_access_reply,
             browser_agent::browser_project_access,
             browser_agent::browser_mcp_config,

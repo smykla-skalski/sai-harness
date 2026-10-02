@@ -193,8 +193,13 @@ export const acp = {
     }),
   load: (agent: AgentId, cwd: string, sessionId: string) =>
     invoke<Record<string, unknown>>('acp_load_session', { agent, cwd, sessionId }),
-  prompt: (agent: AgentId, sessionId: string, text: string, turnId: string) =>
-    invoke<{ stopReason: string }>('acp_prompt', { agent, sessionId, text, turnId }),
+  prompt: (
+    agent: AgentId,
+    sessionId: string,
+    text: string,
+    turnId: string,
+    imagePaths: string[] = [],
+  ) => invoke<{ stopReason: string }>('acp_prompt', { agent, sessionId, text, turnId, imagePaths }),
   cancel: (agent: AgentId, sessionId: string, turnId: string | null) =>
     invoke<void>('acp_cancel', { agent, sessionId, turnId }),
   permission: (agent: AgentId, requestId: string | number, optionId: string | null) =>

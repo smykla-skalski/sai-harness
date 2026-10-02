@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
@@ -15,6 +16,7 @@
     type AgentThread,
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
+  import type { BrowserAttachment } from './lib/browser-pick';
 
   interface Props {
     agent: AgentId;
@@ -24,6 +26,8 @@
     running: boolean;
     focused?: boolean;
     focusPrompt?: boolean;
+    picked?: BrowserAttachment;
+    onpickedconsumed?: (id: string) => void;
     onpromptfocused?: () => void;
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
@@ -38,6 +42,8 @@
     running,
     focused = true,
     focusPrompt = false,
+    picked,
+    onpickedconsumed,
     onpromptfocused,
     oncreated,
     onactivity,
@@ -49,6 +55,14 @@
   let busy = $state(false);
   let connecting = $state(false);
   let draft = $state('');
+  let images = $state<BrowserAttachment[]>([]);
+  let lastPicked = '';
+
+  function removeImage(image: BrowserAttachment) {
+    images = images.filter((item) => item.id !== image.id);
+    draft = draft.replace(image.text, '').trim();
+    void invoke('browser_remove_capture', { path: image.imagePath });
+  }
   let error = $state('');
   let entries = $state<AgentEntry[]>([]);
   let permissions = $state<AgentPermission[]>([]);
@@ -82,6 +96,15 @@
 
   $effect(() => {
     if (focusPrompt && ready && focused && !isBusy) void focusPromptWhenReady();
+  });
+
+  $effect(() => {
+    if (!picked || picked.id === lastPicked) return;
+    lastPicked = picked.id;
+    images = [...images, picked];
+    draft = [draft.trim(), picked.text].filter(Boolean).join('\n\n');
+    onpickedconsumed?.(picked.id);
+    void focusPromptWhenReady();
   });
 
   function describe(cause: unknown): string {
@@ -223,12 +246,14 @@
       disposed = true;
       generation++;
       unlisten?.();
+      images.forEach((image) => void invoke('browser_remove_capture', { path: image.imagePath }));
     };
   });
 
   async function send() {
     const text = draft.trim();
     if (!text || !ready || isBusy || !directory) return;
+    const sentImages = [...images];
     const current = generation;
     const turnId = crypto.randomUUID();
     activeTurnId = turnId;
@@ -240,6 +265,7 @@
     stopRequested = false;
     error = '';
     draft = '';
+    images = [];
     try {
       if (!activeSessionId) {
         const session = await acp.create(agent, directory);
@@ -266,7 +292,16 @@
       }
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
       void follow();
-      const result = await acp.prompt(agent, id!, text, turnId);
+      const result = await acp.prompt(
+        agent,
+        id!,
+        text,
+        turnId,
+        sentImages.map((item) => item.imagePath),
+      );
+      sentImages.forEach(
+        (image) => void invoke('browser_remove_capture', { path: image.imagePath }),
+      );
       if (result.stopReason === 'cancelled' || stopRequested) notifyOnDone = false;
       if (current === generation && stopRequested)
         markTools(result.stopReason === 'cancelled' ? 'cancelled' : 'status unconfirmed', [
@@ -281,6 +316,7 @@
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
         if (!activeSessionId) draft = text;
+        images = sentImages;
         if (stopRequested) markTools('status unconfirmed', ['stopping']);
       }
     } finally {
@@ -502,6 +538,14 @@
         rows="3"
         placeholder={`Message ${name}…`}
         disabled={!ready || isBusy || !directory}></textarea>
+      {#if images.length}<div class="attachments">
+          {#each images as image (image.id)}<span
+              >📷 {image.imagePath.split(/[\\/]/).at(-1)}
+              <button aria-label="Remove picked element" onclick={() => removeImage(image)}
+                >×</button
+              ></span
+            >{/each}
+        </div>{/if}
       <div class="agent-actions composer-bottom">
         <span>Enter to send · Shift+Enter for newline</span><Button
           onclick={send}
