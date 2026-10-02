@@ -173,6 +173,16 @@
     }
   }
 
+  function cancelPickerOnEscape(event: KeyboardEvent) {
+    if (!picking || event.key !== 'Escape' || !liveLabel) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void invoke('browser_picker', { label: liveLabel, enabled: false }).catch((cause) => {
+      error = String(cause);
+    });
+    picking = false;
+  }
+
   async function attachPickedElement(element: PickedBrowserElement) {
     picking = false;
     try {
@@ -420,6 +430,7 @@
       return true;
     });
     window.addEventListener('resize', resize);
+    window.addEventListener('keydown', cancelPickerOnEscape, true);
     return () => {
       mounted = false;
       ++serverRequest;
@@ -429,6 +440,7 @@
       observer.disconnect();
       overlayObserver.disconnect();
       window.removeEventListener('resize', resize);
+      window.removeEventListener('keydown', cancelPickerOnEscape, true);
       void unlisten.then(async (listeners) => {
         listeners.forEach((stop) => stop());
         await invoke('browser_pane_register', { directory, paneId: pane.id, open: false });
