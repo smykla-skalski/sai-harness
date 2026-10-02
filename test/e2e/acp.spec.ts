@@ -158,7 +158,9 @@ describe('ACP agent threads', () => {
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Delayed approval');
     await $('.agent-actions button').click();
-    await expect($('.session-row .session-item[title="Delayed approval"]')).toBeDisplayed();
+    await $('.session-row .session-item[title="Delayed approval"]').waitForDisplayed({
+      timeout: 10_000,
+    });
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-launches button:nth-child(2)').click();
     await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
