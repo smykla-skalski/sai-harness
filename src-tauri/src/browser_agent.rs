@@ -170,6 +170,7 @@ impl BrowserManager {
         if let Ok(mut blocked) = self.0.blocked.lock() {
             blocked.insert(pane_id.to_string(), url.to_string());
         }
+        self.0.page_ready.notify_all();
         false
     }
 
@@ -227,6 +228,7 @@ impl BrowserManager {
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut pages = self.0.pages.lock().map_err(|error| error.to_string())?;
         loop {
+            self.blocked_navigation(pane_id)?;
             if pages
                 .iter()
                 .rev()
@@ -337,6 +339,7 @@ impl BrowserManager {
     fn authorize(
         &self,
         app: &AppHandle,
+        token: &str,
         session: &str,
         directory: &Path,
         origin: Option<&str>,
@@ -356,7 +359,7 @@ impl BrowserManager {
         {
             return Err("Agent browser access is disabled for this project.".into());
         }
-        let key = format!("{}:{session}", directory.display());
+        let key = format!("{token}:{session}");
         if !self
             .0
             .grants
@@ -407,10 +410,11 @@ impl BrowserManager {
             .get(&request.token)
             .ok_or("Unknown browser tool connection.")?;
         let directory = client.directory.clone();
-        let session = request
-            .session_id
+        let session = request.session_id.as_deref();
+        let session = client
+            .session
             .as_deref()
-            .or(client.session.as_deref())
+            .or(session)
             .unwrap_or(&request.token)
             .to_string();
         drop(clients);
@@ -451,7 +455,13 @@ impl BrowserManager {
                 Some("localhost" | "127.0.0.1" | "::1") => None,
                 _ => Some(url.origin().ascii_serialization()),
             };
-            self.authorize(app, &session, &directory, external.as_deref())?;
+            self.authorize(
+                app,
+                &request.token,
+                &session,
+                &directory,
+                external.as_deref(),
+            )?;
             let page = self
                 .0
                 .pages
@@ -551,10 +561,17 @@ impl BrowserManager {
             Some("localhost" | "127.0.0.1" | "::1") => None,
             _ => Some(url.origin().ascii_serialization()),
         };
-        self.authorize(app, &session, &directory, external.as_deref())?;
+        self.authorize(
+            app,
+            &request.token,
+            &session,
+            &directory,
+            external.as_deref(),
+        )?;
         if request.name == "run_script" {
             self.authorize(
                 app,
+                &request.token,
                 &session,
                 &directory,
                 Some("external sites through page actions"),
