@@ -13,6 +13,7 @@
     checks: Record<string, PullRequestChecks | null>;
     errors: Record<string, string>;
   };
+  export type GitHubIssue = { number: number; title: string; body: string; url: string };
 
   type Props = {
     catalog: ProjectCatalog;
@@ -34,6 +35,7 @@
       destinationParent: string | null,
       baseRef: string | null,
       agent: string | null,
+      issue: GitHubIssue | null,
     ) => Promise<void>;
     ondeleteworktree: (repository: string, path: string, branch: string) => Promise<void>;
     oncreatepullrequest: (
@@ -87,6 +89,13 @@
   let worktreeAgent = $state('');
   let worktreeBusy = $state(false);
   let worktreeError = $state('');
+  let issueQuery = $state('');
+  let issueResults = $state<GitHubIssue[]>([]);
+  let issueError = $state('');
+  let issueLoading = $state(false);
+  let selectedIssue = $state<GitHubIssue | null>(null);
+  let issueSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let issueSearchGeneration = 0;
   let creatingPullRequestFor = $state<{ repository: string; worktree: ProjectWorktree } | null>(
     null,
   );
@@ -246,10 +255,62 @@
         ? savedAgent
         : '';
     worktreeError = '';
+    selectedIssue = null;
+    issueQuery = '';
+    issueResults = [];
+    issueError = '';
     menuRepository = null;
     await tick();
     worktreeDialog.showModal();
     worktreeNameInput?.focus();
+    void loadIssues(path);
+  }
+
+  function issueBranch(issue: GitHubIssue) {
+    const prefix = `issue-${issue.number}`;
+    const slug = issue.title
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+    const available = 64 - prefix.length - 1;
+    return slug && available > 0
+      ? `${prefix}-${slug.slice(0, available).replace(/-$/g, '')}`
+      : prefix;
+  }
+
+  async function loadIssues(repository: string) {
+    const generation = ++issueSearchGeneration;
+    issueLoading = true;
+    issueError = '';
+    try {
+      const issues = await invoke<GitHubIssue[]>('list_open_issues', {
+        repository,
+        query: issueQuery,
+      });
+      if (generation === issueSearchGeneration && creatingWorktreeFor === repository)
+        issueResults = issues;
+    } catch (cause) {
+      if (generation === issueSearchGeneration && creatingWorktreeFor === repository)
+        issueError = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      if (generation === issueSearchGeneration) issueLoading = false;
+    }
+  }
+
+  function searchIssues(repository: string) {
+    clearTimeout(issueSearchTimer);
+    issueSearchTimer = setTimeout(() => void loadIssues(repository), 300);
+  }
+
+  function chooseIssue(issue: GitHubIssue) {
+    selectedIssue = issue;
+    worktreeName = issueBranch(issue);
+    worktreeAgent ||= openCodeAvailable
+      ? 'opencode'
+      : (agents.find((agent) => agent.available)?.id ?? '');
+    void tick().then(() => worktreeNameInput?.focus());
   }
 
   async function chooseWorktreeDestination() {
@@ -263,6 +324,10 @@
 
   async function createWorktree(path: string) {
     if (!worktreeName.trim() || worktreeBusy) return;
+    if (selectedIssue && !worktreeAgent) {
+      worktreeError = 'Choose an available agent to start this issue.';
+      return;
+    }
     worktreeBusy = true;
     worktreeError = '';
     try {
@@ -272,6 +337,7 @@
         worktreeDestination,
         worktreeBase.trim() || null,
         worktreeAgent || null,
+        selectedIssue,
       );
       setSetting('sai-worktree-agent', worktreeAgent);
       worktreeDialog.close();
@@ -283,7 +349,11 @@
   }
 
   function closeWorktreeDialog() {
-    if (!worktreeBusy) worktreeDialog.close();
+    if (!worktreeBusy) {
+      clearTimeout(issueSearchTimer);
+      ++issueSearchGeneration;
+      worktreeDialog.close();
+    }
   }
 
   async function startPullRequest(repository: string, worktree: ProjectWorktree) {
@@ -702,7 +772,11 @@
   oncancel={(event) => {
     if (worktreeBusy) event.preventDefault();
   }}
-  onclose={() => (creatingWorktreeFor = null)}
+  onclose={() => {
+    creatingWorktreeFor = null;
+    clearTimeout(issueSearchTimer);
+    ++issueSearchGeneration;
+  }}
 >
   {#if creatingWorktreeFor}<form
       class="worktree-form"
@@ -724,6 +798,41 @@
           disabled={worktreeBusy}>×</button
         >
       </div>
+      <label
+        >Open GitHub issue <span>(optional)</span>
+        <input
+          aria-label="Search open GitHub issues"
+          placeholder="Search by title or number"
+          bind:value={issueQuery}
+          oninput={() => searchIssues(creatingWorktreeFor!)}
+          disabled={worktreeBusy}
+        />
+      </label>
+      {#if issueLoading}<p class="worktree-issue-note" role="status">Searching issues…</p>{/if}
+      {#if issueError}<p class="worktree-error" role="status">{issueError}</p>{/if}
+      {#if !issueLoading && !issueError && !issueResults.length}<p
+          class="worktree-issue-note"
+          role="status"
+        >
+          No open issues found.
+        </p>{/if}
+      {#if !issueError && !issueLoading && issueResults.length}<div
+          class="worktree-issue-results"
+          aria-label="Open GitHub issues"
+        >
+          {#each issueResults as issue (issue.number)}<button
+              type="button"
+              class:selected={selectedIssue?.number === issue.number}
+              onclick={() => chooseIssue(issue)}
+              disabled={worktreeBusy}>#{issue.number} {issue.title}</button
+            >{/each}
+        </div>{/if}
+      {#if selectedIssue}<p class="worktree-issue-note">
+          Selected #{selectedIssue.number}: {selectedIssue.title}
+          <button type="button" onclick={() => (selectedIssue = null)} disabled={worktreeBusy}
+            >Clear</button
+          >
+        </p>{/if}
       <label
         >New branch name
         <input
@@ -757,6 +866,9 @@
             >{/each}
         </select>
       </label>
+      {#if selectedIssue && !worktreeAgent}<p class="worktree-issue-note" role="status">
+          Choose an available agent to start this issue.
+        </p>{/if}
       <div class="worktree-destination">
         <div>
           <strong>Location</strong><span title={worktreeDestination ?? '~/sail/worktrees'}
@@ -778,7 +890,7 @@
         <button
           type="submit"
           class="worktree-create"
-          disabled={worktreeBusy || !worktreeName.trim()}
+          disabled={worktreeBusy || !worktreeName.trim() || (!!selectedIssue && !worktreeAgent)}
           >{worktreeBusy ? 'Creating…' : 'Create worktree'}</button
         >
       </div>

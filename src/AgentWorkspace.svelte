@@ -28,6 +28,8 @@
     focusPrompt?: boolean;
     picked?: BrowserAttachment;
     onpickedconsumed?: (id: string) => void;
+    prefill?: { id: string; text: string };
+    onprefillconsumed?: (id: string) => void;
     externalPrompt?: { id: string; text: string };
     onexternalresult?: (id: string, failure: string | null) => void;
     onpromptfocused?: () => void;
@@ -46,6 +48,8 @@
     focusPrompt = false,
     picked,
     onpickedconsumed,
+    prefill,
+    onprefillconsumed,
     externalPrompt,
     onexternalresult,
     onpromptfocused,
@@ -61,6 +65,7 @@
   let draft = $state('');
   let images = $state<BrowserAttachment[]>([]);
   let lastPicked = '';
+  let lastPrefill = '';
   let lastExternalPrompt = '';
 
   function removeImage(image: BrowserAttachment) {
@@ -109,6 +114,14 @@
     images = [...images, picked];
     draft = [draft.trim(), picked.text].filter(Boolean).join('\n\n');
     onpickedconsumed?.(picked.id);
+    void focusPromptWhenReady();
+  });
+
+  $effect(() => {
+    if (!prefill || prefill.id === lastPrefill) return;
+    lastPrefill = prefill.id;
+    draft = [draft.trim(), prefill.text].filter(Boolean).join('\n\n');
+    onprefillconsumed?.(prefill.id);
     void focusPromptWhenReady();
   });
 

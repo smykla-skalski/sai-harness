@@ -16,6 +16,8 @@
     "allow-delete-worktree",
     "allow-worktree-config",
     "allow-create-pull-request",
+    "allow-list-open-issues",
+    "allow-open-issue",
     "allow-pull-request-checks",
     "allow-failed-check-log",
     "allow-open-pull-request",

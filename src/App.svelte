@@ -18,7 +18,7 @@
   import HistoryPanel from './HistoryPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import ProjectSidebar from './ProjectSidebar.svelte';
-  import type { PullRequestCheck } from './ProjectSidebar.svelte';
+  import type { GitHubIssue, PullRequestCheck } from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import PaneTree from './PaneTree.svelte';
   import InboxPanel from './InboxPanel.svelte';
@@ -226,6 +226,7 @@
   let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
   let diffComments = $state<Record<string, DiffComment[]>>({});
   let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
+  let issuePrefills = $state<Record<string, { id: string; text: string }>>({});
   const batchWaiters = new SvelteMap<
     string,
     { resolve: () => void; reject: (error: Error) => void }
@@ -1221,7 +1222,14 @@
     destinationParent: string | null,
     baseRef: string | null,
     agent: string | null,
+    issue: GitHubIssue | null,
   ) {
+    const currentIssue = issue
+      ? await invoke<GitHubIssue>('open_issue', { repository: path, number: issue.number })
+      : null;
+    const issuePrompt = currentIssue
+      ? `Work on GitHub issue #${currentIssue.number}: ${currentIssue.title}\n${currentIssue.url}\n\n${currentIssue.body}`
+      : null;
     const created = await invoke<{ path: string; branch: string; base: string; setup: string }>(
       'create_worktree',
       {
@@ -1236,10 +1244,19 @@
     const startAgent = () => {
       if (directory !== created.path) return;
       if (agent === 'opencode') {
-        if (workReady) newWork();
-        else error = 'Complete OpenCode setup in this worktree before starting an agent.';
+        if (workReady) {
+          newWork();
+          if (issuePrompt) draft = issuePrompt;
+        } else error = 'Complete OpenCode setup in this worktree before starting an agent.';
       } else if (agent) {
+        if (issuePrompt)
+          issuePrefills = {
+            ...issuePrefills,
+            [created.path]: { id: crypto.randomUUID(), text: issuePrompt },
+          };
+        focusMainPane();
         openAgent(agent);
+        focusPaneForTyping('main');
       }
     };
     if (created.setup) {
@@ -3907,6 +3924,14 @@
                 thread={acpThread}
                 focusPrompt={promptFocusPane === 'main'}
                 picked={pickedAttachments.main}
+                prefill={issuePrefills[directory]}
+                onprefillconsumed={(id) => {
+                  if (issuePrefills[directory]?.id === id) {
+                    const next = { ...issuePrefills };
+                    delete next[directory];
+                    issuePrefills = next;
+                  }
+                }}
                 externalPrompt={pendingAgentBatches.main}
                 onexternalresult={completeAgentBatch}
                 onpickedconsumed={markPickConsumed}

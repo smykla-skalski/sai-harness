@@ -39,6 +39,15 @@ pub struct RepositoryChecks {
     errors: HashMap<String, String>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubIssue {
+    number: u64,
+    title: String,
+    body: String,
+    url: String,
+}
+
 fn gh_binary() -> OsString {
     let name = if cfg!(windows) { "gh.exe" } else { "gh" };
     if let Some(path) = std::env::var_os("PATH")
@@ -154,6 +163,89 @@ fn target_repository(worktree: &Path) -> Result<String, String> {
         selected
     };
     Ok(target.to_string())
+}
+
+fn issue_repository(repository: String) -> Result<(PathBuf, String), String> {
+    let repository = PathBuf::from(crate::validate_repository(repository)?);
+    let remotes = output_or_error(run(&repository, "git", &["remote"])?, "Cannot list remotes")?;
+    let has_github_remote = remotes.lines().any(|remote| {
+        run(&repository, "git", &["remote", "get-url", remote])
+            .ok()
+            .and_then(|output| output_or_error(output, "Cannot read remote").ok())
+            .and_then(|url| github_remote(&url))
+            .is_some()
+    });
+    if !has_github_remote {
+        return Err("This project has no github.com remote. Add one to browse issues.".to_string());
+    }
+    let target = target_repository(&repository)?;
+    Ok((repository, target))
+}
+
+#[tauri::command]
+pub async fn list_open_issues(
+    repository: String,
+    query: String,
+) -> Result<Vec<GitHubIssue>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (repository, target) = issue_repository(repository)?;
+        let query = query.trim();
+        if query.len() > 200 {
+            return Err("Issue search is too long.".to_string());
+        }
+        let mut args = vec![
+            "issue",
+            "list",
+            "--repo",
+            &target,
+            "--state",
+            "open",
+            "--limit",
+            "30",
+            "--json",
+            "number,title,body,url",
+        ];
+        if !query.is_empty() {
+            args.extend(["--search", query]);
+        }
+        let response = gh_command(&repository, &args)?;
+        serde_json::from_str(&response)
+            .map_err(|_| "GitHub CLI returned invalid issues.".to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn open_issue(repository: String, number: u64) -> Result<GitHubIssue, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if number == 0 {
+            return Err("Choose an issue.".to_string());
+        }
+        let (repository, target) = issue_repository(repository)?;
+        let number = number.to_string();
+        let response = gh_command(
+            &repository,
+            &[
+                "issue",
+                "view",
+                &number,
+                "--repo",
+                &target,
+                "--json",
+                "number,title,body,url,state",
+            ],
+        )?;
+        let value: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|_| "GitHub CLI returned an invalid issue.".to_string())?;
+        if value["state"] != "OPEN" {
+            return Err("This issue is no longer open. Search again.".to_string());
+        }
+        serde_json::from_value(value)
+            .map_err(|_| "GitHub CLI returned an invalid issue.".to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn checked_worktree(repository: String, worktree: String, branch: &str) -> Result<PathBuf, String> {

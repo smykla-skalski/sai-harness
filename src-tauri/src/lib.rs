@@ -1137,6 +1137,8 @@ pub fn run() {
             delete_worktree,
             worktree_config,
             github::create_pull_request,
+            github::list_open_issues,
+            github::open_issue,
             github::pull_request_checks,
             github::failed_check_log,
             github::open_pull_request,

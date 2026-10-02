@@ -431,6 +431,32 @@ button:disabled {
   min-height: 110px;
   resize: vertical;
 }
+.worktree-issue-results {
+  display: grid;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--shell-divider);
+  border-radius: 7px;
+}
+.worktree-issue-results button {
+  padding: 7px 10px;
+  color: var(--sui-foreground);
+  text-align: left;
+  font-size: 12px;
+}
+.worktree-issue-results button:hover,
+.worktree-issue-results button.selected {
+  background: var(--shell-selected);
+}
+.worktree-issue-note {
+  margin: 0;
+  color: var(--sui-muted);
+  font-size: 12px;
+}
+.worktree-issue-note button {
+  margin-left: 6px;
+  color: var(--sui-primary);
+}
 .worktree-form .pull-request-draft {
   display: flex;
   align-items: center;

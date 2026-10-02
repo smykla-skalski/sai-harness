@@ -13,6 +13,8 @@ fn main() {
             "delete_worktree",
             "worktree_config",
             "create_pull_request",
+            "list_open_issues",
+            "open_issue",
             "pull_request_checks",
             "failed_check_log",
             "open_pull_request",
