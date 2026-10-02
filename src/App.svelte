@@ -412,6 +412,16 @@
   let agentEntrySnapshots = $state<
     Record<string, { sessionId: string | null; entries: AgentEntry[]; ready: boolean }>
   >({});
+  $effect(() => {
+    const active = new Set(
+      leaves(paneLayout)
+        .filter((leaf) => leaf.agent)
+        .map((leaf) => leaf.id),
+    );
+    const retained = Object.entries(agentEntrySnapshots).filter(([id]) => active.has(id));
+    if (retained.length !== Object.keys(agentEntrySnapshots).length)
+      agentEntrySnapshots = Object.fromEntries(retained);
+  });
   let pendingOpenCodeIssue = $state<{ path: string; text: string } | null>(null);
   const batchWaiters = new SvelteMap<
     string,
