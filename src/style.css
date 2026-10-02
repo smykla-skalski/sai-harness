@@ -1471,7 +1471,7 @@ button:disabled {
   color: inherit;
   cursor: pointer;
 }
-.working {
+.chat-working {
   display: flex;
   align-items: center;
   gap: 9px;

@@ -5652,7 +5652,7 @@
                   </div>
                 </article>
               {/each}
-              {#if running && runtimeState === 'connected'}<div class="working">
+              {#if running && runtimeState === 'connected'}<div class="chat-working">
                   <span class="activity-spinner" aria-hidden="true"></span>
                   <span class="working-label" role="status"
                     >{currentSession?.agent ?? 'Agent'} · {activity}</span
