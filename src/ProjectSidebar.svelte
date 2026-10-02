@@ -6,6 +6,7 @@
   import type { ProjectCatalog, ProjectWorktree } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
   import { getSetting, setSetting } from './lib/settings';
+  import { issueBranch } from './lib/github-issues';
 
   export type PullRequestCheck = { name: string; state: string; url: string };
   type PullRequestChecks = { number: number; url: string; checks: PullRequestCheck[] };
@@ -266,20 +267,6 @@
     worktreeDialog.showModal();
     worktreeNameInput?.focus();
     void loadIssues(path);
-  }
-
-  function issueBranch(issue: GitHubIssue) {
-    const prefix = `issue-${issue.number}`;
-    const slug = issue.title
-      .normalize('NFKD')
-      .replace(/\p{M}/gu, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-    const available = 64 - prefix.length - 1;
-    return slug && available > 0
-      ? `${prefix}-${slug.slice(0, available).replace(/-$/g, '')}`
-      : prefix;
   }
 
   async function loadIssues(repository: string) {
@@ -807,6 +794,13 @@
           placeholder="Search by title or number"
           bind:value={issueQuery}
           oninput={() => searchIssues(creatingWorktreeFor!)}
+          onkeydown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              clearTimeout(issueSearchTimer);
+              void loadIssues(creatingWorktreeFor!);
+            }
+          }}
           disabled={worktreeBusy}
         />
       </label>
@@ -825,6 +819,7 @@
           {#each issueResults as issue (issue.number)}<button
               type="button"
               class:selected={selectedIssue?.number === issue.number}
+              aria-pressed={selectedIssue?.number === issue.number}
               onclick={() => chooseIssue(issue)}
               disabled={worktreeBusy}>#{issue.number} {issue.title}</button
             >{/each}
