@@ -222,5 +222,20 @@ describe('provider selected agent spawn', () => {
     const threadsRaw = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
     const threads = z.array(agentThread).parse(JSON.parse(threadsRaw ?? '[]'));
     expect(threads.some((thread) => thread.directory.endsWith('/failing-setup'))).toBe(false);
+    const catalogRaw = await browser.execute(() => localStorage.getItem('sai-project-catalog'));
+    const catalog = z
+      .object({ worktrees: z.record(z.string(), z.array(z.object({ path: z.string() }))) })
+      .parse(JSON.parse(catalogRaw ?? '{}'));
+    const failedPath = catalog.worktrees[path].find((item) =>
+      item.path.endsWith('/failing-setup'),
+    )?.path;
+    if (!failedPath) throw new Error('Failed setup worktree was not saved');
+    const retry = await callMcp(config, sessionId, {
+      provider: 'claude',
+      prompt: 'Clipboard fixture should not start',
+      target: { kind: 'existing', path: failedPath },
+    });
+    expect(retry.isError).toBe(true);
+    expect(retry.content[0].text).toContain('Complete worktree setup');
   });
 });

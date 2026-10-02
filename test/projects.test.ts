@@ -7,6 +7,7 @@ import {
   removeRepository,
   replaceRepositoryPath,
   setWorktreePullRequest,
+  setWorktreeSetupStatus,
   setWorktreeStatus,
   ungroupedRepositories,
   worktreeAt,
@@ -127,8 +128,24 @@ await test('keeps a created worktree beneath its repository after restart', () =
   const restored = loadProjectCatalog(JSON.stringify(catalog), '/sail/worktrees/repo/task');
   assert.deepEqual(restored.repositories, ['/repo']);
   assert.deepEqual(restored.worktrees['/repo'], [
-    { path: '/sail/worktrees/repo/task', branch: 'task' },
+    { path: '/sail/worktrees/repo/task', branch: 'task', setupStatus: 'ready' },
   ]);
+});
+
+await test('tracks worktree setup across failure and restart', () => {
+  const catalog = addWorktree(loadProjectCatalog(null, '/repo'), '/repo', {
+    path: '/repo/child',
+    branch: 'child',
+    setup: 'exit 7',
+  });
+  assert.equal(catalog.worktrees['/repo'][0].setupStatus, 'pending');
+  const failed = setWorktreeSetupStatus(catalog, '/repo', '/repo/child', 'failed');
+  assert.equal(
+    loadProjectCatalog(JSON.stringify(failed), '/repo').worktrees['/repo'][0].setupStatus,
+    'failed',
+  );
+  const ready = setWorktreeSetupStatus(failed, '/repo', '/repo/child', 'ready');
+  assert.equal(ready.worktrees['/repo'][0].setupStatus, 'ready');
 });
 
 await test('keeps the worktree PR link after restart and rejects unsafe links', () => {

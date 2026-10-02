@@ -145,6 +145,7 @@
     worktreeAt,
     replaceRepositoryPath,
     setWorktreePullRequest,
+    setWorktreeSetupStatus,
     setWorktreeStatus,
     type ProjectCatalog,
     type ProjectWorktree,
@@ -1706,9 +1707,13 @@
       if (!paneId) throw new Error('Enlarge a pane before running worktree setup.');
       coordinationSetupWaiters.set(paneId, (code) => {
         if (code !== 0) {
+          saveProjectCatalog(
+            setWorktreeSetupStatus(projectCatalog, project, created.path, 'failed'),
+          );
           error = `Worktree setup exited with code ${code}. The agent thread was not started.`;
           return;
         }
+        saveProjectCatalog(setWorktreeSetupStatus(projectCatalog, project, created.path, 'ready'));
         void startCoordinatedThread(created, source, prompt.trim()).catch((cause) => {
           error = `Could not start coordinated thread: ${describe(cause)}`;
         });
@@ -1774,6 +1779,11 @@
         )
       )
         throw new Error('Target worktree is not in this project.');
+      const catalogWorktree = (projectCatalog.worktrees[project] ?? []).find(
+        (worktree) => worktree.path === selectedPath,
+      );
+      if (catalogWorktree?.setupStatus === 'pending' || catalogWorktree?.setupStatus === 'failed')
+        throw new Error('Complete worktree setup before spawning another agent there.');
       const registered = await invoke<RegisteredWorktree[]>('registered_worktrees', {
         repository: project,
         paths: [selectedPath],
@@ -1824,21 +1834,50 @@
       saveProjectCatalog(addWorktree(projectCatalog, project, created));
       destination = created;
       if (created.setup) {
-        await loadProject(created.path);
-        if (directory !== created.path) throw new Error('Worktree changed before setup started.');
-        const paneId = splitFocusedPane('row', 'terminal', created.setup);
-        if (!paneId) throw new Error('Enlarge a pane before running worktree setup.');
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            coordinationSetupWaiters.delete(paneId);
-            reject(new Error('Worktree setup did not finish within four minutes.'));
-          }, 240_000);
-          coordinationSetupWaiters.set(paneId, (code) => {
-            clearTimeout(timer);
-            if (code === 0) resolve();
-            else reject(new Error(`Worktree setup exited with code ${code}. Agent not started.`));
+        let setupTimedOut = false;
+        try {
+          await loadProject(created.path);
+          if (directory !== created.path) throw new Error('Worktree changed before setup started.');
+          const paneId = splitFocusedPane('row', 'terminal', created.setup);
+          if (!paneId) throw new Error('Enlarge a pane before running worktree setup.');
+          await new Promise<void>((resolve, reject) => {
+            const remaining = request.expiresAt + 90_000 - Date.now();
+            let expired = false;
+            const timer = setTimeout(
+              () => {
+                expired = true;
+                setupTimedOut = true;
+                reject(new Error('Agent spawn timed out before worktree setup completed.'));
+              },
+              Math.max(0, remaining),
+            );
+            coordinationSetupWaiters.set(paneId, (code) => {
+              clearTimeout(timer);
+              if (expired) {
+                saveProjectCatalog(
+                  setWorktreeSetupStatus(
+                    projectCatalog,
+                    project,
+                    created.path,
+                    code === 0 ? 'ready' : 'failed',
+                  ),
+                );
+                return;
+              }
+              if (code === 0) resolve();
+              else reject(new Error(`Worktree setup exited with code ${code}. Agent not started.`));
+            });
           });
-        });
+          saveProjectCatalog(
+            setWorktreeSetupStatus(projectCatalog, project, created.path, 'ready'),
+          );
+        } catch (cause) {
+          if (!setupTimedOut)
+            saveProjectCatalog(
+              setWorktreeSetupStatus(projectCatalog, project, created.path, 'failed'),
+            );
+          throw cause;
+        }
       }
     }
 
@@ -1847,6 +1886,7 @@
       if (!report.workReady)
         throw new Error('Complete OpenCode setup in the target worktree before spawning.');
     }
+    await coordinationSource(request);
     const selectedSource: CoordinationSource =
       chosenProvider === 'opencode'
         ? { kind: 'opencode', agent: 'OpenCode', title: source.title }
@@ -2254,6 +2294,14 @@
       const paneId = splitFocusedPane('row', 'terminal', created.setup);
       if (!paneId) return;
       terminalExitWaiters.set(paneId, (code) => {
+        saveProjectCatalog(
+          setWorktreeSetupStatus(
+            projectCatalog,
+            path,
+            created.path,
+            code === 0 ? 'ready' : 'failed',
+          ),
+        );
         if (code === 0) startAgent();
         else if (code >= 0) error = `Worktree setup exited with code ${code}.`;
       });

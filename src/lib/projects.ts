@@ -19,6 +19,7 @@ export type ProjectWorktree = {
   base?: string;
   pullRequest?: PullRequestLink;
   statusComment?: string;
+  setupStatus?: 'pending' | 'ready' | 'failed';
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -54,6 +55,12 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
           return [];
         const worktree: ProjectWorktree = { path: entry.path, branch: entry.branch };
         if (typeof entry.base === 'string') worktree.base = entry.base;
+        if (
+          entry.setupStatus === 'pending' ||
+          entry.setupStatus === 'ready' ||
+          entry.setupStatus === 'failed'
+        )
+          worktree.setupStatus = entry.setupStatus;
         if (typeof entry.statusComment === 'string')
           worktree.statusComment = entry.statusComment.slice(0, 140);
         if (isRecord(entry.pullRequest)) {
@@ -166,13 +173,36 @@ export function removeRepository(catalog: ProjectCatalog, path: string): Project
 export function addWorktree(
   catalog: ProjectCatalog,
   repository: string,
-  worktree: ProjectWorktree,
+  worktree: ProjectWorktree & { setup?: string },
 ): ProjectCatalog {
   const entries = catalog.worktrees[repository] ?? [];
   if (entries.some((entry) => entry.path === worktree.path)) return catalog;
   return {
     ...catalog,
-    worktrees: { ...catalog.worktrees, [repository]: [...entries, worktree] },
+    worktrees: {
+      ...catalog.worktrees,
+      [repository]: [
+        ...entries,
+        { ...worktree, setupStatus: worktree.setup ? 'pending' : 'ready' },
+      ],
+    },
+  };
+}
+
+export function setWorktreeSetupStatus(
+  catalog: ProjectCatalog,
+  repository: string,
+  path: string,
+  status: 'ready' | 'failed',
+): ProjectCatalog {
+  return {
+    ...catalog,
+    worktrees: {
+      ...catalog.worktrees,
+      [repository]: (catalog.worktrees[repository] ?? []).map((worktree) =>
+        worktree.path === path ? Object.assign({}, worktree, { setupStatus: status }) : worktree,
+      ),
+    },
   };
 }
 
