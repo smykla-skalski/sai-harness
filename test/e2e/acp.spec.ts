@@ -52,6 +52,7 @@ describe('ACP agent threads', () => {
     await $('.agent-composer textarea').setValue('/model');
     await browser.keys('Enter');
     await expect($('.option-menu[role="listbox"]')).toBeDisplayed();
+    await expect($('.option-menu button[role="option"]:nth-child(2)')).toBeDisplayed();
     await browser.keys('ArrowDown');
     await browser.keys('Enter');
     await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
