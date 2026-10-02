@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   groupSidebarThreads,
   listSidebarOpenCodeThreads,
+  sidebarThreadStatus,
   type SidebarSessionSource,
 } from '../src/lib/sidebar-agents.ts';
 
@@ -21,6 +22,39 @@ await test('sidebar groups every thread by checkout and keeps distinct sessions'
   assert.deepEqual(
     grouped['/repo/b'].map(({ title }) => title),
     ['Other'],
+  );
+});
+
+await test('fresh OpenCode outcome replaces stale saved terminal status', () => {
+  const thread = {
+    agent: 'opencode',
+    directory: '/repo/a',
+    sessionId: 'one',
+    title: 'Agent',
+    updated: 1,
+  };
+  const key = JSON.stringify(['opencode', '/repo/a', 'one']);
+  assert.equal(
+    sidebarThreadStatus(
+      thread,
+      { [key]: { status: 'done', unread: false } },
+      { [key]: 'failed' },
+      true,
+      true,
+      [],
+    ),
+    'failed',
+  );
+  assert.equal(
+    sidebarThreadStatus(
+      thread,
+      { [key]: { status: 'failed', unread: false } },
+      { [key]: 'done' },
+      true,
+      true,
+      [],
+    ),
+    'done',
   );
 });
 

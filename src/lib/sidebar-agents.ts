@@ -1,5 +1,5 @@
 import type { AgentThread } from './acp';
-import type { ThreadStatus } from './attention';
+import type { AttentionMap, ThreadStatus } from './attention';
 import { threadKey } from './recent-threads.ts';
 
 export type SidebarSessionSource = {
@@ -69,4 +69,28 @@ export function groupSidebarThreads(threads: AgentThread[]): Record<string, Agen
   for (const thread of unique.values()) (grouped[thread.directory] ??= []).push(thread);
   for (const items of Object.values(grouped)) items.sort((a, b) => b.updated - a.updated);
   return grouped;
+}
+
+export function sidebarThreadStatus(
+  thread: AgentThread,
+  attention: AttentionMap,
+  openCodeOutcomes: Record<string, ThreadStatus>,
+  acpActivityReady: boolean,
+  nativeActivityReady: boolean,
+  nativeUnavailableDirectories: string[],
+): ThreadStatus | null {
+  const key = threadKey(thread);
+  const saved = attention[key]?.status;
+  const status =
+    thread.agent === 'opencode' && saved !== 'working' && saved !== 'waiting'
+      ? (openCodeOutcomes[key] ?? saved ?? null)
+      : (saved ?? null);
+  if (
+    (status === 'working' || status === 'waiting') &&
+    (thread.agent === 'opencode'
+      ? !nativeActivityReady || nativeUnavailableDirectories.includes(thread.directory)
+      : !acpActivityReady)
+  )
+    return null;
+  return status;
 }

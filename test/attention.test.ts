@@ -78,6 +78,12 @@ void test('saved activity survives reload until backend reconciliation', () => {
     { status: 'failed', unread: false },
   );
   assert.deepEqual(
+    reconcileAttention(saved, [{ agent: 'codex', sessionId: 'd', key: 'done', viewed: false }], {
+      codex: { alive: true, active: ['d'], waiting: [], finished: {} },
+    }).done,
+    { status: 'working', unread: false },
+  );
+  assert.deepEqual(
     reconcileAttention(saved, [{ agent: 'codex', sessionId: 'w', key: 'working', viewed: false }], {
       codex: {
         alive: true,

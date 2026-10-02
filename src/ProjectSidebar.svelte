@@ -6,6 +6,7 @@
   import type { AgentAvailability, AgentThread } from './lib/acp';
   import type { AttentionMap, ThreadStatus } from './lib/attention';
   import { threadKey } from './lib/recent-threads';
+  import { sidebarThreadStatus } from './lib/sidebar-agents';
   import type { ProjectCatalog, ProjectWorktree, WorktreeCreation } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
   import { getSetting, setSetting } from './lib/settings';
@@ -173,16 +174,14 @@
   }
 
   function threadStatus(thread: AgentThread): ThreadStatus | null {
-    const key = threadKey(thread);
-    const status = attention[key]?.status ?? openCodeOutcomes[key] ?? null;
-    if (
-      (status === 'working' || status === 'waiting') &&
-      (thread.agent === 'opencode'
-        ? !nativeActivityReady || nativeUnavailableDirectories.includes(thread.directory)
-        : !acpActivityReady)
-    )
-      return null;
-    return status;
+    return sidebarThreadStatus(
+      thread,
+      attention,
+      openCodeOutcomes,
+      acpActivityReady,
+      nativeActivityReady,
+      nativeUnavailableDirectories,
+    );
   }
 
   function statusLabel(status: ThreadStatus | null): string {
