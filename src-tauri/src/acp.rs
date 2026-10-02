@@ -820,6 +820,9 @@ pub async fn acp_prompt(
             .prompt_state
             .lock()
             .map_err(|error| error.to_string())?;
+        if prompts.active.contains_key(&session_id) {
+            return Err("This agent thread already has an active turn.".to_string());
+        }
         prompts.finished.remove(&session_id);
         prompts.active.insert(session_id.clone(), turn_id.clone());
     }

@@ -208,6 +208,44 @@
         <Button size="sm" onclick={() => send({ type: 'detect-agents' })}>Detect again</Button>
       </section>
       <section class="settings-card">
+        <h2>Agent coordination</h2>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
+            checked={snapshot?.agentWorktreesEnabled ?? true}
+            onchange={(event) =>
+              send({ type: 'agent-worktrees', value: event.currentTarget.checked })}
+          />
+          Create worktrees and start threads with approval
+        </label>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
+            checked={snapshot?.agentStatusEnabled ?? true}
+            onchange={(event) => send({ type: 'agent-status', value: event.currentTarget.checked })}
+          />
+          Update worktree status comments
+        </label>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
+            checked={snapshot?.agentThreadListEnabled ?? true}
+            onchange={(event) =>
+              send({ type: 'agent-thread-list', value: event.currentTarget.checked })}
+          />
+          List project threads
+        </label>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
+            checked={snapshot?.agentMessagesEnabled ?? true}
+            onchange={(event) =>
+              send({ type: 'agent-messages', value: event.currentTarget.checked })}
+          />
+          Message project threads
+        </label>
+      </section>
+      <section class="settings-card">
         <h2>Notifications</h2>
         <label class="attention-setting">
           <input

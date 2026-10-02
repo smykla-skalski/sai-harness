@@ -716,6 +716,9 @@
                       )}>⋯</button
                   >
                 </div>
+                {#if worktree.statusComment}<p class="project-worktree-status">
+                    {worktree.statusComment}
+                  </p>{/if}
                 {@render checkFailures(path, worktree)}
               {/each}
             </div>
@@ -796,6 +799,9 @@
                     )}>⋯</button
                 >
               </div>
+              {#if worktree.statusComment}<p class="project-worktree-status">
+                  {worktree.statusComment}
+                </p>{/if}
               {@render checkFailures(path, worktree)}
             {/each}
           </div>

@@ -17,6 +17,7 @@ export type ProjectWorktree = {
   branch: string;
   base?: string;
   pullRequest?: PullRequestLink;
+  statusComment?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,6 +48,8 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
           return [];
         const worktree: ProjectWorktree = { path: entry.path, branch: entry.branch };
         if (typeof entry.base === 'string') worktree.base = entry.base;
+        if (typeof entry.statusComment === 'string')
+          worktree.statusComment = entry.statusComment.slice(0, 140);
         if (isRecord(entry.pullRequest)) {
           const { number, url } = entry.pullRequest;
           if (typeof number === 'number' && validPullRequestLink(number, url))
@@ -149,6 +152,29 @@ export function addWorktree(
   return {
     ...catalog,
     worktrees: { ...catalog.worktrees, [repository]: [...entries, worktree] },
+  };
+}
+
+export function setWorktreeStatus(
+  catalog: ProjectCatalog,
+  repository: string,
+  path: string,
+  comment: string,
+): ProjectCatalog {
+  const worktrees: ProjectWorktree[] = [];
+  for (const worktree of catalog.worktrees[repository] ?? []) {
+    worktrees.push(
+      worktree.path === path
+        ? { ...worktree, statusComment: comment.trim().slice(0, 140) || undefined }
+        : worktree,
+    );
+  }
+  return {
+    ...catalog,
+    worktrees: {
+      ...catalog.worktrees,
+      [repository]: worktrees,
+    },
   };
 }
 

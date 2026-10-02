@@ -7,6 +7,7 @@ import {
   removeRepository,
   replaceRepositoryPath,
   setWorktreePullRequest,
+  setWorktreeStatus,
   ungroupedRepositories,
 } from '../src/lib/projects.ts';
 
@@ -32,6 +33,32 @@ await test('restores the current repository and ignores malformed saved groups',
     [['/first'], ['/second']],
   );
   assert.deepEqual(ungroupedRepositories(catalog), ['/current']);
+});
+
+await test('worktree status comments persist without changing sibling worktrees', () => {
+  const catalog = loadProjectCatalog(
+    JSON.stringify({
+      repositories: ['/repo'],
+      worktrees: {
+        '/repo': [
+          { path: '/one', branch: 'one' },
+          { path: '/two', branch: 'two' },
+        ],
+      },
+    }),
+    '/repo',
+  );
+  const updated = setWorktreeStatus(catalog, '/repo', '/one', '  Running tests  ');
+  assert.equal(updated.worktrees['/repo'][0].statusComment, 'Running tests');
+  assert.equal(updated.worktrees['/repo'][1].statusComment, undefined);
+  assert.equal(
+    loadProjectCatalog(JSON.stringify(updated), '/repo').worktrees['/repo'][0].statusComment,
+    'Running tests',
+  );
+  assert.equal(
+    setWorktreeStatus(updated, '/repo', '/one', '').worktrees['/repo'][0].statusComment,
+    undefined,
+  );
 });
 
 await test('moves repositories between named groups without losing saved entries', () => {

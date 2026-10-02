@@ -90,6 +90,11 @@
   import { getHistory, getPlan, type HistoryEntry, type PlanSnapshot } from './lib/plan';
   import { mergeMessages, nearBottom } from './lib/timeline';
   import { fileUri } from './lib/attachments';
+  import {
+    coordinationKey,
+    loadCoordinationMessages,
+    type CoordinationMessage,
+  } from './lib/coordination';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
   import {
     commandsForDirectory,
@@ -115,6 +120,7 @@
     removeWorktree,
     replaceRepositoryPath,
     setWorktreePullRequest,
+    setWorktreeStatus,
     type ProjectCatalog,
     type ProjectWorktree,
   } from './lib/projects';
@@ -134,7 +140,39 @@
   const openCodeBrowserServers = new SvelteSet<string>();
   type BrowserMcpConfig = { command: string; args: string[]; env: Record<string, string> };
   type BrowserAccessRequest = { id: string; sessionId: string; directory: string; origin?: string };
+  type CoordinationRequest = {
+    id: string;
+    sessionId: string;
+    directory: string;
+    name: 'worktree_create' | 'worktree_status' | 'project_threads' | 'thread_message';
+    arguments: Record<string, unknown>;
+    expiresAt: number;
+  };
+  type CoordinationThread = {
+    id: string;
+    directory: string;
+    title: string;
+    agent: string;
+  };
+  type CoordinationSource =
+    | { kind: 'acp'; agent: string; title: string }
+    | { kind: 'opencode'; agent: string; model?: ModelRef; title: string };
   let browserApprovalQueue: Promise<unknown> = Promise.resolve();
+  let worktreeApprovalDialog: HTMLDialogElement;
+  let worktreeApproval = $state<{
+    agent: string;
+    title: string;
+    name: string;
+    project: string;
+    prompt: string;
+  } | null>(null);
+  let resolveWorktreeApproval: ((allowed: boolean) => void) | null = null;
+  let worktreeApprovalTimer: ReturnType<typeof setTimeout> | undefined;
+  let coordinationMessages = $state<CoordinationMessage[]>(
+    loadCoordinationMessages(getSetting('sai-coordination-messages')),
+  );
+  const coordinationDeliveries = new SvelteMap<string, Promise<void>>();
+  const coordinationAttempts = new SvelteMap<string, number>();
   type WorktreeConfig = { setup: string; run: string; archive: string; copy: string[] };
   type TurnSnapshot = { id: string; kind: 'turn' | 'undo'; created: number };
   let selectedWorktreeConfig = $state<WorktreeConfig | null>(null);
@@ -188,6 +226,10 @@
   let attentionRevision = 0;
   let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
   let notificationSound = $state(getSetting('sai-notification-sound') !== 'false');
+  let agentWorktreesEnabled = $state(getSetting('sai-agent-worktrees-enabled') !== 'false');
+  let agentStatusEnabled = $state(getSetting('sai-agent-status-enabled') !== 'false');
+  let agentThreadListEnabled = $state(getSetting('sai-agent-thread-list-enabled') !== 'false');
+  let agentMessagesEnabled = $state(getSetting('sai-agent-messages-enabled') !== 'false');
   let inboxItems = $state<InboxItem[]>([]);
   let inboxLoading = $state(false);
   let inboxError = $state('');
@@ -728,6 +770,10 @@
       agentsError: agentDetectionError,
       notificationsEnabled,
       notificationSound,
+      agentWorktreesEnabled,
+      agentStatusEnabled,
+      agentThreadListEnabled,
+      agentMessagesEnabled,
     };
   }
 
@@ -788,6 +834,11 @@
   onMount(() => {
     let unlistenAgentEvents: (() => void) | undefined;
     let unlistenBrowserAccess: (() => void) | undefined;
+    let unlistenCoordination: (() => void) | undefined;
+    const coordinationRetry = setInterval(() => {
+      if (isTauri()) retryCoordinationDeliveries();
+    }, 10_000);
+    if (isTauri()) setTimeout(retryCoordinationDeliveries, 2_000);
     let unlistenAgentTerminals: (() => void) | undefined;
     let unlistenNotificationClick: (() => void) | undefined;
     setTheme(dark);
@@ -820,6 +871,9 @@
           return allow;
         })();
       }).then((unlisten) => (unlistenBrowserAccess = unlisten));
+      void listen<CoordinationRequest>('agent:coordination-request', ({ payload }) => {
+        void handleCoordinationRequest(payload);
+      }).then((unlisten) => (unlistenCoordination = unlisten));
       void listen('pane:close', () => {
         if (!document.querySelector('dialog[open]')) closeCurrentPane();
       }).then((unlisten) => (stopPaneClose = unlisten));
@@ -856,6 +910,18 @@
         } else if (action.type === 'notification-sound') {
           notificationSound = action.value;
           setSetting('sai-notification-sound', String(action.value));
+        } else if (action.type === 'agent-worktrees') {
+          agentWorktreesEnabled = action.value;
+          setSetting('sai-agent-worktrees-enabled', String(action.value));
+        } else if (action.type === 'agent-status') {
+          agentStatusEnabled = action.value;
+          setSetting('sai-agent-status-enabled', String(action.value));
+        } else if (action.type === 'agent-thread-list') {
+          agentThreadListEnabled = action.value;
+          setSetting('sai-agent-thread-list-enabled', String(action.value));
+        } else if (action.type === 'agent-messages') {
+          agentMessagesEnabled = action.value;
+          setSetting('sai-agent-messages-enabled', String(action.value));
         } else if (action.type === 'detect-agents') void detectAgents();
         else if (action.type === 'restart-setup') void restartSetup();
         void sendSettingsState();
@@ -910,6 +976,8 @@
       stopCloseRequest?.();
       stopPaneClose?.();
       disposed = true;
+      finishWorktreeApproval(false);
+      clearInterval(coordinationRetry);
       eventController?.abort();
       clearTimeout(refreshTimer);
       clearTimeout(diffTimer);
@@ -920,6 +988,7 @@
       discardLiveText();
       unlistenAgentEvents?.();
       unlistenBrowserAccess?.();
+      unlistenCoordination?.();
       unlistenAgentTerminals?.();
       unlistenNotificationClick?.();
       cancelAnimationFrame(followFrame);
@@ -1099,6 +1168,345 @@
     projectCatalog = next;
     setSetting('sai-project-catalog', JSON.stringify(next));
     scheduleInboxRefresh();
+  }
+
+  function coordinationProject(path: string): string | null {
+    if (projectCatalog.repositories.includes(path)) return path;
+    return (
+      Object.entries(projectCatalog.worktrees).find(([, worktrees]) =>
+        worktrees.some((worktree) => worktree.path === path),
+      )?.[0] ?? null
+    );
+  }
+
+  async function coordinationSource(request: CoordinationRequest): Promise<CoordinationSource> {
+    const thread = agentThreads.find(
+      (item) => item.directory === request.directory && item.sessionId === request.sessionId,
+    );
+    if (thread) return { kind: 'acp', agent: thread.agent, title: thread.title };
+    if (!client) throw new Error('The source agent session is unavailable.');
+    const session = await client.session.get({ sessionID: request.sessionId });
+    if (session.location.directory !== request.directory)
+      throw new Error('The source agent session belongs to another worktree.');
+    return {
+      kind: 'opencode',
+      agent: session.agent ?? 'OpenCode',
+      model: session.model,
+      title: session.title ?? 'OpenCode thread',
+    };
+  }
+
+  async function projectCoordinationThreads(project: string): Promise<CoordinationThread[]> {
+    const directories = [
+      project,
+      ...(projectCatalog.worktrees[project] ?? []).map((worktree) => worktree.path),
+    ];
+    const threads: CoordinationThread[] = agentThreads
+      .filter((thread) => directories.includes(thread.directory))
+      .map((thread) => ({
+        id: `acp:${thread.agent}:${thread.sessionId}`,
+        directory: thread.directory,
+        title: thread.title,
+        agent: thread.agent,
+      }));
+    if (!client) return threads;
+    const openCode = client;
+    async function collect(
+      path: string,
+      cursor: string | undefined,
+      seen: Set<string>,
+    ): Promise<CoordinationThread[]> {
+      const page = await openCode.session.list({
+        directory: path,
+        limit: 100,
+        order: 'desc',
+        parentID: null,
+        ...(cursor ? { cursor } : {}),
+      });
+      const found = page.data
+        .filter((session) => session.location.directory === path && !session.parentID)
+        .map((session) => ({
+          id: `opencode:${session.id}`,
+          directory: path,
+          title: session.title ?? 'OpenCode thread',
+          agent: session.agent ?? 'OpenCode',
+        }));
+      const next = page.cursor.next ?? undefined;
+      if (!next || seen.has(next)) return found;
+      seen.add(next);
+      return [...found, ...(await collect(path, next, seen))];
+    }
+    const listed = await Promise.all(
+      directories.map((path) => collect(path, undefined, new Set())),
+    );
+    return [...threads, ...listed.flat()];
+  }
+
+  function queueCoordinationDelivery(target: CoordinationThread, message: CoordinationMessage) {
+    const previous = coordinationDeliveries.get(message.target) ?? Promise.resolve();
+    const delivery = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (disposed || coordinationMessages.find((item) => item.id === message.id)?.delivered)
+          return;
+        const text = `Message ${message.id} from ${message.sender}:\n\n${message.text}`;
+        const thread = agentThreads.find(
+          (item) =>
+            item.directory === target.directory &&
+            target.id === `acp:${item.agent}:${item.sessionId}`,
+        );
+        if (thread) {
+          await waitForCoordinationThread(thread);
+          if (disposed) return;
+          await acp.load(thread.agent, thread.directory, thread.sessionId);
+          await invoke('record_turn_snapshot', {
+            path: thread.directory,
+            thread: target.id,
+          });
+          updateAgentThreadStatus(thread, 'working');
+          try {
+            await acp.prompt(thread.agent, thread.sessionId, text, crypto.randomUUID());
+            updateAgentThreadStatus(thread, 'done');
+          } catch (cause) {
+            updateAgentThreadStatus(thread, 'failed');
+            throw cause;
+          }
+        } else {
+          if (!client) throw new Error('OpenCode is unavailable for the receiving thread.');
+          await waitForOpenCodeCoordinationThread(target.id.slice('opencode:'.length));
+          if (disposed) return;
+          await invoke('record_turn_snapshot', { path: target.directory, thread: target.id });
+          await client.session.prompt({ sessionID: target.id.slice('opencode:'.length), text });
+        }
+        coordinationMessages = coordinationMessages.map((item) =>
+          item.id === message.id ? { ...item, delivered: true } : item,
+        );
+        setSetting('sai-coordination-messages', JSON.stringify(coordinationMessages));
+        return undefined;
+      });
+    coordinationDeliveries.set(message.target, delivery);
+    void delivery
+      .catch((cause) => {
+        error = `Could not deliver agent message: ${describe(cause)}`;
+      })
+      .finally(() => {
+        if (coordinationDeliveries.get(message.target) === delivery)
+          coordinationDeliveries.delete(message.target);
+      });
+  }
+
+  async function waitForCoordinationThread(thread: AgentThread): Promise<void> {
+    if (disposed) return;
+    const agentActivity = (await acp.activity())[thread.agent];
+    if (!agentActivity?.active.includes(thread.sessionId)) return;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return waitForCoordinationThread(thread);
+  }
+
+  async function waitForOpenCodeCoordinationThread(sessionId: string): Promise<void> {
+    if (disposed || !client) return;
+    const active = await client.session.active();
+    if (active[sessionId]?.type !== 'running') return;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return waitForOpenCodeCoordinationThread(sessionId);
+  }
+
+  function retryCoordinationDeliveries() {
+    if (disposed) return;
+    for (const message of coordinationMessages) {
+      if (message.delivered || coordinationDeliveries.has(message.target)) continue;
+      const last = coordinationAttempts.get(message.id) ?? 0;
+      if (Date.now() - last < 30_000) continue;
+      const split = message.target.lastIndexOf('\0');
+      if (split < 0) continue;
+      const targetDirectory = message.target.slice(0, split);
+      const id = message.target.slice(split + 1);
+      if (!coordinationProject(targetDirectory)) continue;
+      coordinationAttempts.set(message.id, Date.now());
+      queueCoordinationDelivery({ id, directory: targetDirectory, title: '', agent: '' }, message);
+    }
+  }
+
+  async function performCoordination(request: CoordinationRequest): Promise<unknown> {
+    const project = coordinationProject(request.directory);
+    if (!project) throw new Error('This worktree is not in the Sail project catalog.');
+    const source = await coordinationSource(request);
+    const sourceId =
+      source.kind === 'acp'
+        ? `acp:${source.agent}:${request.sessionId}`
+        : `opencode:${request.sessionId}`;
+    if (request.name === 'worktree_status') {
+      if (!agentStatusEnabled) throw new Error('Agent status updates are disabled in settings.');
+      const comment = request.arguments.comment;
+      if (typeof comment !== 'string' || comment.length > 140)
+        throw new Error('Status comment must be at most 140 characters.');
+      if (
+        !(projectCatalog.worktrees[project] ?? []).some((item) => item.path === request.directory)
+      )
+        throw new Error('Only a project worktree can have a status comment.');
+      saveProjectCatalog(setWorktreeStatus(projectCatalog, project, request.directory, comment));
+      return { comment: comment.trim() };
+    }
+    if (request.name === 'project_threads' || request.name === 'thread_message') {
+      if (request.name === 'project_threads' && !agentThreadListEnabled)
+        throw new Error('Agent thread listing is disabled in settings.');
+      if (request.name === 'thread_message' && !agentMessagesEnabled)
+        throw new Error('Agent messages are disabled in settings.');
+      const threads = (await projectCoordinationThreads(project)).filter(
+        (thread) => thread.id !== sourceId || thread.directory !== request.directory,
+      );
+      if (request.name === 'project_threads') return { threads };
+      const targetId = request.arguments.threadId;
+      const text = request.arguments.text;
+      if (typeof targetId !== 'string' || typeof text !== 'string' || !text.trim())
+        throw new Error('Choose a project thread and enter a message.');
+      if (text.length > 2000) throw new Error('Agent message must be at most 2000 characters.');
+      const target = threads.find((thread) => thread.id === targetId);
+      if (!target) throw new Error('Target thread is not in this project.');
+      const message: CoordinationMessage = {
+        id: crypto.randomUUID(),
+        target: coordinationKey(target.directory, target.id),
+        sender: `${source.agent} · ${source.title}`,
+        text: text.trim(),
+        created: Date.now(),
+      };
+      coordinationMessages = [...coordinationMessages, message].slice(-500);
+      setSetting('sai-coordination-messages', JSON.stringify(coordinationMessages));
+      setTimeout(retryCoordinationDeliveries, 200);
+      return { queuedFor: target.id, queued: true, messageId: message.id };
+    }
+    if (!agentWorktreesEnabled) throw new Error('Agent worktree creation is disabled in settings.');
+    const name = request.arguments.name;
+    const prompt = request.arguments.prompt;
+    if (typeof name !== 'string' || typeof prompt !== 'string' || !prompt.trim())
+      throw new Error('A worktree name and starting prompt are required.');
+    if (prompt.length > 8000) throw new Error('Starting prompt must be at most 8000 characters.');
+    const approval = browserApprovalQueue.then(() =>
+      confirmWorktreeApproval(request.expiresAt, {
+        agent: source.agent,
+        title: source.title,
+        name,
+        project,
+        prompt,
+      }),
+    );
+    browserApprovalQueue = approval.catch(() => undefined);
+    if (!(await approval)) throw new Error('User declined the worktree request.');
+    if (Date.now() >= request.expiresAt)
+      throw new Error('The worktree request expired before approval.');
+    const created = await invoke<{ path: string; branch: string; base: string; setup: string }>(
+      'create_worktree',
+      { repository: request.directory, name, destinationParent: null, baseRef: null },
+    );
+    saveProjectCatalog(addWorktree(projectCatalog, project, created));
+    if (created.setup) await invoke('run_worktree_setup', { path: created.path });
+    if (source.kind === 'acp') {
+      const session = await acp.create(source.agent, created.path);
+      const thread: AgentThread = {
+        agent: source.agent,
+        sessionId: session.sessionId,
+        directory: created.path,
+        title: prompt.trim().slice(0, 60),
+        updated: Date.now(),
+      };
+      saveAgentThread(thread);
+      await invoke('record_turn_snapshot', {
+        path: created.path,
+        thread: `acp:${source.agent}:${session.sessionId}`,
+      });
+      updateAgentThreadStatus(thread, 'working');
+      const turn = acp.prompt(source.agent, session.sessionId, prompt.trim(), crypto.randomUUID());
+      const finished = turn.then(
+        () => {
+          updateAgentThreadStatus(thread, 'done');
+          return undefined;
+        },
+        (cause) => {
+          updateAgentThreadStatus(thread, 'failed');
+          error = describe(cause);
+          throw cause;
+        },
+      );
+      await Promise.race([finished, waitForAcpCoordinationTurn(source.agent, session.sessionId)]);
+      void finished.catch(() => undefined);
+      return {
+        path: created.path,
+        branch: created.branch,
+        threadId: `acp:${source.agent}:${session.sessionId}`,
+      };
+    }
+    if (!client) throw new Error('OpenCode is unavailable for the new thread.');
+    await ensureOpenCodeBrowser(created.path);
+    const session = await client.session.create({
+      location: { directory: created.path },
+      metadata: { saiHarness: true },
+      title: prompt.trim().slice(0, 60),
+      agent: source.agent === 'OpenCode' ? undefined : source.agent,
+      model: source.model,
+    });
+    await invoke('record_turn_snapshot', {
+      path: created.path,
+      thread: `opencode:${session.id}`,
+    });
+    const startingPrompt = client.session.prompt({ sessionID: session.id, text: prompt.trim() });
+    await Promise.race([startingPrompt, waitForOpenCodeCoordinationStart(session.id)]);
+    void startingPrompt.catch((cause) => {
+      error = `Could not start agent thread: ${describe(cause)}`;
+    });
+    return { path: created.path, branch: created.branch, threadId: `opencode:${session.id}` };
+  }
+
+  async function waitForAcpCoordinationTurn(agent: string, sessionId: string): Promise<void> {
+    const agentActivity = (await acp.activity())[agent];
+    if (agentActivity?.active.includes(sessionId) || agentActivity?.finished[sessionId]) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return waitForAcpCoordinationTurn(agent, sessionId);
+  }
+
+  async function waitForOpenCodeCoordinationStart(sessionId: string): Promise<void> {
+    if (!client) throw new Error('OpenCode is unavailable for the new thread.');
+    const active = await client.session.active();
+    if (active[sessionId]?.type === 'running') return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return waitForOpenCodeCoordinationStart(sessionId);
+  }
+
+  function finishWorktreeApproval(allowed: boolean) {
+    if (worktreeApprovalTimer) clearTimeout(worktreeApprovalTimer);
+    worktreeApprovalTimer = undefined;
+    const resolve = resolveWorktreeApproval;
+    resolveWorktreeApproval = null;
+    worktreeApproval = null;
+    if (worktreeApprovalDialog?.open) worktreeApprovalDialog.close();
+    resolve?.(allowed);
+  }
+
+  function confirmWorktreeApproval(
+    expiresAt: number,
+    details: NonNullable<typeof worktreeApproval>,
+  ): Promise<boolean> {
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0 || disposed) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      resolveWorktreeApproval = resolve;
+      worktreeApproval = details;
+      worktreeApprovalTimer = setTimeout(() => finishWorktreeApproval(false), remaining);
+      worktreeApprovalDialog.showModal();
+    });
+  }
+
+  async function handleCoordinationRequest(request: CoordinationRequest) {
+    let result: { value?: unknown; error?: string };
+    try {
+      result = { value: await performCoordination(request) };
+    } catch (cause) {
+      result = { error: describe(cause) };
+    }
+    try {
+      await invoke('agent_coordination_reply', { id: request.id, result });
+    } catch (cause) {
+      error = describe(cause);
+    }
   }
 
   function inboxTime(key: string, observed = Date.now()) {
@@ -4455,6 +4863,12 @@
                   acpAgent}
                 {directory}
                 thread={acpThread}
+                coordinationMessages={coordinationMessages.filter(
+                  (message) =>
+                    acpThread &&
+                    message.target ===
+                      coordinationKey(directory, `acp:${acpAgent}:${acpThread.sessionId}`),
+                )}
                 focusPrompt={promptFocusPane === 'main'}
                 picked={pickedAttachments.main}
                 prefill={issuePrefills[directory]}
@@ -4568,6 +4982,17 @@
                         </p>{/if}
                     </div>
                   </article>{/if}
+              {/each}
+              {#each coordinationMessages.filter((message) => sessionID && message.target === coordinationKey(directory, `opencode:${sessionID}`)) as message (message.id)}
+                <article class="message user-message">
+                  <div class="avatar user-avatar">↗</div>
+                  <div class="message-body">
+                    <div class="message-author">
+                      From {message.sender}{message.delivered ? '' : ' · queued'}
+                    </div>
+                    <Markdown source={message.text} />
+                  </div>
+                </article>
               {/each}
               {#each liveOnly as [id, parts] (id)}
                 <article class="message assistant-message" data-message-id={id}>
@@ -4759,6 +5184,7 @@
       agents={agentAvailability}
       {sideChat}
       {client}
+      {coordinationMessages}
       onentries={(id, entries, sessionId, ready) =>
         (agentEntrySnapshots = { ...agentEntrySnapshots, [id]: { entries, sessionId, ready } })}
       {changesPanes}
@@ -4804,6 +5230,25 @@
     />
   </div>
 </div>
+<dialog
+  class="commands-dialog worktree-approval-dialog"
+  bind:this={worktreeApprovalDialog}
+  aria-label="Agent worktree request"
+  onclose={() => finishWorktreeApproval(false)}
+>
+  {#if worktreeApproval}
+    <div class="commands-header"><h2>Agent worktree request</h2></div>
+    <p>
+      Allow {worktreeApproval.agent} thread “{worktreeApproval.title}” to create worktree “{worktreeApproval.name}”
+      in {worktreeApproval.project} and start a new thread?
+    </p>
+    <p class="worktree-approval-prompt">{worktreeApproval.prompt}</p>
+    <div class="worktree-approval-actions">
+      <button type="button" onclick={() => finishWorktreeApproval(false)}>Deny</button>
+      <button type="button" onclick={() => finishWorktreeApproval(true)}>Allow worktree</button>
+    </div>
+  {/if}
+</dialog>
 <dialog
   class="command-palette"
   bind:this={paletteDialog}

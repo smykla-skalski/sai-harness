@@ -20,6 +20,7 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { BrowserAttachment } from './lib/browser-pick';
+  import type { CoordinationMessage } from './lib/coordination';
 
   interface Props {
     agent: AgentId;
@@ -43,6 +44,7 @@
     onentrieschange?: (entries: AgentEntry[], sessionId: string | null, ready: boolean) => void;
     ephemeral?: boolean;
     seedContext?: string;
+    coordinationMessages?: CoordinationMessage[];
   }
   let {
     agent,
@@ -66,6 +68,7 @@
     onentrieschange,
     ephemeral = false,
     seedContext = '',
+    coordinationMessages = [],
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -792,6 +795,17 @@
           </div>
         </article>
       {/if}
+    {/each}
+    {#each coordinationMessages as message (message.id)}
+      <article class="agent-message message user-message">
+        <div class="avatar user-avatar">↗</div>
+        <div class="message-body">
+          <div class="message-author">
+            From {message.sender}{message.delivered ? '' : ' · queued'}
+          </div>
+          <Markdown source={message.text} />
+        </div>
+      </article>
     {/each}
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>

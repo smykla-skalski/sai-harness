@@ -14,6 +14,7 @@
   import type { OpenCodeClient } from './lib/opencode';
   import type { BrowserAttachment } from './lib/browser-pick';
   import type { DiffComment } from './lib/diff-comments';
+  import { coordinationKey, type CoordinationMessage } from './lib/coordination';
   import type { ThreadStatus } from './lib/attention';
   import {
     clampPaneRatio,
@@ -31,6 +32,7 @@
     agents: AgentAvailability[];
     sideChat: SideChatState | null;
     client: OpenCodeClient | null;
+    coordinationMessages: CoordinationMessage[];
     onentries: (
       id: string,
       entries: AgentEntry[],
@@ -78,6 +80,7 @@
     agents,
     sideChat,
     client,
+    coordinationMessages,
     onentries,
     changesPanes,
     main,
@@ -204,6 +207,7 @@
     bind:clientHeight={splitHeight}
   >
     <PaneTree
+      {coordinationMessages}
       pane={pane.first}
       {focused}
       {directory}
@@ -273,6 +277,7 @@
       onkeydown={resizeKey}
     ></div>
     <PaneTree
+      {coordinationMessages}
       pane={pane.second}
       {focused}
       {directory}
@@ -413,6 +418,12 @@
               agentName={agents.find((agent) => agent.id === pane.agent)?.name ?? pane.agent}
               {directory}
               thread={pane.thread}
+              coordinationMessages={coordinationMessages.filter(
+                (message) =>
+                  pane.thread &&
+                  message.target ===
+                    coordinationKey(directory, `acp:${pane.agent}:${pane.thread.sessionId}`),
+              )}
               running={running(pane.thread)}
               focused={focused === pane.id}
               focusPrompt={focusPromptPane === pane.id}

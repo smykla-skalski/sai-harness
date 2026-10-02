@@ -42,6 +42,7 @@ struct Inner {
     grants: Mutex<HashSet<String>>,
     origins: Mutex<HashSet<(String, String)>>,
     pending: Mutex<HashMap<String, mpsc::Sender<bool>>>,
+    coordination: Mutex<HashMap<String, mpsc::Sender<Value>>>,
     policies: Mutex<HashMap<PathBuf, bool>>,
     pickers: Mutex<HashSet<String>>,
 }
@@ -63,6 +64,17 @@ struct AccessRequest {
 struct NavigateRequest {
     pane_id: String,
     url: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoordinationRequest {
+    id: String,
+    session_id: String,
+    directory: String,
+    name: String,
+    arguments: Value,
+    expires_at: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -436,6 +448,67 @@ impl BrowserManager {
         Ok(())
     }
 
+    fn coordinate(
+        &self,
+        app: &AppHandle,
+        session: &str,
+        directory: &Path,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        let setting = match name {
+            "worktree_create" => "sai-agent-worktrees-enabled",
+            "worktree_status" => "sai-agent-status-enabled",
+            "project_threads" => "sai-agent-thread-list-enabled",
+            "thread_message" => "sai-agent-messages-enabled",
+            _ => return Err("Unknown coordination action.".into()),
+        };
+        if crate::settings::load_settings(app.clone())?
+            .get(setting)
+            .is_some_and(|value| value == "false")
+        {
+            return Err("This agent coordination action is disabled in settings.".into());
+        }
+        let id = Uuid::new_v4().to_string();
+        let (sender, receiver) = mpsc::channel();
+        self.0
+            .coordination
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(id.clone(), sender);
+        let event = CoordinationRequest {
+            id: id.clone(),
+            session_id: session.to_string(),
+            directory: directory.to_string_lossy().into_owned(),
+            name: name.to_string(),
+            arguments,
+            expires_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_millis() as u64
+                + 110_000,
+        };
+        if let Err(error) = app.emit_to("main", "agent:coordination-request", event) {
+            self.0
+                .coordination
+                .lock()
+                .ok()
+                .and_then(|mut map| map.remove(&id));
+            return Err(error.to_string());
+        }
+        let response = receiver.recv_timeout(Duration::from_secs(300));
+        self.0
+            .coordination
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(&id));
+        let response = response.map_err(|_| "Agent coordination request timed out.".to_string())?;
+        if let Some(error) = response.get("error").and_then(Value::as_str) {
+            return Err(error.to_string());
+        }
+        Ok(response.get("value").cloned().unwrap_or(Value::Null))
+    }
+
     fn perform(&self, app: &AppHandle, request: ToolRequest) -> Result<Value, String> {
         let clients = self.0.clients.lock().map_err(|error| error.to_string())?;
         let client = clients
@@ -450,6 +523,12 @@ impl BrowserManager {
             .unwrap_or(&request.token)
             .to_string();
         drop(clients);
+        if matches!(
+            request.name.as_str(),
+            "worktree_create" | "worktree_status" | "project_threads" | "thread_message"
+        ) {
+            return self.coordinate(app, &session, &directory, &request.name, request.arguments);
+        }
         let target_key = format!("{}:{session}", request.token);
         let chosen_pane = self
             .0
@@ -899,6 +978,24 @@ pub fn browser_access_reply(
 }
 
 #[tauri::command]
+pub fn agent_coordination_reply(
+    manager: State<'_, BrowserManager>,
+    id: String,
+    result: Value,
+) -> Result<(), String> {
+    if let Some(sender) = manager
+        .0
+        .coordination
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&id)
+    {
+        let _ = sender.send(result);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn browser_project_access(
     manager: State<'_, BrowserManager>,
     directory: String,
@@ -935,6 +1032,26 @@ pub fn browser_pane_register(
 }
 
 const TOOLS: &[(&str, &str, &str)] = &[
+    (
+        "worktree_create",
+        "Ask the user to create a worktree, start a new agent thread there, and send its starting prompt.",
+        "name,prompt",
+    ),
+    (
+        "worktree_status",
+        "Set a short status comment on the current worktree in the Sail sidebar. Empty text clears it.",
+        "comment",
+    ),
+    (
+        "project_threads",
+        "List other agent threads in this Git project and its worktrees.",
+        "",
+    ),
+    (
+        "thread_message",
+        "Send a message to another thread in this Git project, shown with this agent as sender.",
+        "threadId,text",
+    ),
     (
         "navigate",
         "Navigate the open Sail browser pane to an HTTP or HTTPS URL.",
@@ -1019,7 +1136,7 @@ fn call_bridge(params: &Value) -> Value {
         let mut stream =
             TcpStream::connect(("127.0.0.1", port)).map_err(|error| error.to_string())?;
         stream
-            .set_read_timeout(Some(Duration::from_secs(150)))
+            .set_read_timeout(Some(Duration::from_secs(330)))
             .map_err(|error| error.to_string())?;
         serde_json::to_writer(&mut stream, &request).map_err(|error| error.to_string())?;
         stream.write_all(b"\n").map_err(|error| error.to_string())?;

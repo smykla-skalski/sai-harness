@@ -231,6 +231,14 @@ button:disabled {
   align-items: center;
   min-width: 0;
 }
+.project-worktree-status {
+  margin: 0 8px 4px 45px;
+  overflow: hidden;
+  color: var(--sui-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .project-worktree-pr {
   padding: 3px 4px;
   color: var(--sui-primary);
@@ -2004,6 +2012,17 @@ button:disabled {
 
 .commands-header h2 {
   margin: 0;
+}
+.worktree-approval-prompt {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.worktree-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .commands-list {
   margin: 16px 0;
