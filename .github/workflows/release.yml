@@ -129,8 +129,14 @@ jobs:
           apps=("$mountpoint"/*.app)
           test -d "${apps[0]}"
           codesign --verify --deep --strict "${apps[0]}"
-          executable="$(plutil -extract CFBundleExecutable raw -o - "${apps[0]}/Contents/Info.plist")"
-          "${apps[0]}/Contents/MacOS/$executable" &
+          app_copy="$RUNNER_TEMP/sai-smoke/$(basename "${apps[0]}")"
+          mkdir -p "$(dirname "$app_copy")"
+          ditto "${apps[0]}" "$app_copy"
+          hdiutil detach -quiet "$mountpoint"
+          trap - EXIT
+          codesign --verify --deep --strict "$app_copy"
+          executable="$(plutil -extract CFBundleExecutable raw -o - "$app_copy/Contents/Info.plist")"
+          "$app_copy/Contents/MacOS/$executable" &
           app_pid=$!
           sleep 5
           kill -0 "$app_pid"
