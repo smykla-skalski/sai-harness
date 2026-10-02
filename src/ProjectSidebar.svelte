@@ -87,6 +87,7 @@
   let worktreeDestination = $state<string | null>(null);
   let worktreeBase = $state('');
   let worktreeAgent = $state('');
+  let worktreeAgentTouched = $state(false);
   let worktreeBusy = $state(false);
   let worktreeError = $state('');
   let issueQuery = $state('');
@@ -248,6 +249,7 @@
     worktreeName = '';
     worktreeDestination = null;
     worktreeBase = '';
+    worktreeAgentTouched = false;
     const savedAgent = getSetting('sai-worktree-agent') ?? '';
     worktreeAgent =
       (savedAgent === 'opencode' && openCodeAvailable) ||
@@ -307,8 +309,9 @@
   function chooseIssue(issue: GitHubIssue) {
     selectedIssue = issue;
     worktreeName = issueBranch(issue);
-    worktreeAgent ||=
-      agents.find((agent) => agent.available)?.id ?? (openCodeAvailable ? 'opencode' : '');
+    if (!worktreeAgentTouched)
+      worktreeAgent =
+        agents.find((agent) => agent.available)?.id ?? (openCodeAvailable ? 'opencode' : '');
     void tick().then(() => worktreeNameInput?.focus());
   }
 
@@ -856,6 +859,7 @@
         <select
           aria-label="Agent for new worktree"
           bind:value={worktreeAgent}
+          onchange={() => (worktreeAgentTouched = true)}
           disabled={worktreeBusy}
         >
           <option value="">Choose after creation</option>
