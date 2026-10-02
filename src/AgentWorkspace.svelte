@@ -28,6 +28,8 @@
     focusPrompt?: boolean;
     picked?: BrowserAttachment;
     onpickedconsumed?: (id: string) => void;
+    externalPrompt?: { id: string; text: string };
+    onexternalresult?: (id: string, failure: string | null) => void;
     onpromptfocused?: () => void;
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
@@ -44,6 +46,8 @@
     focusPrompt = false,
     picked,
     onpickedconsumed,
+    externalPrompt,
+    onexternalresult,
     onpromptfocused,
     oncreated,
     onactivity,
@@ -57,6 +61,7 @@
   let draft = $state('');
   let images = $state<BrowserAttachment[]>([]);
   let lastPicked = '';
+  let lastExternalPrompt = '';
 
   function removeImage(image: BrowserAttachment) {
     images = images.filter((item) => item.id !== image.id);
@@ -105,6 +110,16 @@
     draft = [draft.trim(), picked.text].filter(Boolean).join('\n\n');
     onpickedconsumed?.(picked.id);
     void focusPromptWhenReady();
+  });
+
+  $effect(() => {
+    if (!externalPrompt || externalPrompt.id === lastExternalPrompt) return;
+    const request = externalPrompt;
+    lastExternalPrompt = request.id;
+    void send(request.text).then(
+      () => onexternalresult?.(request.id, null),
+      (cause) => onexternalresult?.(request.id, describe(cause)),
+    );
   });
 
   function describe(cause: unknown): string {
@@ -250,10 +265,14 @@
     };
   });
 
-  async function send() {
-    const text = draft.trim();
-    if (!text || !ready || isBusy || !directory) return;
-    const sentImages = [...images];
+  async function send(externalText?: string) {
+    const external = externalText !== undefined;
+    const text = (externalText ?? draft).trim();
+    if (!text || !ready || isBusy || !directory) {
+      if (external) throw new Error('Wait for the current agent turn.');
+      return;
+    }
+    const sentImages = external ? [] : [...images];
     const current = generation;
     const turnId = crypto.randomUUID();
     activeTurnId = turnId;
@@ -265,12 +284,17 @@
     if (activityThread) onstatus(activityThread, 'working');
     stopRequested = false;
     error = '';
-    draft = '';
-    images = [];
+    if (!external) {
+      draft = '';
+      images = [];
+    }
     try {
       if (!activeSessionId) {
         const session = await acp.create(agent, directory);
-        if (current !== generation) return;
+        if (current !== generation) {
+          if (external) throw new Error('Agent pane closed before comments were sent.');
+          return;
+        }
         configOptions = session.configOptions ?? [];
         activeSessionId = session.sessionId;
         selectedThreadId = session.sessionId;
@@ -288,6 +312,7 @@
       const id = activeSessionId;
       if (stopRequested) {
         notifyOnDone = false;
+        if (external) throw new Error('Agent turn was cancelled.');
         if (current === generation) {
           draft = [text, draft.trim()].filter(Boolean).join('\n\n');
           images = [...sentImages, ...images];
@@ -305,6 +330,7 @@
         sentImages.map((item) => item.imagePath),
       );
       if (result.stopReason === 'cancelled' || stopRequested) notifyOnDone = false;
+      if (external && !notifyOnDone) throw new Error('Agent turn was cancelled.');
       if (current === generation && stopRequested)
         markTools(result.stopReason === 'cancelled' ? 'cancelled' : 'status unconfirmed', [
           'pending',
@@ -317,11 +343,14 @@
       if (current === generation) {
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
-        draft = [text, draft.trim()].filter(Boolean).join('\n\n');
-        images = [...sentImages, ...images];
-        keepImages = true;
+        if (!external) {
+          draft = [text, draft.trim()].filter(Boolean).join('\n\n');
+          images = [...sentImages, ...images];
+          keepImages = true;
+        }
         if (stopRequested) markTools('status unconfirmed', ['stopping']);
       }
+      if (external) throw cause;
     } finally {
       if (!keepImages)
         sentImages.forEach(
@@ -555,7 +584,7 @@
         </div>{/if}
       <div class="agent-actions composer-bottom">
         <span>Enter to send · Shift+Enter for newline</span><Button
-          onclick={send}
+          onclick={() => void send()}
           disabled={!ready || isBusy || !draft.trim()}
           loading={isBusy}>Send ↗</Button
         >

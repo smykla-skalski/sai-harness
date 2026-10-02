@@ -516,6 +516,43 @@ async fn working_tree_diff(path: String) -> Result<Vec<WorkingDiff>, String> {
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+fn diff_file_contents(path: String, file: String, side: String) -> Result<Option<String>, String> {
+    let root = validate_repository(path)?;
+    let relative = Path::new(&file);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err("Invalid diff file path.".into());
+    }
+    if side == "old" {
+        let output = Command::new("git")
+            .args(["-C", &root, "show", &format!("HEAD:{file}")])
+            .output()
+            .map_err(|error| error.to_string())?;
+        return Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned()));
+    }
+    if side != "new" {
+        return Err("Invalid diff side.".into());
+    }
+    let target = Path::new(&root).join(relative);
+    if !target.exists() {
+        return Ok(None);
+    }
+    let canonical = target.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical.starts_with(&root) || !canonical.is_file() {
+        return Err("Diff file is outside the repository.".into());
+    }
+    Ok(Some(
+        std::fs::read_to_string(canonical).map_err(|error| error.to_string())?,
+    ))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatedWorktree {
@@ -813,6 +850,7 @@ pub fn run() {
             start_runtime,
             validate_repository,
             working_tree_diff,
+            diff_file_contents,
             create_worktree,
             delete_worktree,
             worktree_config,

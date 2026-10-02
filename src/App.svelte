@@ -91,6 +91,7 @@
     type SavedCommand,
   } from './lib/saved-commands';
   import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
+  import type { DiffComment } from './lib/diff-comments';
   import { inspectRepository, type SetupReport } from './lib/onboarding';
   import {
     settingsAction,
@@ -222,6 +223,12 @@
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
   let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
+  let diffComments = $state<Record<string, DiffComment[]>>({});
+  let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
+  const batchWaiters = new SvelteMap<
+    string,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
   const pickedImageText = new SvelteMap<string, string>();
   const inFlightCaptures = new SvelteSet<string>();
   let setup = $state<SetupReport | null>(null);
@@ -1351,6 +1358,8 @@
 
   async function loadProject(path: string, recordRestoredThread = true) {
     if (directory !== path) {
+      for (const batch of Object.values(pendingAgentBatches))
+        completeAgentBatch(batch.id, 'Project changed before comments were sent.');
       for (const resolve of terminalExitWaiters.values()) resolve(-1);
       terminalExitWaiters.clear();
     }
@@ -2002,6 +2011,10 @@
     saveAgentThread(thread);
     rememberRecentThread(thread);
     if (acpAgent === thread.agent && directory === thread.directory && !acpThread) {
+      migrateDiffComments(
+        diffCommentKey('main'),
+        `${directory}\0main\0acp:${thread.agent}:${thread.sessionId}`,
+      );
       acpThread = thread;
       savePaneLayout(updatePane(paneLayout, 'main', { agent: thread.agent, thread }));
     }
@@ -2206,6 +2219,8 @@
   }
 
   function closeFocusedPane(id: string) {
+    const batch = pendingAgentBatches[id];
+    if (batch) completeAgentBatch(batch.id, 'Agent pane closed before comments were sent.');
     ++recentJumpGeneration;
     terminalExitWaiters.get(id)?.(1);
     terminalExitWaiters.delete(id);
@@ -2243,22 +2258,32 @@
   }
 
   function createPaneThread(id: string, thread: AgentThread) {
+    migrateDiffComments(
+      diffCommentKey(id),
+      `${directory}\0${id}\0acp:${thread.agent}:${thread.sessionId}`,
+    );
     savePaneLayout(updatePane(paneLayout, id, { thread }));
     saveAgentThread(thread);
     rememberRecentThread(thread);
   }
 
   function choosePaneAgent(id: string, agent: AgentId) {
+    const batch = pendingAgentBatches[id];
+    if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
     savePaneLayout(updatePane(paneLayout, id, { agent, thread: null, kind: undefined }));
     focusPaneForTyping(id);
   }
 
   function choosePaneTerminal(id: string) {
+    const batch = pendingAgentBatches[id];
+    if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
     savePaneLayout(updatePane(paneLayout, id, { agent: null, thread: null, kind: 'terminal' }));
     focusPaneForTyping(id);
   }
 
   function choosePaneBrowser(id: string) {
+    const batch = pendingAgentBatches[id];
+    if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
     const tab = newBrowserTab();
     savePaneLayout(
       updatePane(paneLayout, id, {
@@ -2274,6 +2299,82 @@
 
   function updatePaneBrowser(id: string, tabs: BrowserTab[], activeTab: string) {
     savePaneLayout(updatePane(paneLayout, id, { tabs, activeTab }));
+  }
+
+  function diffCommentKey(id: string) {
+    if (id === 'main')
+      return `${directory}\0main\0${acpAgent ? `acp:${acpAgent}:${acpThread?.sessionId ?? 'new'}` : `opencode:${sessionID ?? 'new'}`}`;
+    const pane = leaves(paneLayout).find((leaf) => leaf.id === id);
+    return `${directory}\0${id}\0acp:${pane?.agent ?? 'none'}:${pane?.thread?.sessionId ?? 'new'}`;
+  }
+
+  function updateDiffComments(scope: string, comments: DiffComment[]) {
+    diffComments = { ...diffComments, [scope]: comments };
+  }
+
+  function migrateDiffComments(from: string, to: string) {
+    if (from === to || !diffComments[from]?.length) return;
+    const next = { ...diffComments, [to]: [...(diffComments[to] ?? []), ...diffComments[from]] };
+    delete next[from];
+    diffComments = next;
+  }
+
+  function removeSentDiffComments(scope: string, ids: string[]) {
+    const sent = new Set(ids);
+    diffComments = Object.fromEntries(
+      Object.entries(diffComments).map(([key, comments]) => [
+        key,
+        key === scope || comments.some((comment) => sent.has(comment.id))
+          ? comments.filter((comment) => !sent.has(comment.id))
+          : comments,
+      ]),
+    );
+  }
+
+  function completeAgentBatch(id: string, failure: string | null) {
+    const entry = Object.entries(pendingAgentBatches).find(([, batch]) => batch.id === id);
+    if (entry) {
+      const next = { ...pendingAgentBatches };
+      delete next[entry[0]];
+      pendingAgentBatches = next;
+    }
+    const waiter = batchWaiters.get(id);
+    batchWaiters.delete(id);
+    if (failure) waiter?.reject(new Error(failure));
+    else waiter?.resolve();
+  }
+
+  async function sendDiffComments(id: string, scope: string, text: string): Promise<void> {
+    if (scope !== diffCommentKey(id))
+      throw new Error('The agent thread changed. Review these comments before sending.');
+    if (id === 'main' && !acpAgent) {
+      if (!client || !sessionID || running || sending)
+        throw new Error('Wait for the current agent turn.');
+      const current = selection;
+      const session = sessionID;
+      sending = true;
+      running = true;
+      activity = 'Thinking';
+      try {
+        await client.session.prompt({ sessionID: session, text });
+        if (current === selection && session === sessionID)
+          void refreshSession(session).catch((cause) => (error = describe(cause)));
+      } catch (cause) {
+        if (current === selection && session === sessionID) running = false;
+        throw cause;
+      } finally {
+        sending = false;
+      }
+      return;
+    }
+    const agent =
+      id === 'main' ? acpAgent : leaves(paneLayout).find((leaf) => leaf.id === id)?.agent;
+    if (!agent || pendingAgentBatches[id]) throw new Error('Agent pane is not ready for comments.');
+    const batch = { id: crypto.randomUUID(), text };
+    return new Promise<void>((resolve, reject) => {
+      batchWaiters.set(batch.id, { resolve, reject });
+      pendingAgentBatches = { ...pendingAgentBatches, [id]: batch };
+    });
   }
 
   function focusMainPane() {
@@ -3193,6 +3294,7 @@
         });
         id = session.id;
         if (current === selection && path === directory) {
+          migrateDiffComments(diffCommentKey('main'), `${path}\0main\0opencode:${id}`);
           await refreshSessions();
           if (current === selection && path === directory) {
             selectedSession = session;
@@ -3760,6 +3862,8 @@
                 thread={acpThread}
                 focusPrompt={promptFocusPane === 'main'}
                 picked={pickedAttachments.main}
+                externalPrompt={pendingAgentBatches.main}
+                onexternalresult={completeAgentBatch}
                 onpickedconsumed={markPickConsumed}
                 onpromptfocused={() => (promptFocusPane = null)}
                 running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
@@ -3999,6 +4103,7 @@
                 </div>{/if}
               <div class:inactive={!acpAgent && activeSideTab !== 'changes'} class="side-view">
                 <DiffPanel
+                  {directory}
                   files={diffs}
                   annotations={acpAgent ? {} : diffAnnotations}
                   selected={selectedFilePath}
@@ -4007,6 +4112,11 @@
                   onselect={(file) => (selectedFilePath = file)}
                   onrefresh={() => (acpAgent ? refreshAgentDiff() : refreshDiff())}
                   onclose={toggleChanges}
+                  scope={diffCommentKey('main')}
+                  comments={diffComments[diffCommentKey('main')] ?? []}
+                  oncomments={updateDiffComments}
+                  oncommentssent={removeSentDiffComments}
+                  onsendcomments={(scope, text) => sendDiffComments('main', scope, text)}
                 />
               </div>
               {#if !acpAgent}<div class:inactive={activeSideTab !== 'history'} class="side-view">
@@ -4040,6 +4150,12 @@
       onbrowserstate={updatePaneBrowser}
       onbrowserpick={attachPickedElement}
       {pickedAttachments}
+      {diffComments}
+      ondiffcomments={updateDiffComments}
+      ondiffcommentssent={removeSentDiffComments}
+      onsenddiffcomments={sendDiffComments}
+      {pendingAgentBatches}
+      onbatchcomplete={completeAgentBatch}
       onpickedconsumed={markPickConsumed}
       onshortcut={keydownWorkspace}
       onactivity={saveAgentThread}

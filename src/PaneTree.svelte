@@ -11,6 +11,7 @@
   import BrowserPane from './BrowserPane.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
   import type { BrowserAttachment } from './lib/browser-pick';
+  import type { DiffComment } from './lib/diff-comments';
   import type { ThreadStatus } from './lib/attention';
   import { clampPaneRatio, paneRatioBounds, type BrowserTab, type Pane } from './lib/panes';
 
@@ -33,6 +34,12 @@
     onbrowserpick: (id: string, attachment: BrowserAttachment) => void;
     pickedAttachments: Record<string, BrowserAttachment>;
     onpickedconsumed: (id: string) => void;
+    diffComments: Record<string, DiffComment[]>;
+    ondiffcomments: (scope: string, comments: DiffComment[]) => void;
+    ondiffcommentssent: (scope: string, ids: string[]) => void;
+    onsenddiffcomments: (id: string, scope: string, text: string) => Promise<void>;
+    pendingAgentBatches: Record<string, { id: string; text: string }>;
+    onbatchcomplete: (id: string, failure: string | null) => void;
     onshortcut: (event: KeyboardEvent) => void;
     onactivity: (thread: AgentThread) => void;
     focusPromptPane: string | null;
@@ -65,6 +72,12 @@
     onbrowserpick,
     pickedAttachments,
     onpickedconsumed,
+    diffComments,
+    ondiffcomments,
+    ondiffcommentssent,
+    onsenddiffcomments,
+    pendingAgentBatches,
+    onbatchcomplete,
     onshortcut,
     onactivity,
     focusPromptPane,
@@ -113,8 +126,10 @@
   }
 
   $effect(() => {
-    if (!('direction' in pane) && pane.id !== 'main' && changesPanes.includes(pane.id))
-      void refreshDiff();
+    if ('direction' in pane || pane.id === 'main' || !changesPanes.includes(pane.id)) return;
+    void refreshDiff();
+    const timer = setInterval(() => void refreshDiff(), 5000);
+    return () => clearInterval(timer);
   });
 
   function ratioFromPointer(event: PointerEvent) {
@@ -178,6 +193,12 @@
       {onbrowserpick}
       {pickedAttachments}
       {onpickedconsumed}
+      {diffComments}
+      {ondiffcomments}
+      {ondiffcommentssent}
+      {onsenddiffcomments}
+      {pendingAgentBatches}
+      {onbatchcomplete}
       {onshortcut}
       {onactivity}
       {focusPromptPane}
@@ -237,6 +258,12 @@
       {onbrowserpick}
       {pickedAttachments}
       {onpickedconsumed}
+      {diffComments}
+      {ondiffcomments}
+      {ondiffcommentssent}
+      {onsenddiffcomments}
+      {pendingAgentBatches}
+      {onbatchcomplete}
       {onshortcut}
       {onactivity}
       {focusPromptPane}
@@ -351,6 +378,8 @@
             focused={focused === pane.id}
             focusPrompt={focusPromptPane === pane.id}
             picked={pickedAttachments[pane.id]}
+            externalPrompt={pendingAgentBatches[pane.id]}
+            onexternalresult={onbatchcomplete}
             {onpickedconsumed}
             {onpromptfocused}
             oncreated={(thread) => oncreated(pane.id, thread)}
@@ -360,6 +389,7 @@
           />
           {#if changesPanes.includes(pane.id)}
             <DiffPanel
+              {directory}
               files={diffs}
               annotations={{}}
               selected={selectedFile}
@@ -368,6 +398,13 @@
               onselect={(file) => (selectedFile = file)}
               onrefresh={refreshDiff}
               onclose={() => onchanges(pane.id)}
+              scope={`${directory}\0${pane.id}\0acp:${pane.agent}:${pane.thread?.sessionId ?? 'new'}`}
+              comments={diffComments[
+                `${directory}\0${pane.id}\0acp:${pane.agent}:${pane.thread?.sessionId ?? 'new'}`
+              ] ?? []}
+              oncomments={ondiffcomments}
+              oncommentssent={ondiffcommentssent}
+              onsendcomments={(scope, text) => onsenddiffcomments(pane.id, scope, text)}
             />
           {/if}
         </div>

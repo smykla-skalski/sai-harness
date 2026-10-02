@@ -1,7 +1,12 @@
 import type { FileDiffInfo } from '@opencode/client';
 import { coveredFile, type Plan } from './plan.ts';
 
-export type DiffLine = { kind: 'added' | 'deleted' | 'hunk' | 'context'; text: string };
+export type DiffLine = {
+  kind: 'added' | 'deleted' | 'hunk' | 'context';
+  text: string;
+  oldLine?: number;
+  newLine?: number;
+};
 export type DiffAnnotation = { steps: string[]; drift: string[]; unattributed: boolean };
 
 export function repoPath(file: string, directory: string): string | null {
@@ -86,14 +91,21 @@ export function patchUnavailableReason(patch: string): 'empty' | 'binary' | 'lar
 export function parsePatch(patch: string): DiffLine[] | null {
   if (patchUnavailableReason(patch)) return null;
   const lines = patch.split('\n');
-  return lines.map((text) => ({
-    kind: text.startsWith('@@')
-      ? 'hunk'
-      : text.startsWith('+') && !text.startsWith('+++')
-        ? 'added'
-        : text.startsWith('-') && !text.startsWith('---')
-          ? 'deleted'
-          : 'context',
-    text,
-  }));
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  return lines.map((text) => {
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+    if (header) {
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      inHunk = true;
+      return { kind: 'hunk', text };
+    }
+    if (!inHunk || (!text.startsWith(' ') && !text.startsWith('+') && !text.startsWith('-')))
+      return { kind: 'context', text };
+    if (text.startsWith('+')) return { kind: 'added', text, newLine: newLine++ };
+    if (text.startsWith('-')) return { kind: 'deleted', text, oldLine: oldLine++ };
+    return { kind: 'context', text, oldLine: oldLine++, newLine: newLine++ };
+  });
 }

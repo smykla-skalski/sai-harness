@@ -7,6 +7,7 @@ fn main() {
             "start_runtime",
             "validate_repository",
             "working_tree_diff",
+            "diff_file_contents",
             "create_worktree",
             "delete_worktree",
             "worktree_config",

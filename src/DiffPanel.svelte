@@ -1,11 +1,20 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { Button } from '@smykla-skalski/sui';
   import type { FileDiffInfo } from '@opencode/client';
   import { parsePatch, patchUnavailableReason, type DiffAnnotation } from './lib/diff';
+  import {
+    commentRange,
+    formatComments,
+    reconcileComments,
+    type DiffComment,
+    withSnapshot,
+  } from './lib/diff-comments';
 
   interface Props {
     files: FileDiffInfo[];
+    directory: string;
     annotations: Record<string, DiffAnnotation>;
     selected: string | null;
     loading: boolean;
@@ -13,15 +22,151 @@
     onselect: (file: string) => void;
     onrefresh: () => void;
     onclose: () => void;
+    comments: DiffComment[];
+    scope: string;
+    oncomments: (scope: string, comments: DiffComment[]) => void;
+    oncommentssent: (scope: string, ids: string[]) => void;
+    onsendcomments: (scope: string, text: string) => Promise<void>;
   }
 
-  let { files, annotations, selected, loading, error, onselect, onrefresh, onclose }: Props =
-    $props();
+  let {
+    files,
+    directory,
+    annotations,
+    selected,
+    loading,
+    error,
+    onselect,
+    onrefresh,
+    onclose,
+    comments,
+    scope,
+    oncomments,
+    oncommentssent,
+    onsendcomments,
+  }: Props = $props();
   let current = $derived(files.find((file) => file.file === selected));
   let lines = $derived(current ? parsePatch(current.patch) : null);
   let unavailable = $derived(current ? patchUnavailableReason(current.patch) : null);
   let patchScroll = $state<HTMLDivElement>();
   let previousFile: string | null = null;
+  let previousScope = '';
+  let anchorIndex = $state<number | null>(null);
+  let selectedIndex = $state<number | null>(null);
+  let selectedPatch = $state<string | null>(null);
+  let commentText = $state('');
+  let commentError = $state('');
+  let sendingComments = $state(false);
+  let commentInput = $state<HTMLTextAreaElement>();
+  let panel = $state<HTMLElement>();
+  let selectedRange = $derived(
+    anchorIndex === null || selectedIndex === null || !lines
+      ? null
+      : commentRange(selected ?? '', lines, anchorIndex, selectedIndex, commentText),
+  );
+
+  function selectLine(index: number, extend: boolean) {
+    if (!extend || anchorIndex === null) anchorIndex = index;
+    selectedIndex = index;
+    selectedPatch = current?.patch ?? null;
+    commentError = '';
+    void tick().then(() => commentInput?.focus());
+  }
+
+  async function readCommentFile(comment: DiffComment): Promise<string | null> {
+    return invoke<string | null>('diff_file_contents', {
+      path: directory,
+      file: comment.file,
+      side: comment.side,
+    });
+  }
+
+  async function addComment() {
+    if (!selectedRange || !commentText.trim()) {
+      commentError = 'Choose one line or a continuous range, then write a comment.';
+      return;
+    }
+    const pending = selectedRange;
+    const currentScope = scope;
+    const currentAnchor = anchorIndex;
+    const currentIndex = selectedIndex;
+    const currentText = commentText;
+    try {
+      const contents = await readCommentFile(pending);
+      if (contents === null) throw new Error('The selected file is no longer available.');
+      if (
+        currentScope !== scope ||
+        selectedPatch !== current?.patch ||
+        currentAnchor !== anchorIndex ||
+        currentIndex !== selectedIndex ||
+        currentText !== commentText
+      )
+        return;
+      oncomments(scope, [...comments, withSnapshot(pending, contents)]);
+    } catch (cause) {
+      commentError = String(cause);
+      return;
+    }
+    commentText = '';
+    anchorIndex = null;
+    selectedIndex = null;
+    selectedPatch = null;
+    commentError = '';
+  }
+
+  async function sendComments() {
+    if (sendingComments) return;
+    if (commentText.trim() && !selectedRange) {
+      commentError = 'Choose a continuous line range before sending.';
+      return;
+    }
+    const extra = commentText.trim() ? selectedRange : null;
+    const sent = [...comments, ...(extra ? [extra] : [])];
+    if (!sent.length) return;
+    const sentScope = scope;
+    const sentInput = commentText;
+    const sentAnchor = anchorIndex;
+    const sentIndex = selectedIndex;
+    const sentPatch = selectedPatch;
+    sendingComments = true;
+    commentError = '';
+    try {
+      await onsendcomments(sentScope, formatComments(sent));
+      oncommentssent(
+        sentScope,
+        sent.map((comment) => comment.id),
+      );
+      if (
+        extra &&
+        sentScope === scope &&
+        commentText === sentInput &&
+        anchorIndex === sentAnchor &&
+        selectedIndex === sentIndex &&
+        selectedPatch === sentPatch
+      ) {
+        commentText = '';
+        anchorIndex = null;
+        selectedIndex = null;
+        selectedPatch = null;
+      }
+    } catch (cause) {
+      commentError = String(cause);
+    } finally {
+      sendingComments = false;
+    }
+  }
+
+  function commentKeydown(event: KeyboardEvent) {
+    if (
+      !(event.metaKey || event.ctrlKey) ||
+      event.key !== 'Enter' ||
+      !(event.target instanceof Node) ||
+      !panel?.contains(event.target)
+    )
+      return;
+    event.preventDefault();
+    void sendComments();
+  }
 
   async function resetScroll(file: string | null) {
     await tick();
@@ -29,14 +174,65 @@
   }
 
   $effect(() => {
-    if (selected === previousFile) return;
+    if (selected === previousFile && scope === previousScope) return;
     previousFile = selected;
+    previousScope = scope;
+    anchorIndex = null;
+    selectedIndex = null;
+    selectedPatch = null;
+    commentText = '';
     const file = selected;
     void resetScroll(file);
   });
+
+  $effect(() => {
+    if (anchorIndex === null || selectedPatch === current?.patch) return;
+    anchorIndex = null;
+    selectedIndex = null;
+    selectedPatch = null;
+    commentError = 'The diff changed. Select the line again before adding your comment.';
+  });
+
+  let reconcileGeneration = 0;
+  onDestroy(() => ++reconcileGeneration);
+  $effect(() => {
+    const generation = ++reconcileGeneration;
+    if (!comments.length || loading) return;
+    const currentScope = scope;
+    const currentComments = comments;
+    const currentFiles = files;
+    void Promise.all(
+      [...new Set(currentComments.map((comment) => `${comment.file}\0${comment.side}`))].map(
+        async (key) => {
+          const comment = currentComments.find((item) => `${item.file}\0${item.side}` === key)!;
+          return [key, await readCommentFile(comment)] as const;
+        },
+      ),
+    )
+      .then((entries) => {
+        if (generation !== reconcileGeneration || currentScope !== scope) return;
+        const reconciled = reconcileComments(
+          currentComments,
+          currentFiles,
+          Object.fromEntries(entries),
+        );
+        if (
+          reconciled.some(
+            (comment, index) =>
+              comment.start !== currentComments[index].start ||
+              comment.end !== currentComments[index].end ||
+              comment.outdated !== currentComments[index].outdated,
+          )
+        )
+          oncomments(scope, reconciled);
+        return;
+      })
+      .catch((cause) => (commentError = String(cause)));
+  });
 </script>
 
-<aside class="diff-panel" aria-label="Working tree changes">
+<svelte:window onkeydown={commentKeydown} />
+<aside class="diff-panel" aria-label="Working tree changes" bind:this={panel}>
   <header class="diff-heading">
     <div>
       <p class="eyebrow">WORKING TREE</p>
@@ -82,14 +278,27 @@
           role="region"
           aria-label={`Diff for ${current.file}`}
         >
-          {#each lines as line, index (index)}<div
-              class="diff-line"
-              class:added={line.kind === 'added'}
-              class:deleted={line.kind === 'deleted'}
-              class:hunk={line.kind === 'hunk'}
-            >
-              <code>{line.text || ' '}</code>
-            </div>{/each}
+          {#each lines as line, index (index)}
+            {#if line.oldLine !== undefined || line.newLine !== undefined}
+              <button
+                type="button"
+                class="diff-line"
+                class:added={line.kind === 'added'}
+                class:deleted={line.kind === 'deleted'}
+                class:selected={anchorIndex !== null &&
+                  selectedIndex !== null &&
+                  index >= Math.min(anchorIndex, selectedIndex) &&
+                  index <= Math.max(anchorIndex, selectedIndex)}
+                aria-label={`Comment on ${line.kind === 'deleted' ? 'old' : 'new'} line ${line.kind === 'deleted' ? line.oldLine : line.newLine}`}
+                onclick={(event) => selectLine(index, event.shiftKey)}
+                ><span class="line-number">{line.oldLine ?? ''}</span><span class="line-number"
+                  >{line.newLine ?? ''}</span
+                ><code>{line.text || ' '}</code></button
+              >
+            {:else}<div class="diff-line" class:hunk={line.kind === 'hunk'}>
+                <code>{line.text || ' '}</code>
+              </div>{/if}
+          {/each}
         </div>
       {:else}<p class="diff-fallback">
           {unavailable === 'large'
@@ -101,6 +310,44 @@
     {:else if selected}<p class="diff-fallback">No working tree diff for {selected}.</p>
     {:else}<p class="diff-fallback">Select a changed file to inspect its patch.</p>{/if}
   </div>
+  {#if selectedRange}<div class="diff-comment-entry">
+      <label for="diff-comment-input"
+        >Comment on {selectedRange.file}:{selectedRange.start}{selectedRange.end !==
+        selectedRange.start
+          ? `-${selectedRange.end}`
+          : ''}</label
+      >
+      <textarea
+        id="diff-comment-input"
+        bind:this={commentInput}
+        bind:value={commentText}
+        rows="2"
+        placeholder="Tell the agent what to change…"></textarea>
+      <Button size="sm" onclick={addComment} disabled={!commentText.trim()}>Add draft</Button>
+    </div>{/if}
+  {#if comments.length}<div class="diff-comment-drafts" aria-label="Draft diff comments">
+      {#each comments as comment (comment.id)}<div class="diff-comment-draft">
+          <strong
+            >{comment.file}:{comment.start}{comment.end !== comment.start
+              ? `-${comment.end}`
+              : ''}</strong
+          >
+          {#if comment.outdated}<span class="diff-outdated">Outdated</span>{/if}
+          <span>{comment.text}</span>
+          <button
+            aria-label="Remove draft comment"
+            onclick={() =>
+              oncomments(
+                scope,
+                comments.filter((item) => item.id !== comment.id),
+              )}>×</button
+          >
+        </div>{/each}
+      <Button size="sm" onclick={() => void sendComments()} disabled={sendingComments}
+        >{sendingComments ? 'Sending…' : `Send ${comments.length} comments ⌘↵`}</Button
+      >
+    </div>{/if}
+  {#if commentError}<p class="diff-error" role="alert">{commentError}</p>{/if}
 </aside>
 
 <style>
@@ -210,6 +457,58 @@
     min-width: 100%;
     padding: 0 12px;
     white-space: pre;
+    display: flex;
+    gap: 8px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+  }
+  .diff-line .line-number {
+    width: 32px;
+    flex: 0 0 32px;
+    text-align: right;
+    color: var(--sui-muted);
+    user-select: none;
+  }
+  .diff-line.selected {
+    outline: 1px solid var(--sui-primary);
+    background: var(--shell-selected);
+  }
+  .diff-comment-entry,
+  .diff-comment-drafts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--shell-divider);
+    font-size: 12px;
+  }
+  .diff-comment-entry textarea {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .diff-comment-draft {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .diff-comment-draft > span:not(.diff-outdated) {
+    flex: 1;
+    min-width: 100px;
+  }
+  .diff-comment-draft button {
+    border: 0;
+    background: transparent;
+    color: var(--sui-muted);
+    cursor: pointer;
+  }
+  .diff-outdated {
+    color: var(--sui-danger);
   }
   .diff-line.added {
     background: rgba(37, 153, 103, 0.13);
