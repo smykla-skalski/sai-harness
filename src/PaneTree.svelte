@@ -4,6 +4,7 @@
   import type { WorkingDiffInfo } from './lib/diff';
   import PaneTree from './PaneTree.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
+  import OpenCodePane from './OpenCodePane.svelte';
   import DiffPanel from './DiffPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
   import TerminalPane from './TerminalPane.svelte';
@@ -12,6 +13,7 @@
   import SideChat from './SideChat.svelte';
   import type { AgentThread, AgentAvailability, AgentEntry } from './lib/acp';
   import type { OpenCodeClient } from './lib/opencode';
+  import type { SetupReport } from './lib/onboarding';
   import type { BrowserAttachment } from './lib/browser-pick';
   import type { DiffComment } from './lib/diff-comments';
   import { coordinationKey, type CoordinationMessage } from './lib/coordination';
@@ -34,6 +36,7 @@
     agents: AgentAvailability[];
     sideChat: SideChatState | null;
     client: OpenCodeClient | null;
+    setup: SetupReport | null;
     coordinationMessages: CoordinationMessage[];
     agentUsage: Record<string, AgentUsage>;
     agentRates: Record<string, RateWindow[]>;
@@ -85,6 +88,7 @@
     agents,
     sideChat,
     client,
+    setup,
     coordinationMessages,
     agentUsage,
     agentRates,
@@ -225,6 +229,7 @@
       {agents}
       {sideChat}
       {client}
+      {setup}
       {onentries}
       {changesPanes}
       {main}
@@ -298,6 +303,7 @@
       {agents}
       {sideChat}
       {client}
+      {setup}
       {onentries}
       {changesPanes}
       {main}
@@ -423,6 +429,53 @@
             onfocus={() => onfocus(pane.id)}
             {onshortcut}
           />
+        {/key}
+      {:else if pane.agent === 'opencode'}
+        {#key `${pane.id}:opencode`}
+          <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>
+            <OpenCodePane
+              {client}
+              {directory}
+              thread={pane.thread}
+              {setup}
+              coordinationMessages={coordinationMessages.filter(
+                (message) =>
+                  pane.thread &&
+                  message.target ===
+                    coordinationKey(directory, `opencode:${pane.thread.sessionId}`),
+              )}
+              focused={focused === pane.id}
+              focusPrompt={focusPromptPane === pane.id}
+              picked={pickedAttachments[pane.id]}
+              externalPrompt={pendingAgentBatches[pane.id]}
+              onexternalresult={onbatchcomplete}
+              {onpickedconsumed}
+              {onpromptfocused}
+              oncreated={(thread) => oncreated(pane.id, thread)}
+              {onactivity}
+              {onstatus}
+            />
+            {#if changesPanes.includes(pane.id)}
+              <DiffPanel
+                {directory}
+                files={diffs}
+                annotations={{}}
+                selected={selectedFile}
+                loading={diffLoading}
+                error={diffError}
+                onselect={(file) => (selectedFile = file)}
+                onrefresh={refreshDiff}
+                onclose={() => onchanges(pane.id)}
+                scope={`${directory}\0${pane.id}\0opencode:${pane.thread?.sessionId ?? 'new'}`}
+                comments={diffComments[
+                  `${directory}\0${pane.id}\0opencode:${pane.thread?.sessionId ?? 'new'}`
+                ] ?? []}
+                oncomments={ondiffcomments}
+                oncommentssent={ondiffcommentssent}
+                onsendcomments={(scope, text) => onsenddiffcomments(pane.id, scope, text)}
+              />
+            {/if}
+          </div>
         {/key}
       {:else if pane.agent}
         {#key `${pane.id}:${pane.agent}`}

@@ -39,6 +39,7 @@
     type PaletteStep,
   } from './lib/command-palette';
   import {
+    loadRecentNativeThreads,
     loadRecentThreadKeys,
     migrateRecentThreadKeys,
     nextRecentIndex,
@@ -136,7 +137,12 @@
 
   let dark = $state(getSetting('sai-theme') === 'dark');
   const savedAgentThreads = loadAgentThreads();
-  const savedDirectory = getSetting('sai-directory') ?? savedAgentThreads[0]?.directory ?? '';
+  const savedNativeThreads = loadRecentNativeThreads(getSetting('sai-recent-native-threads'));
+  const savedDirectory =
+    getSetting('sai-directory') ??
+    savedAgentThreads[0]?.directory ??
+    savedNativeThreads[0]?.directory ??
+    '';
   let directory = $state(savedDirectory);
   let projectCatalog = $state<ProjectCatalog>(
     loadProjectCatalog(getSetting('sai-project-catalog'), savedDirectory),
@@ -257,6 +263,7 @@
     return () => clearTimeout(timer);
   });
   let openCodeUsage = $state<Record<string, number>>({});
+  let nativeThreads = $state<AgentThread[]>(savedNativeThreads);
   let threadAttention = $state<AttentionMap>(loadAttention(getSetting('sai-thread-attention')));
   let attentionRevision = 0;
   let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
@@ -273,7 +280,10 @@
   let inboxGeneration = 0;
   const inboxSeen = loadInboxSeen(getSetting('sai-inbox-seen'));
   let recentThreadKeys = $state<string[]>(
-    loadRecentThreadKeys(getSetting('sai-recent-agent-threads'), savedAgentThreads),
+    loadRecentThreadKeys(getSetting('sai-recent-agent-threads'), [
+      ...savedAgentThreads,
+      ...savedNativeThreads,
+    ]),
   );
   let recentCycleKeys: string[] | null = null;
   let recentCycleIndex = -1;
@@ -299,6 +309,7 @@
   let sideChat = $state<SideChat | null>(null);
   let focusedPane = $state(leaves(savedPaneLayouts[savedDirectory] ?? mainPane())[0]?.id ?? 'main');
   let paneLayout = $derived(paneLayouts[directory] ?? mainPane());
+  let focusedLeaf = $derived(leaves(paneLayout).find((pane) => pane.id === focusedPane));
   let agentChangesOpen = $state(false);
   let changesPanes = $state<string[]>([]);
   const initialMainPane = leaves(savedPaneLayouts[savedDirectory] ?? mainPane()).find(
@@ -326,6 +337,19 @@
   let runtimeError = $state('');
   let workReady = $state(false);
   let planReady = $state(false);
+  let paneAgents = $derived<AgentAvailability[]>([
+    ...agentAvailability,
+    {
+      id: 'opencode',
+      name: 'OpenCode',
+      binaryPath: activeBinary || null,
+      available: runtimeState === 'connected' && workReady,
+      reason:
+        runtimeState === 'connected'
+          ? 'Complete OpenCode setup in this worktree'
+          : 'OpenCode unavailable',
+    },
+  ]);
   let selectedAgentID = $state('');
   let selectedModelKey = $state('');
   let selectedVariant = $state('');
@@ -664,6 +688,14 @@
   let currentSession = $derived(
     sessions.find((session) => session.id === sessionID) ??
       (selectedSession?.id === sessionID ? selectedSession : undefined),
+  );
+  let focusedConversationTitle = $derived(
+    focusedPane !== 'main'
+      ? (focusedLeaf?.thread?.title ??
+          (focusedLeaf?.agent ? `New ${focusedLeaf.agent} thread` : 'Workspace'))
+      : acpAgent
+        ? (acpThread?.title ?? `New ${acpAgent} thread`)
+        : (currentSession?.title ?? (newSessionMode === 'work' ? 'New work' : 'New session')),
   );
   let visibleSessions = $derived(
     !sessionSearch.trim() &&
@@ -2186,14 +2218,15 @@
           persistPaneLayouts();
         }
         saveProjectCatalog(replaceRepositoryPath(projectCatalog, path, report.repository));
+        const knownThreads = [...agentThreads, ...nativeThreads];
         if (recentCycleKeys) {
           const selectedKey = recentCycleKeys[recentCycleIndex];
           const migratedSelected = selectedKey
-            ? migrateRecentThreadKeys([selectedKey], agentThreads, path, report.repository)[0]
+            ? migrateRecentThreadKeys([selectedKey], knownThreads, path, report.repository)[0]
             : null;
           recentCycleKeys = migrateRecentThreadKeys(
             recentCycleKeys,
-            agentThreads,
+            knownThreads,
             path,
             report.repository,
           );
@@ -2201,13 +2234,13 @@
         }
         recentThreadKeys = migrateRecentThreadKeys(
           recentThreadKeys,
-          agentThreads,
+          knownThreads,
           path,
           report.repository,
         );
         setSetting('sai-recent-agent-threads', JSON.stringify(recentThreadKeys));
         const attentionKeys = new Map(
-          agentThreads
+          knownThreads
             .filter((thread) => thread.directory === path)
             .map((thread) => [
               threadKey(thread),
@@ -2227,6 +2260,10 @@
             : thread,
         );
         saveAgentThreads(agentThreads);
+        nativeThreads = nativeThreads.map((thread) =>
+          thread.directory === path ? { ...thread, directory: report.repository } : thread,
+        );
+        setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
         if (acpThread?.directory === path)
           acpThread = Object.assign({}, acpThread, { directory: report.repository });
       }
@@ -2774,12 +2811,19 @@
   }
 
   function rememberRecentThread(thread: AgentThread) {
+    if (thread.agent === 'opencode') {
+      nativeThreads = [
+        thread,
+        ...nativeThreads.filter((item) => threadKey(item) !== threadKey(thread)),
+      ].slice(0, 100);
+      setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
+    }
     recentThreadKeys = touchRecentThread(recentThreadKeys, thread);
     setSetting('sai-recent-agent-threads', JSON.stringify(recentThreadKeys));
   }
 
   function forgetMissingRecentThreads() {
-    recentThreadKeys = retainRecentThreads(recentThreadKeys, agentThreads);
+    recentThreadKeys = retainRecentThreads(recentThreadKeys, [...agentThreads, ...nativeThreads]);
     setSetting('sai-recent-agent-threads', JSON.stringify(recentThreadKeys));
   }
 
@@ -2794,8 +2838,13 @@
       ),
     ]);
     const availableThreads = new Set(
-      agentThreads
-        .filter((thread) => availableAgents.has(thread.agent) && projectPaths.has(thread.directory))
+      [...agentThreads, ...nativeThreads]
+        .filter(
+          (thread) =>
+            (thread.agent === 'opencode'
+              ? runtimeState === 'connected'
+              : availableAgents.has(thread.agent)) && projectPaths.has(thread.directory),
+        )
         .map(threadKey),
     );
     return recentThreadKeys.filter((key) => availableThreads.has(key));
@@ -2804,14 +2853,24 @@
   function focusedThreadKey(): string | null {
     const thread =
       focusedPane === 'main'
-        ? acpThread
+        ? (acpThread ??
+          (!acpAgent && sessionID
+            ? nativeThreads.find(
+                (item) => item.sessionId === sessionID && item.directory === directory,
+              )
+            : null))
         : leaves(paneLayout).find((pane) => pane.id === focusedPane)?.thread;
     return thread ? threadKey(thread) : null;
   }
 
   async function jumpToRecentThread(key: string) {
-    const thread = agentThreads.find((item) => threadKey(item) === key);
-    if (!thread || !agentAvailability.some((agent) => agent.id === thread.agent && agent.available))
+    const thread = [...agentThreads, ...nativeThreads].find((item) => threadKey(item) === key);
+    if (
+      !thread ||
+      (thread.agent === 'opencode'
+        ? runtimeState !== 'connected'
+        : !agentAvailability.some((agent) => agent.id === thread.agent && agent.available))
+    )
       return;
     const jump = ++recentJumpGeneration;
     let expectedProjectLoad = projectLoadGeneration;
@@ -2826,7 +2885,7 @@
       await pending;
     }
     if (jump !== recentJumpGeneration || expectedProjectLoad !== projectLoadGeneration) return;
-    const selected = agentThreads.find(
+    const selected = [...agentThreads, ...nativeThreads].find(
       (item) =>
         item.directory === directory &&
         item.agent === thread.agent &&
@@ -2834,7 +2893,8 @@
     );
     if (!selected) return;
     focusMainPane();
-    openAgent(selected.agent, selected, true);
+    if (selected.agent === 'opencode') await selectSession(selected.sessionId);
+    else openAgent(selected.agent, selected, true);
     focusPaneForTyping('main');
   }
 
@@ -3006,6 +3066,8 @@
     let source: SideChat['source'];
     if (focusedPane === 'main' && !acpAgent && sessionID && client) {
       source = { kind: 'opencode', sessionID };
+    } else if (current.agent === 'opencode' && current.thread && client) {
+      source = { kind: 'opencode', sessionID: current.thread.sessionId };
     } else {
       const agent = focusedPane === 'main' ? acpAgent : current.agent;
       const thread = focusedPane === 'main' ? acpThread : current.thread;
@@ -3222,13 +3284,32 @@
   }
 
   function createPaneThread(id: string, thread: AgentThread) {
-    migrateDiffComments(
-      diffCommentKey(id),
-      `${directory}\0${id}\0acp:${thread.agent}:${thread.sessionId}`,
-    );
+    const sessionKey =
+      thread.agent === 'opencode'
+        ? `opencode:${thread.sessionId}`
+        : `acp:${thread.agent}:${thread.sessionId}`;
+    migrateDiffComments(diffCommentKey(id), `${directory}\0${id}\0${sessionKey}`);
     savePaneLayout(updatePane(paneLayout, id, { thread }));
+    if (thread.agent === 'opencode') {
+      rememberRecentThread(thread);
+      void refreshSessions().catch((cause) => (error = describe(cause)));
+      return;
+    }
     saveAgentThread(thread);
     rememberRecentThread(thread);
+  }
+
+  function recordPaneActivity(thread: AgentThread) {
+    if (thread.agent !== 'opencode') {
+      saveAgentThread(thread);
+      return;
+    }
+    const pane = leaves(paneLayout).find(
+      (leaf) => leaf.agent === 'opencode' && leaf.thread?.sessionId === thread.sessionId,
+    );
+    if (pane) savePaneLayout(updatePane(paneLayout, pane.id, { thread }));
+    rememberRecentThread(thread);
+    void refreshSessions().catch((cause) => (error = describe(cause)));
   }
 
   function choosePaneAgent(id: string, agent: AgentId) {
@@ -3269,6 +3350,8 @@
     if (id === 'main')
       return `${directory}\0main\0${acpAgent ? `acp:${acpAgent}:${acpThread?.sessionId ?? 'new'}` : `opencode:${sessionID ?? 'new'}`}`;
     const pane = leaves(paneLayout).find((leaf) => leaf.id === id);
+    if (pane?.agent === 'opencode')
+      return `${directory}\0${id}\0opencode:${pane.thread?.sessionId ?? 'new'}`;
     return `${directory}\0${id}\0acp:${pane?.agent ?? 'none'}:${pane?.thread?.sessionId ?? 'new'}`;
   }
 
@@ -3405,7 +3488,10 @@
     if (focusedPane !== 'main' && !pane) return null;
     const agent = pane ? pane.agent : acpAgent;
     const thread = pane ? pane.thread : acpThread;
-    if (agent && thread) return `acp:${agent}:${thread.sessionId}`;
+    if (agent && thread)
+      return agent === 'opencode'
+        ? `opencode:${thread.sessionId}`
+        : `acp:${agent}:${thread.sessionId}`;
     if (focusedPane === 'main' && !acpAgent && sessionID) return `opencode:${sessionID}`;
     return null;
   }
@@ -3514,13 +3600,14 @@
   function threadIsViewed(key: string): boolean {
     return (
       document.hasFocus() &&
-      leaves(paneLayout).some((pane) => pane.thread && threadKey(pane.thread) === key)
+      (leaves(paneLayout).some((pane) => pane.thread && threadKey(pane.thread) === key) ||
+        (!acpAgent && !!sessionID && focusedThreadKey() === key))
     );
   }
 
   function updateAttentionBadge() {
     if (!isTauri()) return;
-    const threads = new Set(agentThreads.map(threadKey));
+    const threads = new Set([...agentThreads, ...nativeThreads].map(threadKey));
     const count = Object.entries(threadAttention).filter(
       ([key, item]) => threads.has(key) && item.status === 'waiting',
     ).length;
@@ -3572,7 +3659,8 @@
 
   function updateAgentThreadStatus(thread: AgentThread, status: ThreadStatus, notifyOnDone = true) {
     const key = agentThreadKey(thread);
-    if (!agentThreads.some((item) => threadKey(item) === key)) return;
+    if (thread.agent !== 'opencode' && !agentThreads.some((item) => threadKey(item) === key))
+      return;
     const { next, notify } = updateAttention(
       threadAttention,
       key,
@@ -3663,13 +3751,19 @@
 
   async function selectSession(id: string, automatic = false) {
     if (!client || !directory) return;
-    focusMainPane();
-    acpAgent = null;
-    acpThread = null;
-    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
-    if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
-      saveViewState();
-    const current = ++selection;
+    const targetPane =
+      !automatic && focusedPane !== 'main'
+        ? leaves(paneLayout).find((pane) => pane.id === focusedPane)
+        : null;
+    if (!targetPane) {
+      focusMainPane();
+      acpAgent = null;
+      acpThread = null;
+      savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
+      if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
+        saveViewState();
+    }
+    const current = targetPane ? selection : ++selection;
     const path = directory;
     let info: SessionInfo;
     try {
@@ -3679,6 +3773,25 @@
         throw new Error('This session does not belong to the selected repository.');
     } catch (cause) {
       if (current === selection && path === directory) error = describe(cause);
+      return;
+    }
+    const nativeThread: AgentThread = {
+      agent: 'opencode',
+      sessionId: info.id,
+      directory: path,
+      title: info.title ?? 'OpenCode thread',
+      updated: info.time.updated,
+    };
+    rememberRecentThread(nativeThread);
+    markThreadRead(nativeThread);
+    if (targetPane) {
+      savePaneLayout(
+        updatePane(paneLayout, targetPane.id, {
+          agent: 'opencode',
+          thread: nativeThread,
+        }),
+      );
+      focusPaneForTyping(targetPane.id);
       return;
     }
     sessionID = id;
@@ -3733,6 +3846,10 @@
 
   function newWork() {
     if (!workReady || switching || sending) return;
+    if (focusedPane !== 'main' && leaves(paneLayout).some((pane) => pane.id === focusedPane)) {
+      choosePaneAgent(focusedPane, 'opencode');
+      return;
+    }
     focusMainPane();
     acpAgent = null;
     acpThread = null;
@@ -3930,6 +4047,18 @@
     }
     try {
       await client.session.update({ sessionID: editingSessionID, title });
+      const renamedID = editingSessionID;
+      nativeThreads = nativeThreads.map((thread) =>
+        thread.sessionId === renamedID && thread.directory === directory
+          ? { ...thread, title }
+          : thread,
+      );
+      setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
+      let nextLayout = paneLayout;
+      for (const pane of leaves(paneLayout))
+        if (pane.agent === 'opencode' && pane.thread?.sessionId === renamedID)
+          nextLayout = updatePane(nextLayout, pane.id, { thread: { ...pane.thread, title } });
+      if (nextLayout !== paneLayout) savePaneLayout(nextLayout);
       editingSessionID = null;
       await refreshSessions();
     } catch (cause) {
@@ -3957,6 +4086,14 @@
       const usage = { ...openCodeUsage };
       delete usage[`${directory}:${session.id}`];
       openCodeUsage = usage;
+      nativeThreads = nativeThreads.filter((thread) => thread.sessionId !== session.id);
+      setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
+      forgetMissingRecentThreads();
+      let nextLayout = paneLayout;
+      for (const pane of leaves(paneLayout))
+        if (pane.agent === 'opencode' && pane.thread?.sessionId === session.id)
+          nextLayout = updatePane(nextLayout, pane.id, { thread: null });
+      if (nextLayout !== paneLayout) savePaneLayout(nextLayout);
       if (session.id === sessionID) clearSelectedSession();
       await refreshSessions();
       if (!sessions.length && sessionPageHistory.length) previousPage();
@@ -4375,6 +4512,26 @@
             activity = 'Thinking';
             activityTool = '';
           }
+          if (
+            event.type === 'session.execution.started' ||
+            event.type === 'session.execution.succeeded' ||
+            event.type === 'session.execution.failed' ||
+            event.type === 'session.execution.interrupted'
+          ) {
+            const thread = nativeThreads.find(
+              (item) => item.sessionId === sessionID && item.directory === directory,
+            );
+            if (thread)
+              updateAgentThreadStatus(
+                thread,
+                event.type === 'session.execution.started'
+                  ? 'working'
+                  : event.type === 'session.execution.failed'
+                    ? 'failed'
+                    : 'done',
+                event.type !== 'session.execution.interrupted',
+              );
+          }
           if (event.type === 'session.reasoning.started') activity = 'Thinking';
           if (event.type === 'session.text.started') activity = 'Writing response';
           if (event.type === 'session.tool.input.started') {
@@ -4427,6 +4584,12 @@
           event.type === 'form.replied' ||
           event.type === 'form.cancelled'
         ) {
+          if (event.type === 'permission.asked') {
+            const thread = nativeThreads.find(
+              (item) => item.sessionId === event.data.sessionID && item.directory === directory,
+            );
+            if (thread) updateAgentThreadStatus(thread, 'waiting');
+          }
           if (event.type === 'permission.asked' && !openCodeRequestTime(event.data.id))
             inboxTime(`opencode:permission:${event.data.id}`, event.created);
           if (event.type === 'form.created' && !openCodeRequestTime(event.data.form.id))
@@ -4821,12 +4984,6 @@
           >
         </div>
         <div class="agent-launches">
-          <Button
-            size="sm"
-            variant="ghost"
-            onclick={newWork}
-            disabled={!workReady || switching || sending}>+ OpenCode</Button
-          >
           {#each agentAvailability as agent (agent.id)}
             <Button
               size="sm"
@@ -4836,6 +4993,12 @@
               onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
             >
           {/each}
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={newWork}
+            disabled={!workReady || switching || sending}>+ OpenCode</Button
+          >
         </div>
         <div class="session-heading"><span class="label">THREADS</span></div>
         {#if directory}<input
@@ -4853,17 +5016,17 @@
                 status: 'done',
                 unread: false,
               }}
-              <div
-                class:active={acpAgent === thread.agent &&
-                  acpThread?.sessionId === thread.sessionId}
-                class="session-row"
-              >
+              {@const active =
+                (focusedPane === 'main' &&
+                  acpAgent === thread.agent &&
+                  acpThread?.sessionId === thread.sessionId) ||
+                (focusedPane !== 'main' &&
+                  focusedLeaf?.agent === thread.agent &&
+                  focusedLeaf?.thread?.sessionId === thread.sessionId)}
+              <div class:active class="session-row">
                 <button
                   class="session-item"
-                  aria-current={acpAgent === thread.agent &&
-                  acpThread?.sessionId === thread.sessionId
-                    ? 'page'
-                    : undefined}
+                  aria-current={active ? 'page' : undefined}
                   onclick={() => openAgent(thread.agent, thread)}
                   title={thread.title}
                 >
@@ -4901,7 +5064,17 @@
               </div>
             {:else}
               {@const session = row.session}
-              <div class:active={!acpAgent && session.id === sessionID} class="session-row">
+              {@const attention =
+                threadAttention[JSON.stringify(['opencode', directory, session.id])]}
+              {@const status = activeSessionIDs.includes(session.id)
+                ? 'working'
+                : (attention?.status ?? 'done')}
+              {@const active =
+                (!acpAgent && session.id === sessionID && focusedPane === 'main') ||
+                (focusedPane !== 'main' &&
+                  focusedLeaf?.agent === 'opencode' &&
+                  focusedLeaf?.thread?.sessionId === session.id)}
+              <div class:active class="session-row">
                 {#if editingSessionID === session.id}<div class="session-edit">
                     <input
                       aria-label="Session title"
@@ -4920,19 +5093,28 @@
                     >
                   </div>{:else}<button
                     class="session-item"
-                    aria-current={!acpAgent && session.id === sessionID ? 'page' : undefined}
+                    aria-current={active ? 'page' : undefined}
                     onclick={() => selectSession(session.id)}
                     title={session.title ?? 'Untitled session'}
                     ><span class="session-symbol">◇</span><span class="session-details"
                       ><strong>{session.title ?? 'Untitled session'}</strong><small
-                        >OpenCode · {activeSessionIDs.includes(session.id)
-                          ? 'Running'
-                          : (session.outcome ?? 'Idle')}</small
+                        ><span
+                          class="thread-status-dot"
+                          class:working={status === 'working'}
+                          class:waiting={status === 'waiting'}
+                          class:failed={status === 'failed'}
+                        ></span>OpenCode · {status === 'waiting'
+                          ? 'Waiting for input'
+                          : status}</small
                       ><small>Updated {new Date(session.time.updated).toLocaleString()}</small>
                       {#if openCodeUsage[`${directory}:${session.id}`] !== undefined}<small
                           >Context {openCodeUsage[`${directory}:${session.id}`]}%</small
                         >{/if}</span
-                    ></button
+                    >{#if attention?.unread}<span
+                        class="thread-unread"
+                        role="status"
+                        aria-label="Unread activity"
+                      ></span>{/if}</button
                   ><button
                     class="session-action"
                     aria-label={`Rename ${session.title ?? 'session'}`}
@@ -5010,12 +5192,7 @@
           disabled={runtimeState !== 'connected' &&
             !agentAvailability.some((agent) => agent.available)}
           >{directory ? directory.split('/').filter(Boolean).at(-1) : 'Workspace'} ⌄</button
-        ><span class="slash">/</span><strong
-          >{acpAgent
-            ? (acpThread?.title ?? `New ${acpAgent} thread`)
-            : (currentSession?.title ??
-              (newSessionMode === 'work' ? 'New work' : 'New session'))}</strong
-        >
+        ><span class="slash">/</span><strong>{focusedConversationTitle}</strong>
       </div>
       <div class="topbar-actions">
         {#if !acpAgent && sessionID && openCodeUsage[`${directory}:${sessionID}`] !== undefined}<span
@@ -5433,9 +5610,10 @@
       focused={focusedPane}
       {directory}
       {dark}
-      agents={agentAvailability}
+      agents={paneAgents}
       {sideChat}
       {client}
+      {setup}
       {coordinationMessages}
       {agentUsage}
       {agentRates}
@@ -5462,7 +5640,7 @@
       onbatchcomplete={completeAgentBatch}
       onpickedconsumed={markPickConsumed}
       onshortcut={keydownWorkspace}
-      onactivity={saveAgentThread}
+      onactivity={recordPaneActivity}
       focusPromptPane={promptFocusPane}
       onpromptfocused={() => (promptFocusPane = null)}
       running={(thread) => !!(thread && runningAgentThreads[agentThreadKey(thread)])}

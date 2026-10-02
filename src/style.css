@@ -1302,6 +1302,9 @@ button:disabled {
   overflow: auto;
   padding: 28px max(28px, calc((100% - 740px) / 2));
 }
+.chat-area > .conversation {
+  padding-inline: 20px;
+}
 .chat-area > .agent-header {
   display: flex;
   align-items: center;
@@ -1492,6 +1495,9 @@ button:disabled {
   flex: 0 0 auto;
   padding: 16px max(24px, calc((100% - 740px) / 2)) 22px;
   border-top: 1px solid var(--shell-divider);
+}
+.chat-area > .composer-wrap {
+  padding-inline: 20px;
 }
 .composer {
   border: 1px solid var(--sui-border);

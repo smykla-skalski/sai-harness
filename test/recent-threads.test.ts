@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AgentThread } from '../src/lib/acp.ts';
 import {
+  loadRecentNativeThreads,
   loadRecentThreadKeys,
   migrateRecentThreadKeys,
   nextRecentIndex,
@@ -22,6 +23,22 @@ void test('recent order starts from activity, then follows visits and survives r
   const visited = touchRecentThread(seeded, threads[0]);
   assert.deepEqual(visited, [threadKey(threads[0]), threadKey(threads[1]), threadKey(threads[2])]);
   assert.deepEqual(loadRecentThreadKeys(JSON.stringify(visited), threads), visited);
+});
+
+void test('native OpenCode threads join recent navigation without accepting malformed entries', () => {
+  const native: AgentThread = {
+    agent: 'opencode',
+    directory: '/alpha',
+    sessionId: 'native',
+    title: 'Native',
+    updated: 4,
+  };
+  const restored = loadRecentNativeThreads(
+    JSON.stringify([native, { ...native, agent: 'claude' }, { ...native, sessionId: 12 }]),
+  );
+  assert.deepEqual(restored, [native]);
+  assert.deepEqual(loadRecentThreadKeys(null, [...threads, ...restored])[0], threadKey(native));
+  assert.deepEqual(loadRecentNativeThreads('{bad'), []);
 });
 
 void test('missing threads and malformed storage cannot occupy shortcuts', () => {

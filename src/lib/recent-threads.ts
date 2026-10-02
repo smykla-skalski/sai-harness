@@ -4,6 +4,25 @@ export function threadKey(thread: AgentThread): string {
   return JSON.stringify([thread.agent, thread.directory, thread.sessionId]);
 }
 
+export function loadRecentNativeThreads(raw: string | null): AgentThread[] {
+  try {
+    const value: unknown = JSON.parse(raw ?? '[]');
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (thread): thread is AgentThread =>
+        thread &&
+        typeof thread === 'object' &&
+        thread.agent === 'opencode' &&
+        typeof thread.directory === 'string' &&
+        typeof thread.sessionId === 'string' &&
+        typeof thread.title === 'string' &&
+        typeof thread.updated === 'number',
+    );
+  } catch {
+    return [];
+  }
+}
+
 export function loadRecentThreadKeys(raw: string | null, threads: AgentThread[]): string[] {
   const available = new Set(threads.map(threadKey));
   if (raw === null) return threads.toSorted((a, b) => b.updated - a.updated).map(threadKey);
