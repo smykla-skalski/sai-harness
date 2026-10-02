@@ -132,13 +132,16 @@ describe('project context menus', () => {
     const defaultWorktree = $('.project-default-worktree-select');
     const linkedWorktree = $(`.project-worktree-select[title="${linked}"]`);
     await expect(project).toHaveAttribute('aria-expanded', 'true');
+    const controlled = await project.getAttribute('aria-controls');
+    expect(controlled).toBeTruthy();
+    await expect($(`[id="${controlled}"]`)).toBeDisplayed();
     await expect(defaultWorktree).toHaveAttribute('aria-current', 'page');
     await expect(linkedWorktree).toBeDisplayed();
 
     await project.click();
     await expect(project).toHaveAttribute('aria-expanded', 'false');
-    await expect(defaultWorktree).not.toExist();
-    await expect(linkedWorktree).not.toExist();
+    await expect(defaultWorktree).not.toBeDisplayed();
+    await expect(linkedWorktree).not.toBeDisplayed();
     expect(
       await browser.execute(() => JSON.parse(localStorage.getItem('sai-project-catalog') ?? '{}')),
     ).toHaveProperty('collapsedRepositories', [path]);
@@ -164,7 +167,7 @@ describe('project context menus', () => {
     await browser.refresh();
     await expect($('.project-group-label')).toHaveText('Ungrouped');
     await project.click();
-    await expect(defaultWorktree).not.toExist();
-    await expect(linkedWorktree).not.toExist();
+    await expect(defaultWorktree).not.toBeDisplayed();
+    await expect(linkedWorktree).not.toBeDisplayed();
   });
 });

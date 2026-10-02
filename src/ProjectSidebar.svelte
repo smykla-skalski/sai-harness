@@ -132,9 +132,14 @@
   let checkErrors = $state<Record<string, string>>({});
   let sendingCheck = $state<string | null>(null);
   let checking = false;
+  let collapsedRepositoryPaths = $derived(new Set(catalog.collapsedRepositories ?? []));
 
   function repositoryCollapsed(path: string): boolean {
-    return catalog.collapsedRepositories?.includes(path) ?? false;
+    return collapsedRepositoryPaths.has(path);
+  }
+
+  function repositoryWorktreesID(path: string): string {
+    return `project-worktrees-${encodeURIComponent(path)}`;
   }
 
   function checkState(check: PullRequestCheck) {
@@ -658,12 +663,14 @@
                 <button
                   class="project-repository-select"
                   aria-expanded={!repositoryCollapsed(path)}
+                  aria-controls={repositoryWorktreesID(path)}
                   title={path}
                   onmousedown={(event) => {
                     if (event.button === 2)
                       void openMenu({ kind: 'repository', path, groupID: group.id }, event);
                   }}
                   onclick={() => ontogglerepository(path)}
+                  {disabled}
                   ><span aria-hidden="true">{repositoryCollapsed(path) ? '▸' : '▾'}</span><span
                     >{repositoryName(path)}</span
                   ></button
@@ -688,7 +695,11 @@
                     )}>⋯</button
                 >
               </div>
-              {#if !repositoryCollapsed(path)}
+              <div
+                class="project-worktree-list"
+                id={repositoryWorktreesID(path)}
+                hidden={repositoryCollapsed(path)}
+              >
                 <div class:active={path === directory} class="project-worktree-row" role="group">
                   <button
                     class="project-worktree-select project-default-worktree-select"
@@ -736,7 +747,7 @@
                   </div>
                   {@render checkFailures(path, worktree)}
                 {/each}
-              {/if}
+              </div>
             </div>
           {:else}<p class="project-empty">No repositories</p>{/each}
         {/if}
@@ -755,12 +766,14 @@
               <button
                 class="project-repository-select"
                 aria-expanded={!repositoryCollapsed(path)}
+                aria-controls={repositoryWorktreesID(path)}
                 title={path}
                 onmousedown={(event) => {
                   if (event.button === 2)
                     void openMenu({ kind: 'repository', path, groupID: null }, event);
                 }}
                 onclick={() => ontogglerepository(path)}
+                {disabled}
                 ><span aria-hidden="true">{repositoryCollapsed(path) ? '▸' : '▾'}</span><span
                   >{repositoryName(path)}</span
                 ></button
@@ -782,7 +795,11 @@
                 >⋯</button
               >
             </div>
-            {#if !repositoryCollapsed(path)}
+            <div
+              class="project-worktree-list"
+              id={repositoryWorktreesID(path)}
+              hidden={repositoryCollapsed(path)}
+            >
               <div class:active={path === directory} class="project-worktree-row" role="group">
                 <button
                   class="project-worktree-select project-default-worktree-select"
@@ -830,7 +847,7 @@
                 </div>
                 {@render checkFailures(path, worktree)}
               {/each}
-            {/if}
+            </div>
           </div>
         {:else}<p class="project-empty">Add a repository to switch between projects.</p>{/each}
       </div>{/if}

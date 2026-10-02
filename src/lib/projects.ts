@@ -24,6 +24,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function normalizedCollapsedRepositories(repositories: string[], paths: string[]) {
+  const collapsedRepositories = [...new Set(paths.filter((path) => repositories.includes(path)))];
+  return collapsedRepositories.length ? { collapsedRepositories } : {};
+}
+
 export function loadProjectCatalog(raw: string | null, current: string): ProjectCatalog {
   let saved: unknown;
   try {
@@ -64,13 +69,7 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
   )
     repositories.unshift(current);
   const collapsedRepositories = Array.isArray(value.collapsedRepositories)
-    ? [
-        ...new Set(
-          value.collapsedRepositories.filter(
-            (path): path is string => typeof path === 'string' && repositories.includes(path),
-          ),
-        ),
-      ]
+    ? value.collapsedRepositories.filter((path): path is string => typeof path === 'string')
     : [];
   const assigned = new Set<string>();
   const groups: ProjectGroup[] = [];
@@ -96,7 +95,7 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
     repositories,
     groups,
     worktrees,
-    ...(collapsedRepositories.length ? { collapsedRepositories } : {}),
+    ...normalizedCollapsedRepositories(repositories, collapsedRepositories),
   };
 }
 
@@ -142,9 +141,11 @@ export function assignRepository(
 }
 
 export function removeRepository(catalog: ProjectCatalog, path: string): ProjectCatalog {
+  const { collapsedRepositories, ...remaining } = catalog;
+  const repositories = catalog.repositories.filter((repository) => repository !== path);
   return {
-    ...catalog,
-    repositories: catalog.repositories.filter((repository) => repository !== path),
+    ...remaining,
+    repositories,
     groups: catalog.groups.map((group) => ({
       ...group,
       repositories: group.repositories.filter((repository) => repository !== path),
@@ -152,8 +153,9 @@ export function removeRepository(catalog: ProjectCatalog, path: string): Project
     worktrees: Object.fromEntries(
       Object.entries(catalog.worktrees).filter(([parent]) => parent !== path),
     ),
-    collapsedRepositories: catalog.collapsedRepositories?.filter(
-      (repository) => repository !== path,
+    ...normalizedCollapsedRepositories(
+      repositories,
+      collapsedRepositories?.filter((repository) => repository !== path) ?? [],
     ),
   };
 }
@@ -211,6 +213,7 @@ export function replaceRepositoryPath(
   const repositories = [
     ...new Set(catalog.repositories.map((path) => (path === oldPath ? canonicalPath : path))),
   ];
+  const { collapsedRepositories, ...remaining } = catalog;
   const assigned = new Set<string>();
   const groups = catalog.groups.map((group) => ({
     ...group,
@@ -232,11 +235,13 @@ export function replaceRepositoryPath(
     ]),
   );
   return {
+    ...remaining,
     repositories,
     groups,
     worktrees,
-    collapsedRepositories: catalog.collapsedRepositories?.map((path) =>
-      path === oldPath ? canonicalPath : path,
+    ...normalizedCollapsedRepositories(
+      repositories,
+      collapsedRepositories?.map((path) => (path === oldPath ? canonicalPath : path)) ?? [],
     ),
   };
 }

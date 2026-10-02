@@ -78,7 +78,17 @@ await test('restores collapsed projects and follows repository path changes', ()
   assert.deepEqual(catalog.collapsedRepositories, ['/repo']);
   const renamed = replaceRepositoryPath(catalog, '/repo', '/canonical/repo');
   assert.deepEqual(renamed.collapsedRepositories, ['/canonical/repo']);
-  assert.deepEqual(removeRepository(renamed, '/canonical/repo').collapsedRepositories, []);
+  assert.equal(removeRepository(renamed, '/canonical/repo').collapsedRepositories, undefined);
+  const collision = replaceRepositoryPath(
+    {
+      ...catalog,
+      repositories: ['/repo', '/canonical/repo'],
+      collapsedRepositories: ['/repo', '/canonical/repo'],
+    },
+    '/repo',
+    '/canonical/repo',
+  );
+  assert.deepEqual(collision.collapsedRepositories, ['/canonical/repo']);
 });
 
 await test('keeps a created worktree beneath its repository after restart', () => {

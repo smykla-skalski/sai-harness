@@ -231,6 +231,9 @@ button:disabled {
   align-items: center;
   min-width: 0;
 }
+.project-worktree-list[hidden] {
+  display: none;
+}
 .project-worktree-pr {
   padding: 3px 4px;
   color: var(--sui-primary);
