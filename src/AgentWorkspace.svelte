@@ -36,6 +36,7 @@
     coordinationPrompt,
     type CoordinationMessage,
   } from './lib/coordination';
+  import { notificationStats, parseTaskNotification } from './lib/task-notification';
 
   interface Props {
     agent: AgentId;
@@ -957,6 +958,17 @@
             </div>
           </details>
         {/if}
+      {:else if entry.type === 'user' && parseTaskNotification(entry.text)}
+        {@const note = parseTaskNotification(entry.text)!}
+        <div class="agent-subagent-card" class:stopped={note.status !== 'completed'}>
+          <span class="agent-tool-status" class:failed={note.status === 'failed'}
+            >{note.status.replaceAll('_', ' ')}</span
+          >
+          <span class="agent-subagent-summary">{note.summary}</span>
+          {#each notificationStats(note) as stat (stat)}<span class="agent-subagent-stat"
+              >{stat}</span
+            >{/each}
+        </div>
       {:else}
         {@const attribution =
           entry.type === 'user'
@@ -1256,6 +1268,29 @@
   .agent-tool-status.failed,
   .agent-tool-error {
     color: var(--danger, #d66);
+  }
+  .agent-subagent-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 0 0 8px 42px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .agent-subagent-card.stopped {
+    border-style: dashed;
+  }
+  .agent-subagent-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .agent-subagent-stat {
+    color: var(--text-muted, #888);
+    font-size: 0.75rem;
+    white-space: nowrap;
   }
   .agent-tool-current {
     padding: 7px 12px;
