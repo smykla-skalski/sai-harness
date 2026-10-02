@@ -203,6 +203,7 @@ describe('command palette project flow', () => {
       );
     }, repoPath);
     await browser.refresh();
+    await expect($('.agent-launches button')).toBeDisplayed();
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
     await $('[data-kind="worktree"]').click();
