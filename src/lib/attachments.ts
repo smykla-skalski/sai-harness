@@ -15,6 +15,15 @@ export function clipboardFiles(event: {
   return Array.from(event.clipboardData?.files ?? []);
 }
 
+export function insertClipboardText(
+  value: string,
+  text: string,
+  start: number,
+  end: number,
+): string {
+  return `${value.slice(0, start)}${text}${value.slice(end)}`;
+}
+
 export async function stageClipboardFile(file: File): Promise<string> {
   if (!file.size || file.size > MAX_CLIPBOARD_FILE_SIZE)
     throw new Error(`Clipboard files must be between 1 byte and 20 MiB: ${file.name}`);

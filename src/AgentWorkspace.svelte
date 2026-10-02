@@ -25,6 +25,7 @@
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     clipboardFiles,
+    insertClipboardText,
     removeClipboardFile,
     stageClipboardFile,
     stageClipboardImage,
@@ -94,6 +95,7 @@
   let draft = $state('');
   let images = $state<BrowserAttachment[]>([]);
   let clipboardAttachments = $state<{ path: string; name: string; image: boolean }[]>([]);
+  let pendingPaste: Promise<void> = Promise.resolve();
   let lastPicked = '';
   let lastPrefill = '';
   let lastExternalPrompt = '';
@@ -113,6 +115,13 @@
     const files = clipboardFiles(event);
     if (!files.length) return;
     event.preventDefault();
+    const pastedText = event.clipboardData?.getData('text/plain') ?? '';
+    if (pastedText && event.target instanceof HTMLTextAreaElement) {
+      const input = event.target;
+      const caret = input.selectionStart + pastedText.length;
+      draft = insertClipboardText(draft, pastedText, input.selectionStart, input.selectionEnd);
+      void tick().then(() => input.setSelectionRange(caret, caret));
+    }
     const current = generation;
     const staged = await Promise.all(
       files.map(async (file) => {
@@ -579,11 +588,15 @@
   });
 
   async function send(externalText?: string) {
+    if (externalText === undefined) await pendingPaste;
     const external = externalText !== undefined;
-    const text = (externalText ?? draft).trim();
+    const text =
+      (externalText ?? draft).trim() ||
+      (!external && clipboardAttachments.length ? 'Please review the attachments.' : '');
     const command = text.toLowerCase();
     if (
       !external &&
+      !clipboardAttachments.length &&
       !isBusy &&
       ready &&
       directory &&
@@ -1033,7 +1046,9 @@
         data-pane-prompt
         aria-label={`Message ${name}`}
         bind:value={draft}
-        onpaste={(event) => void pasteFiles(event)}
+        onpaste={(event) => {
+          pendingPaste = Promise.all([pendingPaste, pasteFiles(event)]).then(() => {});
+        }}
         onkeydown={keydown}
         rows="3"
         placeholder={`Message ${name}…`}

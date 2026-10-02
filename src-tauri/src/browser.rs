@@ -186,6 +186,18 @@ impl CaptureStore {
 }
 
 const SHORTCUT_SCRIPT: &str = r#"
+  const copySelection = () => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    const text = selection.toString();
+    if (!text.trim()) return;
+    const node = selection.anchorNode;
+    const element = node instanceof Element ? node : node?.parentElement;
+    if (element?.closest('textarea, input, [contenteditable]')) return;
+    navigator.clipboard?.writeText(text).catch(() => {});
+  };
+  document.addEventListener('pointerup', copySelection);
+  document.addEventListener('keyup', copySelection);
   (() => {
     const route = (mode) => window.__TAURI_INTERNALS__?.invoke('browser_route', {
       mode,

@@ -7,6 +7,7 @@
   import {
     clipboardFiles,
     fileUri,
+    insertClipboardText,
     removeClipboardFile,
     stageClipboardFile,
   } from './lib/attachments';
@@ -36,6 +37,7 @@
   let error = $state('');
   let draft = $state('');
   let attachments = $state<{ path: string; name: string }[]>([]);
+  let pendingPaste: Promise<void> = Promise.resolve();
   let replies = $state<{ id: string; role: string; text: string }[]>([]);
   let baseline = new Set<string>();
   let inboxID: string | null = null;
@@ -46,6 +48,13 @@
     const files = clipboardFiles(event);
     if (!files.length) return;
     event.preventDefault();
+    const pastedText = event.clipboardData?.getData('text/plain') ?? '';
+    if (pastedText && event.target instanceof HTMLTextAreaElement) {
+      const input = event.target;
+      const caret = input.selectionStart + pastedText.length;
+      draft = insertClipboardText(draft, pastedText, input.selectionStart, input.selectionEnd);
+      void tick().then(() => input.setSelectionRange(caret, caret));
+    }
     const staged = await Promise.all(
       files.map(async (file) => {
         try {
@@ -156,6 +165,7 @@
   });
 
   async function send() {
+    await pendingPaste;
     const text = draft.trim();
     if ((!text && !attachments.length) || !client || !forkID || busy) return;
     const files = [...attachments];
@@ -236,7 +246,9 @@
       <textarea
         bind:this={prompt}
         bind:value={draft}
-        onpaste={(event) => void pasteFiles(event)}
+        onpaste={(event) => {
+          pendingPaste = Promise.all([pendingPaste, pasteFiles(event)]).then(() => {});
+        }}
         data-pane-prompt
         aria-label="Side chat question"
         placeholder="Ask about this thread…"

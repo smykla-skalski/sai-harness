@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   clipboardFiles,
   fileUri,
+  insertClipboardText,
   MAX_CLIPBOARD_FILE_SIZE,
   stageClipboardFile,
 } from '../src/lib/attachments.ts';
@@ -17,6 +18,11 @@ await test('clipboard files are distinct from ordinary text paste', () => {
   assert.deepEqual(clipboardFiles({ clipboardData: { files: [file] } }), [file]);
   assert.deepEqual(clipboardFiles({ clipboardData: { files: [] } }), []);
   assert.deepEqual(clipboardFiles({}), []);
+});
+
+await test('mixed clipboard paste preserves text at the caret', () => {
+  assert.equal(insertClipboardText('before after', 'and ', 7, 7), 'before and after');
+  assert.equal(insertClipboardText('before after', 'new', 7, 12), 'before new');
 });
 
 await test('reject oversized clipboard files before crossing the Tauri bridge', async () => {

@@ -92,6 +92,7 @@
   import {
     clipboardFiles,
     fileUri,
+    insertClipboardText,
     removeClipboardFile,
     stageClipboardFile,
   } from './lib/attachments';
@@ -342,7 +343,9 @@
   });
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
+  let pendingPaste: Promise<void> = Promise.resolve();
   const clipboardAttachmentPaths = new SvelteSet<string>();
+  const clipboardAttachmentNames = new SvelteMap<string, string>();
   let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
   let diffComments = $state<Record<string, DiffComment[]>>({});
   let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
@@ -3087,6 +3090,7 @@
   function removeAttachedFile(path: string) {
     attachedFiles = attachedFiles.filter((item) => item !== path);
     if (clipboardAttachmentPaths.delete(path)) void removeClipboardFile(path);
+    clipboardAttachmentNames.delete(path);
     const pickedText = pickedImageText.get(path);
     if (pickedText) {
       draft = draft.replace(pickedText, '').trim();
@@ -3099,6 +3103,7 @@
     draft = draftWithoutPickedImages(draft);
     for (const path of attachedFiles) {
       if (clipboardAttachmentPaths.delete(path)) void removeClipboardFile(path);
+      clipboardAttachmentNames.delete(path);
       if (inFlightCaptures.has(path)) continue;
       if (!pickedImageText.delete(path)) continue;
       void invoke('browser_remove_capture', { path });
@@ -3885,6 +3890,13 @@
     const files = clipboardFiles(event);
     if (!files.length) return;
     event.preventDefault();
+    const pastedText = event.clipboardData?.getData('text/plain') ?? '';
+    if (pastedText && event.target instanceof HTMLTextAreaElement) {
+      const input = event.target;
+      const caret = input.selectionStart + pastedText.length;
+      draft = insertClipboardText(draft, pastedText, input.selectionStart, input.selectionEnd);
+      void tick().then(() => input.setSelectionRange(caret, caret));
+    }
     const current = selection;
     const currentDirectory = directory;
     const staged = await Promise.all(
@@ -3907,6 +3919,7 @@
         continue;
       }
       clipboardAttachmentPaths.add(path);
+      clipboardAttachmentNames.set(path, file.name || 'clipboard-image.png');
       attachedFiles = [...attachedFiles, path];
     }
   }
@@ -4470,8 +4483,9 @@
   }
 
   async function send() {
+    await pendingPaste;
     const command = draft.trim().toLowerCase();
-    if (command === '/model' || command === '/effort') {
+    if (!attachedFiles.length && (command === '/model' || command === '/effort')) {
       if (!inputReady || running || sending || switching) return;
       draft = '';
       composerPickerOpen = command.slice(1) as 'model' | 'effort';
@@ -4482,6 +4496,7 @@
     const path = directory;
     const text = draft.trim();
     const files = [...attachedFiles];
+    let accepted = false;
     for (const file of files) {
       if (pickedImageText.has(file)) inFlightCaptures.add(file);
     }
@@ -4537,9 +4552,17 @@
         text,
         files: files.map((filePath) => ({
           uri: fileUri(filePath),
-          name: filePath.split(/[\\/]/).at(-1),
+          name: clipboardAttachmentNames.get(filePath) ?? filePath.split(/[\\/]/).at(-1),
         })),
       });
+      accepted = true;
+      const staged = files.filter((file) => clipboardAttachmentPaths.delete(file));
+      staged.forEach((file) => clipboardAttachmentNames.delete(file));
+      if (staged.length)
+        void client.session
+          .wait({ sessionID: id })
+          .catch(() => {})
+          .finally(() => staged.forEach((file) => void removeClipboardFile(file)));
       for (const file of files) {
         if (!pickedImageText.delete(file)) continue;
         void invoke('browser_remove_capture', { path: file });
@@ -4547,12 +4570,16 @@
       if (current === selection && path === directory) await refreshSession(id);
     } catch (cause) {
       if (current === selection && path === directory) {
-        draft = [text, draft.trim()].filter(Boolean).join('\n\n');
-        attachedFiles = [...files, ...attachedFiles.filter((file) => !files.includes(file))];
+        if (!accepted) {
+          draft = [text, draft.trim()].filter(Boolean).join('\n\n');
+          attachedFiles = [...files, ...attachedFiles.filter((file) => !files.includes(file))];
+        }
         running = false;
         error = describe(cause);
       } else {
         for (const file of files) {
+          if (clipboardAttachmentPaths.delete(file)) void removeClipboardFile(file);
+          clipboardAttachmentNames.delete(file);
           if (!pickedImageText.delete(file)) continue;
           void invoke('browser_remove_capture', { path: file });
         }
@@ -5292,8 +5319,8 @@
                 <div class="composer">
                   {#if attachedFiles.length}<div class="attachments">
                       {#each attachedFiles as path (path)}<span
-                          >{path.split(/[\\/]/).at(-1)}<button
-                            aria-label={`Remove ${path.split(/[\\/]/).at(-1)}`}
+                          >{clipboardAttachmentNames.get(path) ?? path.split(/[\\/]/).at(-1)}<button
+                            aria-label={`Remove ${clipboardAttachmentNames.get(path) ?? path.split(/[\\/]/).at(-1)}`}
                             onclick={() => removeAttachedFile(path)}>×</button
                           ></span
                         >{/each}
@@ -5302,7 +5329,9 @@
                     data-pane-prompt
                     aria-label="Message"
                     bind:value={draft}
-                    onpaste={(event) => void pasteFiles(event)}
+                    onpaste={(event) => {
+                      pendingPaste = Promise.all([pendingPaste, pasteFiles(event)]).then(() => {});
+                    }}
                     onkeydown={keydown}
                     rows="3"
                     placeholder={inputReady
