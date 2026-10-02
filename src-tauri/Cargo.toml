@@ -27,7 +27,7 @@ notify-rust = "4.18.1"
 portable-pty = "0.9.0"
 shell-words = "1.1.1"
 uuid = { version = "1", features = ["v4"] }
-base64 = "0.22"
+base64 = "0.23"
 nix = { version = "0.31", features = ["signal"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
