@@ -19,6 +19,12 @@ pub struct SnapshotInfo {
 
 struct PrivateIndex(PathBuf);
 
+struct SnapshotTree {
+    index: PrivateIndex,
+    files: HashSet<PathBuf>,
+    links: HashMap<PathBuf, String>,
+}
+
 impl Drop for PrivateIndex {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
@@ -148,10 +154,7 @@ fn git_filename(bytes: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
-fn paths(
-    root: &Path,
-    id: &str,
-) -> Result<(PrivateIndex, HashSet<PathBuf>, HashMap<PathBuf, String>), String> {
+fn paths(root: &Path, id: &str) -> Result<SnapshotTree, String> {
     let index = private_index(root, false)?;
     git(root, &["read-tree", id], Some(&index.0))?;
     let output = git(root, &["ls-files", "--stage", "-z"], Some(&index.0))?;
@@ -178,7 +181,11 @@ fn paths(
         }
         files.insert(path);
     }
-    Ok((index, files, links))
+    Ok(SnapshotTree {
+        index,
+        files,
+        links,
+    })
 }
 
 fn safe_path(root: &Path, relative: &Path) -> Result<PathBuf, String> {
@@ -245,30 +252,30 @@ fn known_directory(
 }
 
 fn apply(root: &Path, target: &str, previous: &str) -> Result<(), String> {
-    let (target_index, target_files, target_links) = paths(root, target)?;
-    let (_, previous_files, previous_links) = paths(root, previous)?;
-    if target_links != previous_links {
+    let target = paths(root, target)?;
+    let previous = paths(root, previous)?;
+    if target.links != previous.links {
         return Err("Restore cannot change a submodule's checked-out commit.".into());
     }
-    for relative in target_files.union(&previous_files) {
-        check_parent_symlinks(root, relative, &previous_files, &target_files)?;
+    for relative in target.files.union(&previous.files) {
+        check_parent_symlinks(root, relative, &previous.files, &target.files)?;
     }
-    for relative in &target_files {
-        if target_links.contains_key(relative) {
+    for relative in &target.files {
+        if target.links.contains_key(relative) {
             continue;
         }
         let path = safe_path(root, relative)?;
-        if previous_files.contains(relative) && path.is_dir() {
+        if previous.files.contains(relative) && path.is_dir() {
             return Err(format!(
                 "An external directory blocks restore: {}",
                 relative.display()
             ));
         }
-        if !previous_files.contains(relative)
+        if !previous.files.contains(relative)
             && path.symlink_metadata().is_ok()
             && !(path.is_dir()
-                && previous_files.iter().any(|file| file.starts_with(relative))
-                && known_directory(root, &path, &previous_files)?)
+                && previous.files.iter().any(|file| file.starts_with(relative))
+                && known_directory(root, &path, &previous.files)?)
         {
             return Err(format!(
                 "An ignored or external file blocks restore: {}",
@@ -276,7 +283,7 @@ fn apply(root: &Path, target: &str, previous: &str) -> Result<(), String> {
             ));
         }
     }
-    for relative in previous_files.difference(&target_files) {
+    for relative in previous.files.difference(&target.files) {
         let path = safe_path(root, relative)?;
         if path
             .symlink_metadata()
@@ -288,7 +295,7 @@ fn apply(root: &Path, target: &str, previous: &str) -> Result<(), String> {
             ));
         }
     }
-    for relative in previous_files.difference(&target_files) {
+    for relative in previous.files.difference(&target.files) {
         let path = safe_path(root, relative)?;
         if path.symlink_metadata().is_ok() {
             fs::remove_file(&path).map_err(|error| error.to_string())?;
@@ -304,7 +311,7 @@ fn apply(root: &Path, target: &str, previous: &str) -> Result<(), String> {
     git(
         root,
         &["checkout-index", "--all", "--force"],
-        Some(&target_index.0),
+        Some(&target.index.0),
     )?;
     Ok(())
 }
