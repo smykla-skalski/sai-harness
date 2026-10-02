@@ -672,6 +672,24 @@
       ? [selectedSession, ...sessions]
       : sessions,
   );
+  let visibleThreads = $derived(
+    [
+      ...visibleSessions.map((session) => ({
+        kind: 'opencode' as const,
+        session,
+        updated: session.time.updated,
+      })),
+      ...agentThreads
+        .filter(
+          (thread) =>
+            thread.directory === directory &&
+            `${thread.title} ${thread.agent}`
+              .toLowerCase()
+              .includes(sessionSearch.trim().toLowerCase()),
+        )
+        .map((thread) => ({ kind: 'acp' as const, thread, updated: thread.updated })),
+    ].toSorted((a, b) => b.updated - a.updated),
+  );
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
   );
@@ -4790,13 +4808,7 @@
       />
       <div class="sidebar-sessions">
         <div class="session-heading">
-          <span class="label">SESSIONS</span><Button
-            size="sm"
-            variant="ghost"
-            onclick={newWork}
-            disabled={!workReady || switching || sending}
-            aria-label="New work">New work</Button
-          >
+          <span class="label">AGENTS</span>
           <Button
             size="sm"
             variant="ghost"
@@ -4808,8 +4820,13 @@
             aria-label="New plan">New plan</Button
           >
         </div>
-        <div class="session-heading"><span class="label">OTHER AGENTS</span></div>
         <div class="agent-launches">
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={newWork}
+            disabled={!workReady || switching || sending}>+ OpenCode</Button
+          >
           {#each agentAvailability as agent (agent.id)}
             <Button
               size="sm"
@@ -4820,54 +4837,7 @@
             >
           {/each}
         </div>
-        {#each agentThreads.filter((thread) => thread.directory === directory) as thread (`${thread.agent}:${thread.sessionId}`)}
-          {@const attention = threadAttention[threadKey(thread)] ?? {
-            status: 'done',
-            unread: false,
-          }}
-          <div
-            class:active={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId}
-            class="session-row"
-          >
-            <button
-              class="session-item"
-              aria-current={acpAgent === thread.agent && acpThread?.sessionId === thread.sessionId
-                ? 'page'
-                : undefined}
-              onclick={() => openAgent(thread.agent, thread)}
-              title={thread.title}
-            >
-              <span class="session-symbol">◇</span><span class="session-details"
-                ><strong>{thread.title}</strong><small
-                  ><span
-                    class="thread-status-dot"
-                    class:working={attention.status === 'working'}
-                    class:waiting={attention.status === 'waiting'}
-                    class:failed={attention.status === 'failed'}
-                  ></span>{thread.agent}
-                  · {attention.status === 'waiting' ? 'Waiting for input' : attention.status}
-                  {#if agentUsage[threadKey(thread)]?.context !== undefined}
-                    · Context {agentUsage[threadKey(thread)].context}%
-                  {/if}</small
-                >{#if agentRates[thread.agent]?.length}<small
-                    >{agentRates[thread.agent]
-                      .map((rate) => `${rate.label} ${rate.remaining}% left`)
-                      .join(' · ')}</small
-                  >{/if}</span
-              >
-              {#if attention.unread}<span
-                  class="thread-unread"
-                  role="status"
-                  aria-label="Unread activity"
-                ></span>{/if}
-            </button>
-            <button
-              class="session-action"
-              aria-label={`Remove ${thread.title} from Sail`}
-              onclick={() => removeAgentThread(thread)}>×</button
-            >
-          </div>
-        {/each}
+        <div class="session-heading"><span class="label">THREADS</span></div>
         {#if directory}<input
             class="session-search"
             aria-label="Search sessions"
@@ -4876,55 +4846,109 @@
             oninput={changeSearch}
           />{/if}
         <nav class="session-list" aria-label="Sessions">
-          {#each visibleSessions as session (session.id)}<div
-              class:active={!acpAgent && session.id === sessionID}
-              class="session-row"
-            >
-              {#if editingSessionID === session.id}<div class="session-edit">
-                  <input
-                    aria-label="Session title"
-                    bind:value={editedTitle}
-                    onkeydown={(event) => {
-                      if (event.key === 'Enter') void saveRename();
-                      if (event.key === 'Escape') {
-                        event.preventDefault();
-                        editingSessionID = null;
-                      }
-                    }}
-                  />
-                  <button aria-label="Save title" onclick={saveRename}>✓</button>
-                  <button aria-label="Cancel rename" onclick={() => (editingSessionID = null)}
-                    >×</button
-                  >
-                </div>{:else}<button
+          {#each visibleThreads as row (row.kind === 'acp' ? `acp:${row.thread.agent}:${row.thread.sessionId}` : `opencode:${row.session.id}`)}
+            {#if row.kind === 'acp'}
+              {@const thread = row.thread}
+              {@const attention = threadAttention[threadKey(thread)] ?? {
+                status: 'done',
+                unread: false,
+              }}
+              <div
+                class:active={acpAgent === thread.agent &&
+                  acpThread?.sessionId === thread.sessionId}
+                class="session-row"
+              >
+                <button
                   class="session-item"
-                  aria-current={!acpAgent && session.id === sessionID ? 'page' : undefined}
-                  onclick={() => selectSession(session.id)}
-                  title={session.title ?? 'Untitled session'}
-                  ><span class="session-symbol">◇</span><span class="session-details"
-                    ><strong>{session.title ?? 'Untitled session'}</strong><small
-                      >{session.agent ?? 'Unknown'} · {activeSessionIDs.includes(session.id)
-                        ? 'Running'
-                        : (session.outcome ?? 'Idle')}</small
-                    ><small>Updated {new Date(session.time.updated).toLocaleString()}</small>
-                    {#if openCodeUsage[`${directory}:${session.id}`] !== undefined}<small
-                        >Context {openCodeUsage[`${directory}:${session.id}`]}%</small
+                  aria-current={acpAgent === thread.agent &&
+                  acpThread?.sessionId === thread.sessionId
+                    ? 'page'
+                    : undefined}
+                  onclick={() => openAgent(thread.agent, thread)}
+                  title={thread.title}
+                >
+                  <span class="session-symbol">◇</span><span class="session-details"
+                    ><strong>{thread.title}</strong><small
+                      ><span
+                        class="thread-status-dot"
+                        class:working={attention.status === 'working'}
+                        class:waiting={attention.status === 'waiting'}
+                        class:failed={attention.status === 'failed'}
+                      ></span>{thread.agent}
+                      · {attention.status === 'waiting'
+                        ? 'Waiting for input'
+                        : attention.status}
+                      {#if agentUsage[threadKey(thread)]?.context !== undefined}
+                        · Context {agentUsage[threadKey(thread)].context}%
+                      {/if}</small
+                    >{#if agentRates[thread.agent]?.length}<small
+                        >{agentRates[thread.agent]
+                          .map((rate) => `${rate.label} ${rate.remaining}% left`)
+                          .join(' · ')}</small
                       >{/if}</span
-                  ></button
-                ><button
+                  >
+                  {#if attention.unread}<span
+                      class="thread-unread"
+                      role="status"
+                      aria-label="Unread activity"
+                    ></span>{/if}
+                </button>
+                <button
                   class="session-action"
-                  aria-label={`Rename ${session.title ?? 'session'}`}
-                  onclick={() => startRename(session)}>✎</button
-                ><button
-                  class="session-action"
-                  aria-label={`Delete ${session.title ?? 'session'}`}
-                  onclick={() => removeSession(session)}>×</button
-                >{/if}
-            </div>{:else}<p class="session-empty">
+                  aria-label={`Remove ${thread.title} from Sail`}
+                  onclick={() => removeAgentThread(thread)}>×</button
+                >
+              </div>
+            {:else}
+              {@const session = row.session}
+              <div class:active={!acpAgent && session.id === sessionID} class="session-row">
+                {#if editingSessionID === session.id}<div class="session-edit">
+                    <input
+                      aria-label="Session title"
+                      bind:value={editedTitle}
+                      onkeydown={(event) => {
+                        if (event.key === 'Enter') void saveRename();
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          editingSessionID = null;
+                        }
+                      }}
+                    />
+                    <button aria-label="Save title" onclick={saveRename}>✓</button>
+                    <button aria-label="Cancel rename" onclick={() => (editingSessionID = null)}
+                      >×</button
+                    >
+                  </div>{:else}<button
+                    class="session-item"
+                    aria-current={!acpAgent && session.id === sessionID ? 'page' : undefined}
+                    onclick={() => selectSession(session.id)}
+                    title={session.title ?? 'Untitled session'}
+                    ><span class="session-symbol">◇</span><span class="session-details"
+                      ><strong>{session.title ?? 'Untitled session'}</strong><small
+                        >OpenCode · {activeSessionIDs.includes(session.id)
+                          ? 'Running'
+                          : (session.outcome ?? 'Idle')}</small
+                      ><small>Updated {new Date(session.time.updated).toLocaleString()}</small>
+                      {#if openCodeUsage[`${directory}:${session.id}`] !== undefined}<small
+                          >Context {openCodeUsage[`${directory}:${session.id}`]}%</small
+                        >{/if}</span
+                    ></button
+                  ><button
+                    class="session-action"
+                    aria-label={`Rename ${session.title ?? 'session'}`}
+                    onclick={() => startRename(session)}>✎</button
+                  ><button
+                    class="session-action"
+                    aria-label={`Delete ${session.title ?? 'session'}`}
+                    onclick={() => removeSession(session)}>×</button
+                  >{/if}
+              </div>
+            {/if}
+          {:else}<p class="session-empty">
               {sessionLoading
                 ? 'Loading sessions…'
                 : directory
-                  ? 'No OpenCode sessions found'
+                  ? 'No threads found'
                   : 'Choose a repository to begin'}
             </p>{/each}
         </nav>
@@ -5035,19 +5059,6 @@
                 : detailsOpen && activeSideTab === 'changes'}
             title="Toggle Changes (⌘L)">Changes</Button
           >{/if}
-        {#if !acpAgent}<span role="status"
-            ><Badge tone={workReady ? 'success' : 'neutral'}
-              >{running
-                ? 'Running'
-                : workReady
-                  ? 'Ready'
-                  : setupLoading
-                    ? 'Checking'
-                    : setup?.model.state === 'action'
-                      ? 'Model needed'
-                      : 'Unavailable'}</Badge
-            ></span
-          >{/if}
       </div>
     </header>
     {#if $settingsError}<p class="notice error" role="alert">{$settingsError}</p>{/if}
@@ -5113,6 +5124,25 @@
               />
             {/key}
           {:else}
+            <div class="agent-header">
+              <div class="agent-heading">
+                <strong>OpenCode</strong><span
+                  >{currentSession?.title ??
+                    (newSessionMode === 'work' ? 'New work' : 'New thread')}</span
+                >
+              </div>
+              <Badge tone={running ? 'warning' : workReady ? 'success' : 'neutral'}
+                >{running
+                  ? 'Working'
+                  : workReady
+                    ? 'Ready'
+                    : setupLoading
+                      ? 'Connecting'
+                      : setup?.model.state === 'action'
+                        ? 'Model needed'
+                        : 'Offline'}</Badge
+              >
+            </div>
             <div
               class="conversation"
               bind:this={chatScroll}

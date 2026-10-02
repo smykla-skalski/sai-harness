@@ -1302,6 +1302,29 @@ button:disabled {
   overflow: auto;
   padding: 28px max(28px, calc((100% - 740px) / 2));
 }
+.chat-area > .agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-area > .agent-header .agent-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.chat-area > .agent-header .agent-heading strong {
+  flex: none;
+}
+.chat-area > .agent-header .agent-heading span {
+  overflow: hidden;
+  opacity: 0.65;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .welcome {
   display: flex;
   flex-direction: column;
