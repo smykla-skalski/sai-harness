@@ -718,6 +718,28 @@ pub async fn acp_load_session(
     cwd: String,
     session_id: String,
 ) -> Result<Value, String> {
+    restore_session(manager, browser, agent, cwd, session_id, "session/load").await
+}
+
+#[tauri::command]
+pub async fn acp_resume_session(
+    manager: State<'_, AgentManager>,
+    browser: State<'_, crate::browser_agent::BrowserManager>,
+    agent: String,
+    cwd: String,
+    session_id: String,
+) -> Result<Value, String> {
+    restore_session(manager, browser, agent, cwd, session_id, "session/resume").await
+}
+
+async fn restore_session(
+    manager: State<'_, AgentManager>,
+    browser: State<'_, crate::browser_agent::BrowserManager>,
+    agent: String,
+    cwd: String,
+    session_id: String,
+    method: &'static str,
+) -> Result<Value, String> {
     let runtime = connection(&manager, &agent)?;
     let browser = browser.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -730,7 +752,7 @@ pub async fn acp_load_session(
             .map_err(|error| error.to_string())?
             .insert(session_id.clone(), PathBuf::from(&cwd));
         let result = runtime.request(
-            "session/load",
+            method,
             json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[mcp_server]}),
             Duration::from_secs(60),
         );

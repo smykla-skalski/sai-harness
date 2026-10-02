@@ -128,13 +128,21 @@
   let diffError = $state('');
   let selectedFile = $state<string | null>(null);
   let diffGeneration = 0;
+  let diffRevision = '';
+  let diffRevisionPath = '';
 
-  async function refreshDiff() {
+  async function refreshDiff(quiet = false) {
     const current = ++diffGeneration;
-    diffLoading = true;
+    const path = directory;
     try {
-      const files = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path: directory });
-      if (current !== diffGeneration) return;
+      const revision = await invoke<string>('working_tree_revision', { path });
+      if (current !== diffGeneration || path !== directory) return;
+      if (quiet && diffRevisionPath === path && diffRevision === revision) return;
+      diffLoading = true;
+      const files = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path });
+      if (current !== diffGeneration || path !== directory) return;
+      diffRevisionPath = path;
+      diffRevision = revision;
       diffs = files;
       selectedFile =
         files.find((file) => file.file === selectedFile)?.file ?? files[0]?.file ?? null;
@@ -149,7 +157,7 @@
   $effect(() => {
     if ('direction' in pane || pane.id === 'main' || !changesPanes.includes(pane.id)) return;
     void refreshDiff();
-    const timer = setInterval(() => void refreshDiff(), 5000);
+    const timer = setInterval(() => void refreshDiff(true), 5000);
     return () => clearInterval(timer);
   });
 

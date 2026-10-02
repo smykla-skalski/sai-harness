@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { updateEntries } from '../src/lib/acp.ts';
+import {
+  forgetRecentTranscript,
+  loadRecentTranscript,
+  saveRecentTranscript,
+  updateEntries,
+  type AgentThread,
+} from '../src/lib/acp.ts';
 
 void test('ACP chunks stream into one assistant message and tool updates keep their place', () => {
   const first = updateEntries([], {
@@ -51,4 +57,44 @@ void test('ACP tool calls keep terminal references across updates', () => {
     content: [{ type: 'content', content: { type: 'text', text: 'Finished' } }],
   });
   assert.deepEqual(completed[0]?.type === 'tool' && completed[0].terminalIds, ['terminal-1']);
+});
+
+void test('recent transcript cache keeps the latest entries within a size budget', () => {
+  const values = new Map<string, string>();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+    },
+  });
+  try {
+    const thread: AgentThread = {
+      agent: 'codex',
+      directory: '/repo',
+      sessionId: 'old',
+      title: 'Old',
+      updated: 0,
+    };
+    const entries = Array.from({ length: 60 }, (_, index) => ({
+      id: String(index),
+      type: 'assistant' as const,
+      text: String(index).padEnd(100, 'x'),
+    }));
+    saveRecentTranscript(thread, entries);
+    const saved = loadRecentTranscript(thread);
+    assert.equal(saved.length, 50);
+    assert.equal(saved[0]?.id, '10');
+    assert.equal(saved.at(-1)?.id, '59');
+
+    saveRecentTranscript(thread, [{ id: 'large', type: 'assistant', text: 'x'.repeat(500_000) }]);
+    assert.ok((values.get('sai-agent-transcript-cache')?.length ?? 0) < 130_000);
+    assert.equal(loadRecentTranscript(thread).at(-1)?.id, 'large');
+    forgetRecentTranscript(thread);
+    assert.deepEqual(loadRecentTranscript(thread), []);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
 });

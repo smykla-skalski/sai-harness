@@ -71,6 +71,7 @@
   } from './lib/panes';
   import {
     acp,
+    forgetRecentTranscript,
     loadAgentThreads,
     saveAgentThreads,
     type AgentEntry,
@@ -320,6 +321,8 @@
   let olderMessageCursor = $state<string | null>(null);
   let loadingOlder = $state(false);
   let liveText = $state<Record<string, Record<number, string>>>({});
+  let pendingTextDeltas: Record<string, Record<number, string[]>> = {};
+  let textTimer: ReturnType<typeof setTimeout> | undefined;
   let timelineSession = '';
   let timelineRefresh = 0;
   let followChat = true;
@@ -341,6 +344,8 @@
   let sideTab = $state<SideTab>('plan');
   let detailsOpen = $state(true);
   let diffRefresh = 0;
+  let diffRevision = '';
+  let diffRevisionPath = '';
   let historyRefresh = 0;
   let draft = $state('');
   let mobileView = $state<'sessions' | 'chat' | 'details'>('chat');
@@ -440,14 +445,19 @@
     void refreshDiff();
   }
 
-  async function refreshAgentDiff() {
+  async function refreshAgentDiff(quiet = false) {
     if (!directory) return;
     const path = directory;
     const generation = ++diffRefresh;
-    diffLoading = true;
     try {
+      const revision = await invoke<string>('working_tree_revision', { path });
+      if (generation !== diffRefresh || path !== directory) return;
+      if (quiet && diffRevisionPath === path && diffRevision === revision) return;
+      diffLoading = true;
       const next = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path });
       if (generation !== diffRefresh || path !== directory) return;
+      diffRevisionPath = path;
+      diffRevision = revision;
       diffs = next;
       diffError = '';
       selectedFilePath = selectedDiffFile(next, selectedFilePath, path);
@@ -881,7 +891,7 @@
     diffPollTimer = setInterval(() => {
       const visible = !window.matchMedia('(max-width: 850px)').matches || mobileView === 'details';
       if (acpAgent && agentChangesOpen && visible && !diffLoading) {
-        void refreshAgentDiff();
+        void refreshAgentDiff(true);
         return;
       }
       if (
@@ -907,6 +917,8 @@
       clearTimeout(inboxRefreshTimer);
       clearInterval(healthTimer);
       clearInterval(diffPollTimer);
+      clearTimeout(textTimer);
+      pendingTextDeltas = {};
       unlistenAgentEvents?.();
       unlistenBrowserAccess?.();
       unlistenAgentTerminals?.();
@@ -1412,7 +1424,10 @@
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
       saveAgentThreads(agentThreads);
       forgetMissingRecentThreads();
-      for (const thread of removedThreads) forgetThreadAttention(thread);
+      for (const thread of removedThreads) {
+        forgetThreadAttention(thread);
+        forgetRecentTranscript(thread);
+      }
       delete paneLayouts[path];
       persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
@@ -2810,6 +2825,7 @@
       acpThread = null;
       savePaneLayout(updatePane(paneLayout, 'main', { agent: thread.agent, thread: null }));
     }
+    void tick().then(() => forgetRecentTranscript(thread));
   }
 
   function agentThreadKey(thread: AgentThread): string {
@@ -3372,6 +3388,9 @@
   }
 
   function resetTimeline() {
+    clearTimeout(textTimer);
+    textTimer = undefined;
+    pendingTextDeltas = {};
     ++timelineRefresh;
     timelineSession = '';
     messages = [];
@@ -3505,8 +3524,11 @@
     if (acpAgent || !directory) return;
     const path = directory;
     const generation = ++diffRefresh;
-    if (!quiet) diffLoading = true;
     try {
+      const revision = await invoke<string>('working_tree_revision', { path });
+      if (generation !== diffRefresh || path !== directory) return;
+      if (quiet && diffRevisionPath === path && diffRevision === revision) return;
+      if (!quiet) diffLoading = true;
       const next = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path });
       if (
         acpAgent ||
@@ -3516,6 +3538,8 @@
         path !== directory
       )
         return;
+      diffRevisionPath = path;
+      diffRevision = revision;
       diffs = next;
       diffError = '';
       selectedFilePath = selectedDiffFile(next, selectedFilePath, path);
@@ -3626,11 +3650,30 @@
   }
 
   function applyTextDelta(messageID: string, ordinal: number, delta: string) {
-    const existing = messages.find((message) => message.id === messageID);
-    const part = existing?.type === 'assistant' ? existing.content[ordinal] : undefined;
-    const parts = liveText[messageID] ?? {};
-    const base = parts[ordinal] ?? (part?.type === 'text' ? part.text : '');
-    liveText[messageID] = { ...parts, [ordinal]: base + delta };
+    const parts = pendingTextDeltas[messageID] ?? (pendingTextDeltas[messageID] = {});
+    const chunks = parts[ordinal] ?? (parts[ordinal] = []);
+    chunks.push(delta);
+    if (!textTimer) textTimer = setTimeout(flushTextDeltas, 50);
+  }
+
+  function flushTextDeltas() {
+    clearTimeout(textTimer);
+    textTimer = undefined;
+    if (!Object.keys(pendingTextDeltas).length) return;
+    const next = { ...liveText };
+    for (const [messageID, updates] of Object.entries(pendingTextDeltas)) {
+      const existing = messages.find((message) => message.id === messageID);
+      const parts = { ...next[messageID] };
+      for (const [index, chunks] of Object.entries(updates)) {
+        const ordinal = Number(index);
+        const part = existing?.type === 'assistant' ? existing.content[ordinal] : undefined;
+        const base = parts[ordinal] ?? (part?.type === 'text' ? part.text : '');
+        parts[ordinal] = base + chunks.join('');
+      }
+      next[messageID] = parts;
+    }
+    pendingTextDeltas = {};
+    liveText = next;
   }
 
   async function reconcileExecution(id: string, current: number) {
@@ -3685,6 +3728,7 @@
             continue;
           }
           if (event.type === 'session.text.ended') {
+            flushTextDeltas();
             const parts = liveText[event.data.assistantMessageID] ?? {};
             liveText[event.data.assistantMessageID] = {
               ...parts,

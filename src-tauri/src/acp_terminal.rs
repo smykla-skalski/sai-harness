@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -118,6 +119,7 @@ struct AcpTerminal {
 
 struct TerminalOutput {
     bytes: VecDeque<u8>,
+    start: u64,
     truncated: bool,
     exit: Option<ExitStatus>,
     released: bool,
@@ -165,12 +167,24 @@ pub struct TerminalSnapshot {
     released: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalDelta {
+    output_base64: String,
+    cursor: u64,
+    reset: bool,
+    truncated: bool,
+    exit_status: Option<ExitStatus>,
+    released: bool,
+}
+
 fn append(session: &AcpTerminal, bytes: &[u8]) {
     if let Ok(mut output) = session.output.lock() {
         output.bytes.extend(bytes);
         if output.bytes.len() > session.limit {
             let excess = output.bytes.len() - session.limit;
             output.bytes.drain(..excess);
+            output.start += excess as u64;
             output.truncated = true;
             while output
                 .bytes
@@ -178,10 +192,31 @@ fn append(session: &AcpTerminal, bytes: &[u8]) {
                 .is_some_and(|byte| byte & 0b1100_0000 == 0b1000_0000)
             {
                 output.bytes.pop_front();
+                output.start += 1;
             }
         }
         session.changed.notify_all();
     }
+}
+
+fn delta(session: &AcpTerminal, cursor: u64) -> Result<TerminalDelta, String> {
+    let output = session.output.lock().map_err(|error| error.to_string())?;
+    let end = output.start + output.bytes.len() as u64;
+    let reset = cursor < output.start || cursor > end;
+    let skip = if reset {
+        0
+    } else {
+        (cursor - output.start) as usize
+    };
+    let bytes: Vec<u8> = output.bytes.iter().skip(skip).copied().collect();
+    Ok(TerminalDelta {
+        output_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        cursor: end,
+        reset,
+        truncated: output.truncated,
+        exit_status: output.exit.clone(),
+        released: output.released,
+    })
 }
 
 fn snapshot(session: &AcpTerminal) -> Result<TerminalSnapshot, String> {
@@ -314,6 +349,7 @@ pub fn handle(
             child: Mutex::new(child),
             output: Mutex::new(TerminalOutput {
                 bytes: VecDeque::new(),
+                start: 0,
                 truncated: false,
                 exit: None,
                 released: false,
@@ -454,6 +490,40 @@ pub fn acp_terminal_snapshot(
         .find(|(stored, _)| stored == &id)
         .map(|(_, snapshot)| snapshot.clone())
         .ok_or("Terminal is no longer available.".to_string())
+}
+
+#[tauri::command]
+pub fn acp_terminal_delta(
+    manager: State<'_, AcpTerminalManager>,
+    id: String,
+    cursor: u64,
+) -> Result<TerminalDelta, String> {
+    let terminal = manager
+        .active
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&id)
+        .cloned();
+    if let Some(terminal) = terminal {
+        return delta(&terminal, cursor);
+    }
+    let archived = manager.archived.lock().map_err(|error| error.to_string())?;
+    let snapshot = archived
+        .iter()
+        .find(|(stored, _)| stored == &id)
+        .map(|(_, snapshot)| snapshot)
+        .ok_or("Terminal is no longer available.")?;
+    let bytes = snapshot.output.as_bytes();
+    let reset = cursor > bytes.len() as u64;
+    let skip = if reset { 0 } else { cursor as usize };
+    Ok(TerminalDelta {
+        output_base64: base64::engine::general_purpose::STANDARD.encode(&bytes[skip..]),
+        cursor: bytes.len() as u64,
+        reset,
+        truncated: snapshot.truncated,
+        exit_status: snapshot.exit_status.clone(),
+        released: snapshot.released,
+    })
 }
 
 #[tauri::command]

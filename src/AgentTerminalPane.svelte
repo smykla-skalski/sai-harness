@@ -6,8 +6,10 @@
   import '@xterm/xterm/css/xterm.css';
   import { terminalTheme } from './lib/terminal-theme';
 
-  type Snapshot = {
-    output: string;
+  type Delta = {
+    outputBase64: string;
+    cursor: number;
+    reset: boolean;
     truncated: boolean;
     exitStatus: { exitCode: number | null; signal: string | null } | null;
     released: boolean;
@@ -19,28 +21,42 @@
   let fit: FitAddon;
   let observer: ResizeObserver;
   let error = $state('');
-  let exitStatus = $state<Snapshot['exitStatus']>(null);
+  let exitStatus = $state<Delta['exitStatus']>(null);
   let released = $state(false);
-  let lastOutput = '';
+  let unavailable = $state(false);
+  let cursor = 0;
+  let poll: ReturnType<typeof setTimeout>;
+  let refreshing = false;
   let disposed = false;
 
   async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
     try {
-      const snapshot = await invoke<Snapshot>('acp_terminal_snapshot', { id });
+      const delta = await invoke<Delta>('acp_terminal_delta', { id, cursor });
       if (disposed) return;
-      if (!snapshot.output.startsWith(lastOutput)) {
+      if (delta.reset) {
         terminal.reset();
-        if (snapshot.truncated) terminal.write('[Earlier output truncated]\r\n');
-        terminal.write(snapshot.output);
-      } else if (snapshot.output.length > lastOutput.length) {
-        terminal.write(snapshot.output.slice(lastOutput.length));
       }
-      lastOutput = snapshot.output;
-      exitStatus = snapshot.exitStatus;
-      released = snapshot.released;
+      if ((delta.reset || cursor === 0) && delta.truncated)
+        terminal.write('[Earlier output truncated]\r\n');
+      if (delta.outputBase64) {
+        const bytes = atob(delta.outputBase64);
+        terminal.write(Uint8Array.from(bytes, (byte) => byte.charCodeAt(0)));
+      }
+      cursor = delta.cursor;
+      exitStatus = delta.exitStatus;
+      released = delta.released;
       error = '';
     } catch (cause) {
-      if (!disposed) error = String(cause);
+      if (!disposed) {
+        error = String(cause);
+        unavailable = error.includes('Terminal is no longer available');
+      }
+    } finally {
+      refreshing = false;
+      if (!disposed && !exitStatus && !released && !unavailable)
+        poll = setTimeout(() => void refresh(), 250);
     }
   }
 
@@ -66,10 +82,9 @@
     observer.observe(container);
     fit.fit();
     void refresh();
-    const poll = window.setInterval(() => void refresh(), 250);
     return () => {
       disposed = true;
-      clearInterval(poll);
+      clearTimeout(poll);
       observer.disconnect();
       terminal.dispose();
     };
@@ -88,8 +103,10 @@
         {exitStatus.exitCode === null
           ? (exitStatus.signal ?? 'a signal')
           : `code ${exitStatus.exitCode}`}.</span
-      >{:else}<span role="status">Command running</span>{/if}
-    <button disabled={!!exitStatus || released} onclick={stop}>Stop command</button>
+      >{:else if released}<span role="status">Command closed.</span>{:else}<span role="status"
+        >Command running</span
+      >{/if}
+    <button disabled={!!exitStatus || released || unavailable} onclick={stop}>Stop command</button>
   </div>
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
 </div>

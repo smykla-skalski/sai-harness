@@ -7,6 +7,8 @@
   import OptionPicker from './OptionPicker.svelte';
   import {
     acp,
+    loadRecentTranscript,
+    saveRecentTranscript,
     updateEntries,
     type AgentEntry,
     type AgentEvent,
@@ -82,6 +84,15 @@
   }
   let error = $state('');
   let entries = $state<AgentEntry[]>([]);
+  let visibleCount = $state(50);
+  let historyLoaded = $state(true);
+  let historyLoading = $state(false);
+  let expandedTools = $state<string[]>([]);
+  const visibleEntries = $derived(entries.slice(-visibleCount));
+  let replaying = false;
+  let replayEntries: AgentEntry[] = [];
+  let pendingUpdates: Record<string, unknown>[] = [];
+  let updateTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const snapshot = entries;
     const available = ready;
@@ -178,7 +189,76 @@
     return cause instanceof Error ? cause.message : String(cause);
   }
 
+  function flushUpdates() {
+    clearTimeout(updateTimer);
+    updateTimer = undefined;
+    if (!pendingUpdates.length) return;
+    let next = entries;
+    for (const update of pendingUpdates) next = updateEntries(next, update);
+    pendingUpdates = [];
+    entries = next;
+  }
+
+  function applyUpdate(update: Record<string, unknown>) {
+    if (replaying) {
+      replayEntries = updateEntries(replayEntries, update);
+      return;
+    }
+    pendingUpdates.push(update);
+    if (!updateTimer) updateTimer = setTimeout(flushUpdates, 50);
+  }
+
+  function rememberTranscript() {
+    if (!activeSessionId || ephemeral) return;
+    flushUpdates();
+    saveRecentTranscript(
+      {
+        agent,
+        directory,
+        sessionId: activeSessionId,
+        title: thread?.title ?? '',
+        updated: Date.now(),
+      },
+      entries,
+    );
+  }
+
+  async function showEarlier() {
+    const height = scroll.scrollHeight;
+    const top = scroll.scrollTop;
+    visibleCount += 50;
+    await tick();
+    scroll.scrollTop = top + scroll.scrollHeight - height;
+  }
+
+  async function loadHistory() {
+    const id = activeSessionId;
+    if (!id || historyLoading || !ready || isBusy) return;
+    const current = generation;
+    historyLoading = true;
+    replaying = true;
+    replayEntries = [];
+    try {
+      await acp.load(agent, directory, id);
+      if (current !== generation) return;
+      entries = replayEntries;
+      visibleCount = 50;
+      historyLoaded = true;
+      rememberTranscript();
+      void follow();
+    } catch (cause) {
+      if (current === generation) error = describe(cause);
+    } finally {
+      if (current === generation) {
+        replaying = false;
+        replayEntries = [];
+        historyLoading = false;
+      }
+    }
+  }
+
   function markTools(status: string, from: readonly string[]) {
+    flushUpdates();
     entries = entries.map((entry) =>
       entry.type === 'tool' && from.includes(entry.status)
         ? Object.assign({}, entry, { status })
@@ -215,11 +295,21 @@
   }
 
   async function activate(id: string | null) {
+    rememberTranscript();
     const current = ++generation;
+    clearTimeout(updateTimer);
+    updateTimer = undefined;
+    pendingUpdates = [];
+    replaying = false;
+    replayEntries = [];
     permissions = [];
     selectedThreadId = id;
     activeSessionId = id;
-    entries = [];
+    entries = id && thread ? loadRecentTranscript(thread) : [];
+    visibleCount = 50;
+    expandedTools = [];
+    historyLoaded = !id;
+    historyLoading = false;
     configOptions = [];
     pickerOpen = null;
     creatingSession = null;
@@ -243,7 +333,28 @@
             ? capabilities.loadSession
             : false;
         if (!canLoad) throw new Error(`${name} does not support restoring threads.`);
-        const session = await acp.load(agent, directory, id);
+        const sessionCapabilities =
+          capabilities && typeof capabilities === 'object' && 'sessionCapabilities' in capabilities
+            ? capabilities.sessionCapabilities
+            : null;
+        const canResume =
+          sessionCapabilities &&
+          typeof sessionCapabilities === 'object' &&
+          'resume' in sessionCapabilities;
+        if (!canResume) {
+          replaying = true;
+          replayEntries = [];
+        }
+        const session = canResume
+          ? await acp.resume(agent, directory, id)
+          : await acp.load(agent, directory, id);
+        if (current === generation && !canResume) {
+          entries = replayEntries;
+          replaying = false;
+          replayEntries = [];
+          historyLoaded = true;
+          rememberTranscript();
+        }
         if (current === generation)
           configOptions = (session.configOptions as AgentConfigOption[] | undefined) ?? [];
         const waiting = await acp.pendingPermissions(agent, id);
@@ -253,6 +364,7 @@
     } catch (cause) {
       if (current === generation) {
         error = describe(cause);
+        replaying = false;
         authNeeded = /auth|login|sign.?in/i.test(error);
         if (thread) onstatus(thread, 'failed');
       }
@@ -337,9 +449,7 @@
         const data = update as Record<string, unknown>;
         if (data.sessionUpdate === 'config_option_update' && Array.isArray(data.configOptions))
           configOptions = data.configOptions as AgentConfigOption[];
-        if (data.sessionUpdate !== 'user_message_chunk' || connecting) {
-          entries = updateEntries(entries, data);
-        }
+        if (data.sessionUpdate !== 'user_message_chunk' || replaying) applyUpdate(data);
       } else if (message.method === 'session/request_permission' && message.id != null) {
         queuePermission(message);
       }
@@ -359,7 +469,9 @@
       });
     return () => {
       disposed = true;
+      rememberTranscript();
       generation++;
+      clearTimeout(updateTimer);
       unlisten?.();
       if (ephemeral && activeSessionId) {
         void acp.cancel(agent, activeSessionId, activeTurnId).catch(() => {});
@@ -406,6 +518,7 @@
       images = [];
     }
     const userEntryId = crypto.randomUUID();
+    flushUpdates();
     entries = [...entries, { id: userEntryId, type: 'user', text }];
     void follow();
     try {
@@ -469,6 +582,7 @@
       }
       if (external) throw cause;
     } finally {
+      if (current === generation) rememberTranscript();
       if (!keepImages)
         sentImages.forEach(
           (image) => void invoke('browser_remove_capture', { path: image.imagePath }),
@@ -619,14 +733,38 @@
         <p>Describe the work. Sail will show messages, tools, and approvals here.</p>
       </div>
     {/if}
-    {#each entries as entry (entry.id)}
+    {#if thread?.sessionId && !historyLoaded}
+      <button
+        class="agent-history-button"
+        disabled={!ready || historyLoading || isBusy}
+        onclick={loadHistory}
+        >{historyLoading
+          ? 'Loading history…'
+          : entries.length
+            ? 'Load older messages'
+            : 'Load conversation history'}</button
+      >
+    {:else if entries.length > visibleCount}
+      <button class="agent-history-button" onclick={showEarlier}
+        >Show earlier messages ({entries.length - visibleCount} remaining)</button
+      >
+    {/if}
+    {#each visibleEntries as entry (entry.id)}
       {#if entry.type === 'tool'}
-        <details class="agent-tool tool-card">
-          <summary>{entry.title} · {entry.status}</summary
-          >{#if entry.content}<pre>{entry.content}</pre>{/if}
-          {#each entry.terminalIds as terminalId (terminalId)}
-            <button onclick={() => onterminal(terminalId)}>Open terminal</button>
-          {/each}
+        <details
+          class="agent-tool tool-card"
+          ontoggle={(event) => {
+            expandedTools = event.currentTarget.open
+              ? [...expandedTools, entry.id]
+              : expandedTools.filter((id) => id !== entry.id);
+          }}
+        >
+          <summary>{entry.title} · {entry.status}</summary>{#if expandedTools.includes(entry.id)}
+            {#if entry.content}<pre>{entry.content}</pre>{/if}
+            {#each entry.terminalIds as terminalId (terminalId)}
+              <button onclick={() => onterminal(terminalId)}>Open terminal</button>
+            {/each}
+          {/if}
         </details>
       {:else}
         <article
@@ -824,6 +962,10 @@
     min-height: 0;
     overflow: auto;
     padding-inline: 20px;
+  }
+  .agent-history-button {
+    display: block;
+    margin: 12px auto 20px;
   }
   .agent-welcome {
     max-width: 650px;

@@ -132,7 +132,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       id: message.id,
       result: {
         protocolVersion: 1,
-        agentCapabilities: { loadSession: true },
+        agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
         authMethods: agent === 'codex' ? [{ id: 'chat-gpt', name: 'ChatGPT' }] : [],
       },
     });
@@ -151,6 +151,17 @@ for await (const line of createInterface({ input: process.stdin })) {
         send({ id: message.id, result: { sessionId, configOptions: configOptions(sessionId) } }),
       1000,
     );
+  } else if (message.method === 'session/resume') {
+    const session = sessions.get(message.params.sessionId);
+    if (!session) send({ id: message.id, error: { code: -1, message: 'Session missing' } });
+    else
+      send({
+        id: message.id,
+        result: {
+          sessionId: message.params.sessionId,
+          configOptions: configOptions(message.params.sessionId),
+        },
+      });
   } else if (message.method === 'session/load') {
     const session = sessions.get(message.params.sessionId);
     if (!session) send({ id: message.id, error: { code: -1, message: 'Session missing' } });
