@@ -226,6 +226,14 @@
   let spawnReceipts = loadSpawnReceipts(getSetting('sai-agent-spawn-receipts'));
   const spawnOutput = new SvelteMap<string, string>();
   const activeSpawnTargets = new SvelteMap<string, string>();
+  for (const receipt of spawnReceipts) {
+    if (
+      receipt.targetId &&
+      receipt.turnId &&
+      (receipt.state === 'working' || receipt.state === 'waiting')
+    )
+      activeSpawnTargets.set(receipt.targetId, receipt.receiptId);
+  }
   const activeSpawnRequests = new SvelteSet<string>();
   const coordinationDeliveries = new SvelteMap<string, Promise<void>>();
   const coordinationAttempts = new SvelteMap<string, number>();
@@ -1451,6 +1459,10 @@
       ['working', 'waiting', 'unavailable'].includes(changes.state)
     )
       return;
+    if (
+      Object.entries(changes).every(([key, value]) => current[key as keyof SpawnReceipt] === value)
+    )
+      return;
     saveSpawnReceipt({ ...current, ...changes, updated: Date.now() });
   }
 
@@ -1494,7 +1506,11 @@
 
   async function currentSpawnReceipt(receipt: SpawnReceipt): Promise<SpawnReceipt> {
     if (receiptIsSettled(receipt.state)) return receipt;
-    if (!receipt.targetId || !receipt.targetDirectory) {
+    if (
+      !receipt.targetId ||
+      !receipt.targetDirectory ||
+      (receipt.provider !== 'opencode' && !receipt.turnId)
+    ) {
       if (activeSpawnRequests.has(receipt.receiptId)) return receipt;
       updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
       return spawnReceipts.find((item) => item.receiptId === receipt.receiptId) ?? receipt;
@@ -1504,18 +1520,7 @@
         (states) => states[receipt.provider],
         () => null,
       );
-      const state = acpReceiptState(receipt, receiptActivity);
-      if (state === 'working' || state === 'waiting') {
-        updateSpawnReceipt(receipt.receiptId, { state });
-        activeSpawnTargets.set(receipt.targetId, receipt.receiptId);
-      } else if (state === 'completed' || state === 'failed' || state === 'interrupted') {
-        updateSpawnReceipt(receipt.receiptId, {
-          state,
-          result: spawnOutput.get(receipt.receiptId) ?? null,
-        });
-      } else {
-        updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
-      }
+      reconcileAcpSpawnReceipt(receipt, receiptActivity);
     } else if (client) {
       const sessionId = receipt.targetId.slice('opencode:'.length);
       try {
@@ -1546,6 +1551,24 @@
       updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
     }
     return spawnReceipts.find((item) => item.receiptId === receipt.receiptId) ?? receipt;
+  }
+
+  function reconcileAcpSpawnReceipt(
+    receipt: SpawnReceipt,
+    agentActivity: Awaited<ReturnType<typeof acp.activity>>[AgentId] | null,
+  ) {
+    const state = acpReceiptState(receipt, agentActivity);
+    if (state === 'working' || state === 'waiting') {
+      updateSpawnReceipt(receipt.receiptId, { state });
+      activeSpawnTargets.set(receipt.targetId!, receipt.receiptId);
+    } else {
+      updateSpawnReceipt(receipt.receiptId, {
+        state,
+        result: spawnOutput.get(receipt.receiptId) ?? receipt.result,
+      });
+      if (receipt.targetId && activeSpawnTargets.get(receipt.targetId) === receipt.receiptId)
+        activeSpawnTargets.delete(receipt.targetId);
+    }
   }
 
   function coordinationProject(path: string): string | null {
@@ -1846,6 +1869,22 @@
         throw new Error('Wait timeout must be 0–30000 milliseconds.');
       const deadline =
         Date.now() + (request.name === 'agent_wait' ? Number(requestedTimeout ?? 30_000) : 0);
+      async function boundedReceipt(current: SpawnReceipt): Promise<SpawnReceipt> {
+        if (request.name !== 'agent_wait') return currentSpawnReceipt(current);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return current;
+        let timer: ReturnType<typeof setTimeout>;
+        try {
+          return await Promise.race([
+            currentSpawnReceipt(current),
+            new Promise<SpawnReceipt>((resolve) => {
+              timer = setTimeout(() => resolve(current), remaining);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer!);
+        }
+      }
       async function awaitReceipt(current: SpawnReceipt): Promise<SpawnReceipt> {
         if (
           request.name !== 'agent_wait' ||
@@ -1856,9 +1895,9 @@
         )
           return current;
         await new Promise((resolve) => setTimeout(resolve, Math.min(250, deadline - Date.now())));
-        return awaitReceipt(await currentSpawnReceipt(current));
+        return awaitReceipt(await boundedReceipt(current));
       }
-      const current = await awaitReceipt(await currentSpawnReceipt(receipt));
+      const current = await awaitReceipt(await boundedReceipt(receipt));
       const status = {
         receiptId: current.receiptId,
         requestId: current.requestId,
@@ -2203,7 +2242,7 @@
                 outcome.stopReason === 'cancelled' || current?.state === 'interrupted'
                   ? 'interrupted'
                   : 'completed',
-              result: spawnOutput.get(receiptId) ?? null,
+              result: spawnOutput.get(receiptId) ?? current?.result ?? null,
             });
             spawnOutput.delete(receiptId);
             if (activeSpawnTargets.get(`acp:${source.agent}:${session.sessionId}`) === receiptId)
@@ -4432,6 +4471,14 @@
     try {
       const backendActivity = await acp.activity();
       if (disposed) return;
+      for (const receipt of spawnReceipts.filter(
+        (item) =>
+          item.provider !== 'opencode' &&
+          item.targetId &&
+          item.turnId &&
+          !receiptIsSettled(item.state),
+      ))
+        reconcileAcpSpawnReceipt(receipt, backendActivity[receipt.provider]);
       if (revision !== attentionRevision) {
         if (attempt < 2) await restoreAgentActivity(attempt + 1);
         return;
@@ -4524,17 +4571,17 @@
           typeof content.text === 'string'
             ? content.text
             : null;
-        if (text)
+        if (text && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
           for (const receipt of spawnReceipts.filter(
             (item) =>
               item.targetId === `acp:${event.agent}:${sessionId}` &&
               activeSpawnTargets.get(item.targetId) === item.receiptId &&
               !receiptIsSettled(item.state),
-          ))
-            spawnOutput.set(
-              receipt.receiptId,
-              `${spawnOutput.get(receipt.receiptId) ?? ''}${text}`.slice(-16_000),
-            );
+          )) {
+            const result = `${receipt.result ?? ''}${text}`.slice(-16_000);
+            updateSpawnReceipt(receipt.receiptId, { result });
+            spawnOutput.set(receipt.receiptId, result);
+          }
         const usage = acpUsage(params?.update);
         if (usage?.rates && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
           agentRates = { ...agentRates, [event.agent]: usage.rates };
@@ -4577,7 +4624,7 @@
               : event.message.params?.notify === false
                 ? 'interrupted'
                 : 'completed',
-          result: spawnOutput.get(receipt.receiptId) ?? null,
+          result: spawnOutput.get(receipt.receiptId) ?? receipt.result,
         });
     } else if (event.message.method === 'session/request_permission') {
       const sessionId = event.message.params?.sessionId;
