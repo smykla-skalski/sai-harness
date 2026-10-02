@@ -673,7 +673,7 @@ fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
 
 #[cfg(target_os = "linux")]
 fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
-    use webkit2gtk::prelude::*;
+    use webkit2gtk::WebViewExt;
 
     let (sender, receiver) = mpsc::sync_channel(1);
     webview
