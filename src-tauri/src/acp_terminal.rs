@@ -766,36 +766,13 @@ pub fn acp_terminal_inspect_read(
     ))
 }
 
-#[tauri::command(async)]
-pub fn acp_terminal_inspect_wait(
-    manager: State<'_, AcpTerminalManager>,
+fn wait_for_agent_terminal(
+    terminal: Arc<AcpTerminal>,
     id: String,
-    allowed: Vec<String>,
     cursor: u64,
     max_bytes: usize,
     timeout_ms: u64,
 ) -> Result<InspectedOutput, String> {
-    let id = id.strip_prefix("agent:").ok_or("Unknown terminal ID.")?;
-    let allowed = crate::terminal::canonical_terminal_paths(&allowed);
-    let Some(terminal) = inspected_active(&manager, id, &allowed)? else {
-        let snapshot = inspected_archived(&manager, id, &allowed)?.ok_or("Unknown terminal ID.")?;
-        return Ok(inspected_page(
-            PageSource {
-                id,
-                directory: Path::new(&snapshot.directory),
-                bytes: &snapshot.bytes,
-                base: snapshot.base_cursor,
-                exit_code: snapshot
-                    .exit_status
-                    .as_ref()
-                    .and_then(|status| status.exit_code),
-                exited: true,
-            },
-            cursor,
-            max_bytes,
-            false,
-        ));
-    };
     let output = terminal.output.lock().map_err(|error| error.to_string())?;
     let end = output.start + output.bytes.len() as u64;
     let (output, timed_out) =
@@ -821,7 +798,7 @@ pub fn acp_terminal_inspect_wait(
     let bytes: Vec<_> = output.bytes.iter().copied().collect();
     Ok(inspected_page(
         PageSource {
-            id,
+            id: &id,
             directory: &terminal.directory,
             bytes: &bytes,
             base: output.start,
@@ -832,4 +809,45 @@ pub fn acp_terminal_inspect_wait(
         max_bytes,
         timed_out,
     ))
+}
+
+#[tauri::command]
+pub async fn acp_terminal_inspect_wait(
+    manager: State<'_, AcpTerminalManager>,
+    id: String,
+    allowed: Vec<String>,
+    cursor: u64,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<InspectedOutput, String> {
+    let id = id
+        .strip_prefix("agent:")
+        .ok_or("Unknown terminal ID.")?
+        .to_string();
+    let allowed = crate::terminal::canonical_terminal_paths(&allowed);
+    let Some(terminal) = inspected_active(&manager, &id, &allowed)? else {
+        let snapshot =
+            inspected_archived(&manager, &id, &allowed)?.ok_or("Unknown terminal ID.")?;
+        return Ok(inspected_page(
+            PageSource {
+                id: &id,
+                directory: Path::new(&snapshot.directory),
+                bytes: &snapshot.bytes,
+                base: snapshot.base_cursor,
+                exit_code: snapshot
+                    .exit_status
+                    .as_ref()
+                    .and_then(|status| status.exit_code),
+                exited: true,
+            },
+            cursor,
+            max_bytes,
+            false,
+        ));
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        wait_for_agent_terminal(terminal, id, cursor, max_bytes, timeout_ms)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

@@ -346,18 +346,13 @@ pub fn terminal_inspect_read(
     ))
 }
 
-#[tauri::command(async)]
-pub fn terminal_inspect_wait(
-    manager: State<'_, TerminalManager>,
+fn wait_for_terminal(
+    session: Arc<TerminalSession>,
     id: String,
-    allowed: Vec<String>,
     cursor: u64,
     max_bytes: usize,
     timeout_ms: u64,
 ) -> Result<InspectedOutput, String> {
-    let id = id.strip_prefix("shell:").ok_or("Unknown terminal ID.")?;
-    let allowed = canonical_terminal_paths(&allowed);
-    let session = manager.inspect(id, &allowed)?;
     let output = session.output.lock().map_err(|error| error.to_string())?;
     let end = output.start + output.history.len() as u64;
     let (output, timed_out) = if cursor >= output.start
@@ -381,13 +376,35 @@ pub fn terminal_inspect_wait(
         (output, timed_out)
     };
     Ok(output_page(
-        id,
+        &id,
         &session.directory,
         &output,
         cursor,
         max_bytes.clamp(1, 65_536),
         timed_out,
     ))
+}
+
+#[tauri::command]
+pub async fn terminal_inspect_wait(
+    manager: State<'_, TerminalManager>,
+    id: String,
+    allowed: Vec<String>,
+    cursor: u64,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<InspectedOutput, String> {
+    let id = id
+        .strip_prefix("shell:")
+        .ok_or("Unknown terminal ID.")?
+        .to_string();
+    let allowed = canonical_terminal_paths(&allowed);
+    let session = manager.inspect(&id, &allowed)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        wait_for_terminal(session, id, cursor, max_bytes, timeout_ms)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn shell() -> PathBuf {

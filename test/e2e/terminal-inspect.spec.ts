@@ -83,10 +83,26 @@ function callMcpAsync(config: McpConfig, sessionId: string, name: string, args: 
 }
 
 async function openShell(command: string, path: string): Promise<string> {
+  const previousId = await browser.execute(() =>
+    document
+      .querySelector('.pane-leaf.focused:has(.terminal-screen)')
+      ?.getAttribute('data-pane-id'),
+  );
   await browser.keys(['Meta', 't']);
-  await expect($('.terminal-screen .xterm')).toBeDisplayed();
+  await browser.waitUntil(async () =>
+    browser.execute((previous) => {
+      const focused = document.querySelector('.pane-leaf.focused');
+      return Boolean(
+        focused?.querySelector('.terminal-screen .xterm') &&
+        focused.getAttribute('data-pane-id') !== previous,
+      );
+    }, previousId),
+  );
   const id = await browser.execute(() =>
-    document.querySelector('.terminal-screen')?.closest('.pane-leaf')?.getAttribute('data-pane-id'),
+    document
+      .querySelector('.pane-leaf.focused .terminal-screen')
+      ?.closest('.pane-leaf')
+      ?.getAttribute('data-pane-id'),
   );
   if (!id) throw new Error('Terminal pane ID missing');
   const runtimeId = id === 'main' ? `main:${encodeURIComponent(path)}` : id;
@@ -168,6 +184,7 @@ describe('project terminal MCP inspection', () => {
       path,
     );
     const secondPane = await openShell('printf SAIL143_SECOND; sleep 12', path);
+    expect(secondPane).not.toBe(firstPane);
     await $(`.project-default-worktree-select[title="${other}"]`).click();
     const foreignPane = await openShell('printf SAIL143_FOREIGN; sleep 12', other);
     const foreignId = await browser.tauri.execute(
@@ -186,6 +203,7 @@ describe('project terminal MCP inspection', () => {
     const firstId = list.terminals.find((item) => item.paneId === firstPane)?.terminalId;
     const secondId = list.terminals.find((item) => item.paneId === secondPane)?.terminalId;
     if (!firstId || !secondId) throw new Error('Project terminals missing');
+    expect(secondId).not.toBe(firstId);
     expect(list.terminals.map((item) => item.terminalId)).toContain(firstId);
     expect(list.terminals.map((item) => item.terminalId)).toContain(secondId);
     expect(list.terminals.map((item) => item.terminalId)).not.toContain(foreignId);
