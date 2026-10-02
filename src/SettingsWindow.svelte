@@ -3,6 +3,7 @@
   import { emitTo, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Button } from '@smykla-skalski/sui';
+  import OptionPicker from './OptionPicker.svelte';
   import { getSetting } from './lib/settings';
   import type { SetupCheck, SetupReport } from './lib/onboarding';
   import {
@@ -17,6 +18,7 @@
   let binaryPath = $state('');
   let binaryDirty = $state(false);
   let selectedSection = $state<'general' | 'opencode' | 'agents'>('general');
+  let themePickerOpen = $state(false);
   let requestError = $state('');
 
   function setupRows(report: SetupReport): [string, SetupCheck][] {
@@ -117,15 +119,18 @@
       {#if snapshot}
         <section class="settings-card">
           <h2>Appearance</h2>
-          <label for="theme-select">Theme</label>
-          <select
-            id="theme-select"
+          <OptionPicker
+            label="Theme"
             value={snapshot.theme}
-            onchange={(event) =>
-              send({ type: 'theme', value: event.currentTarget.value as 'light' | 'dark' })}
-          >
-            <option value="light">Light</option><option value="dark">Dark</option>
-          </select>
+            options={[
+              { value: 'light', name: 'Light' },
+              { value: 'dark', name: 'Dark' },
+            ]}
+            open={themePickerOpen}
+            onopen={() => (themePickerOpen = true)}
+            onclose={() => (themePickerOpen = false)}
+            onchoose={(value) => send({ type: 'theme', value: value as 'light' | 'dark' })}
+          />
         </section>
       {:else}<p role="status">Loading settings…</p>{/if}
     {:else if selectedSection === 'opencode'}

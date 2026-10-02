@@ -4,6 +4,7 @@
   interface Choice {
     value: string;
     name: string;
+    disabled?: boolean;
   }
 
   interface Props {
@@ -103,13 +104,23 @@
   function keydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
+      event.stopPropagation();
       close();
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      if (options.length)
-        active = (active + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
-    } else if (event.key === 'Enter' && options[active]) {
+      event.stopPropagation();
+      for (let offset = 1; offset <= options.length; offset++) {
+        const next =
+          (active + offset * (event.key === 'ArrowDown' ? 1 : -1) + options.length * offset) %
+          options.length;
+        if (!options[next].disabled) {
+          active = next;
+          break;
+        }
+      }
+    } else if (event.key === 'Enter' && options[active] && !options[active].disabled) {
       event.preventDefault();
+      event.stopPropagation();
       onchoose(options[active].value);
       close();
     }
@@ -168,7 +179,9 @@
             tabindex="-1"
             aria-selected={option.value === value}
             class:active={index === active}
+            disabled={option.disabled}
             onclick={() => {
+              if (option.disabled) return;
               onchoose(option.value);
               close();
             }}>{option.name}</button
@@ -239,8 +252,11 @@
     text-align: left;
   }
   .option-menu button.active,
-  .option-menu button:hover {
+  .option-menu button:hover:not(:disabled) {
     background: var(--shell-selected);
+  }
+  .option-menu button:disabled {
+    opacity: 0.5;
   }
   .option-empty {
     padding: 8px;

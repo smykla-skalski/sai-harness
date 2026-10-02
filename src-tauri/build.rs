@@ -6,6 +6,7 @@ fn main() {
             "save_setting",
             "start_runtime",
             "validate_repository",
+            "list_picker_directory",
             "working_tree_diff",
             "working_tree_revision",
             "record_turn_snapshot",

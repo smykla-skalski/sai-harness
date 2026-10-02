@@ -1584,6 +1584,26 @@ button:disabled {
   gap: 6px;
   align-items: center;
 }
+.prompt-suggestions {
+  display: grid;
+  max-height: 160px;
+  overflow: auto;
+  margin-top: 4px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 6px;
+  background: var(--sui-surface);
+}
+.prompt-suggestions button {
+  padding: 6px 8px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+.prompt-suggestions button:hover,
+.prompt-suggestions button:focus-visible {
+  background: var(--shell-selected);
+}
 .prompt-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1990,6 +2010,122 @@ button:disabled {
   background: var(--shell-sidebar);
   color: var(--sui-foreground);
 }
+.confirmation-dialog::backdrop,
+.path-picker-dialog::backdrop {
+  background: #0008;
+}
+.confirmation-dialog h2,
+.path-picker-heading h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.confirmation-dialog p {
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.confirmation-actions,
+.path-picker-actions,
+.path-picker-heading,
+.path-picker-location {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.confirmation-actions,
+.path-picker-actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+.confirmation-actions button,
+.path-picker-actions button,
+.path-picker-heading button,
+.path-picker-location button {
+  padding: 7px 11px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 6px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+}
+.confirmation-actions button:hover:not(:disabled),
+.path-picker-actions button:hover:not(:disabled),
+.path-picker-heading button:hover:not(:disabled),
+.path-picker-location button:hover:not(:disabled) {
+  background: var(--shell-selected);
+}
+.confirmation-actions .confirmation-primary,
+.path-picker-actions .confirmation-primary {
+  border-color: var(--sui-primary);
+  background: var(--sui-primary);
+  color: var(--sui-primary-foreground);
+}
+.confirmation-primary {
+  background: var(--sui-primary);
+  color: var(--sui-primary-foreground);
+}
+.path-picker-dialog {
+  width: min(660px, calc(100vw - 32px));
+}
+.path-picker-heading {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.path-picker-location input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 6px;
+  color: var(--sui-foreground);
+  background: var(--sui-surface);
+}
+.path-picker-list {
+  display: grid;
+  align-content: start;
+  max-height: min(380px, 50vh);
+  min-height: 160px;
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid var(--shell-divider);
+  border-radius: 8px;
+}
+.path-picker-entry {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 0;
+  color: var(--sui-foreground);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path-picker-entry span {
+  width: 16px;
+  flex: 0 0 16px;
+  color: var(--sui-primary);
+}
+.path-picker-entry:hover,
+.path-picker-entry.selected {
+  background: var(--shell-selected);
+}
+.path-picker-empty,
+.path-picker-error {
+  margin: 10px;
+}
+.path-picker-error {
+  color: var(--sui-danger);
+}
+.path-picker-actions span {
+  flex: 1;
+  overflow: hidden;
+  color: var(--shell-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .commands-header,
 .commands-row {
@@ -2036,7 +2172,15 @@ button:disabled {
   display: grid;
   gap: 12px;
 }
+.commands-dialog .path-picker-location {
+  display: flex;
+  gap: 8px;
+}
 .commands-dialog label {
+  display: grid;
+  gap: 4px;
+}
+.command-scope-field {
   display: grid;
   gap: 4px;
 }

@@ -206,13 +206,8 @@ describe('visual layout audit', () => {
     await returnToWorkspace();
     await $(`[aria-label="Create worktree for ${path.split('/').at(-1)}"]`).click();
     await $(`[aria-label="Worktree name for ${path.split('/').at(-1)}"]`).setValue('visual-audit');
-    await browser.execute(() => {
-      const select = document.querySelector<HTMLSelectElement>(
-        '[aria-label="Agent for new worktree"]',
-      )!;
-      select.value = 'claude';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await $('[aria-label^="Agent for new worktree:"]').click();
+    await $('.option-menu [role="option"]:nth-child(3)').click();
     await $('.worktree-form button[type="submit"]').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     const worktree = await browser.execute(() => localStorage.getItem('sai-directory'));
@@ -239,11 +234,8 @@ describe('visual layout audit', () => {
     await expect($('.diff-files')).toHaveText(expect.stringContaining('visual-change.txt'));
     await capture('desktop-agent-changes');
     await openSettings();
-    await browser.execute(() => {
-      const select = document.querySelector<HTMLSelectElement>('#theme-select')!;
-      select.value = 'dark';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await $('[aria-label^="Theme:"]').click();
+    await $('.option-menu [role="option"]:nth-child(2)').click();
     await returnToWorkspace();
     await browser.waitUntil(
       async () =>

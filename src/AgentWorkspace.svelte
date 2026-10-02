@@ -125,6 +125,7 @@
   let permissions = $state<AgentPermission[]>([]);
   let configOptions = $state<AgentConfigOption[]>([]);
   let pickerOpen = $state<'model' | 'effort' | null>(null);
+  let configPickerOpen = $state<string | null>(null);
   let creatingSession = $state<Promise<AgentThread> | null>(null);
   let settingConfig = $state<Promise<void> | null>(null);
   let configFailure = $state('');
@@ -159,7 +160,10 @@
   );
 
   $effect(() => {
-    if (isBusy) pickerOpen = null;
+    if (isBusy) {
+      pickerOpen = null;
+      configPickerOpen = null;
+    }
   });
 
   async function focusPromptWhenReady() {
@@ -466,6 +470,7 @@
 
   async function openPicker(kind: 'model' | 'effort') {
     if (!ready || !directory || isBusy) return;
+    configPickerOpen = null;
     pickerOpen = kind;
     if (activeSessionId) return;
     try {
@@ -764,17 +769,19 @@
       >{/each}
     <div class="agent-config">
       {#each configOptions.filter((option) => option.type === 'select' && Array.isArray(option.options) && option.id !== modelOption?.id && option.id !== effortOption?.id) as option (option.id)}
-        <label
-          >{option.name}<select
-            value={option.currentValue}
-            disabled={isBusy}
-            onchange={(event) => setConfig(option.id, event.currentTarget.value)}
-          >
-            {#each option.options as choice (choice.value)}<option value={choice.value}
-                >{choice.name}</option
-              >{/each}
-          </select></label
-        >
+        <OptionPicker
+          label={option.name}
+          value={option.currentValue}
+          options={option.options ?? []}
+          open={configPickerOpen === option.id}
+          disabled={isBusy}
+          onopen={() => {
+            pickerOpen = null;
+            configPickerOpen = option.id;
+          }}
+          onclose={() => (configPickerOpen = null)}
+          onchoose={(value) => void setConfig(option.id, value)}
+        />
       {/each}
     </div>
     <Badge tone={isBusy ? 'warning' : ready ? 'success' : 'neutral'}
@@ -1086,15 +1093,6 @@
     flex-wrap: wrap;
     margin-left: auto;
     margin-right: 12px;
-  }
-  .agent-config label {
-    display: flex;
-    gap: 5px;
-    align-items: center;
-    font-size: 0.8rem;
-  }
-  .agent-config select {
-    max-width: 180px;
   }
   .agent-conversation {
     flex: 1;

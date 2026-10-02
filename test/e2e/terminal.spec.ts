@@ -78,11 +78,8 @@ describe('shell terminal panes', () => {
     });
 
     await openSettings();
-    await browser.execute(() => {
-      const select = document.querySelector<HTMLSelectElement>('#theme-select')!;
-      select.value = 'dark';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await $('[aria-label^="Theme:"]').click();
+    await $('.option-menu [role="option"]:nth-child(2)').click();
     await returnToWorkspace();
     await browser.waitUntil(async () => (await colors()).theme === 'dark');
     expect(await colors()).toEqual({

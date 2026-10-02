@@ -5,8 +5,6 @@
   import { emitTo, listen } from '@tauri-apps/api/event';
   import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { ask } from '@tauri-apps/plugin-dialog';
   import { isPermissionNotFoundError, isSessionNotFoundError } from '@opencode/client';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import type { ModelRef } from '@opencode/client';
@@ -21,6 +19,9 @@
   import type { GitHubIssue, PullRequestCheck } from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import OptionPicker from './OptionPicker.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
+  import type { Confirmation } from './ConfirmDialog.svelte';
+  import PathPicker from './PathPicker.svelte';
   import PaneTree from './PaneTree.svelte';
   import InboxPanel from './InboxPanel.svelte';
   import {
@@ -230,6 +231,40 @@
   let commandName = $state('');
   let commandText = $state('');
   let commandScope = $state<'global' | 'project'>('global');
+  let commandScopePickerOpen = $state(false);
+  let confirmation = $state<Confirmation | null>(null);
+  let confirmationResolver: ((confirmed: boolean) => void) | null = null;
+  let confirmationQueue = Promise.resolve();
+  let pathPicker = $state<
+    | { kind: 'project'; groupID: string | null; initialPath?: string }
+    | {
+        kind: 'attachments';
+        initialPath?: string;
+        selection: number;
+        sessionID: string | null;
+        directory: string;
+      }
+    | null
+  >(null);
+
+  function confirmInApp(title: string, message: string, confirmLabel: string): Promise<boolean> {
+    const pending = confirmationQueue.then(
+      () =>
+        new Promise<boolean>((resolve) => {
+          confirmationResolver = resolve;
+          confirmation = { id: crypto.randomUUID(), title, message, confirmLabel };
+        }),
+    );
+    confirmationQueue = pending.then(() => undefined);
+    return pending;
+  }
+
+  function answerConfirmation(confirmed: boolean) {
+    const resolve = confirmationResolver;
+    confirmationResolver = null;
+    confirmation = null;
+    resolve?.(confirmed);
+  }
   let editingCommand = $state<string | null>(null);
   let binaryPath = $state(getSetting('sai-opencode-bin') ?? '');
   let appliedBinaryPath = getSetting('sai-opencode-bin') ?? '';
@@ -904,11 +939,12 @@
           }
           let allow = false;
           try {
-            allow = await ask(
+            allow = await confirmInApp(
+              'Agent browser access',
               payload.origin
                 ? `Allow agent thread ${payload.sessionId} to use ${payload.origin} in the browser pane?`
                 : `Allow agent thread ${payload.sessionId} to control the browser pane in ${payload.directory}?`,
-              { title: 'Agent browser access', kind: 'warning' },
+              'Allow',
             );
           } catch (cause) {
             error = describe(cause);
@@ -1932,11 +1968,12 @@
         ? true
         : e2eAnswer === 'No'
           ? false
-          : await ask(
+          : await confirmInApp(
+              'Delete worktree',
               config
                 ? `Delete worktree “${branch}” at ${path}? This removes uncommitted and ignored files, including copied files. The branch will remain.`
                 : `Delete worktree “${branch}” at ${path}? Uncommitted and ignored files block deletion. The branch will remain.`,
-              { title: 'Delete worktree', kind: 'warning' },
+              'Delete worktree',
             );
     if (!confirmed) return;
     const wasSelected = directory === path;
@@ -1950,9 +1987,10 @@
         );
         if (code < 0) return;
         if (code !== 0) {
-          const deleteAnyway = await ask(
+          const deleteAnyway = await confirmInApp(
+            'Archive failed',
             `Archive script exited with code ${code}. Delete “${branch}” anyway?`,
-            { title: 'Archive failed', kind: 'warning' },
+            'Delete anyway',
           );
           if (!deleteAnyway) return;
         }
@@ -2048,11 +2086,17 @@
     throw new Error('Open an agent thread in this worktree before sending check logs.');
   }
 
-  async function chooseProject(groupID: string | null = null) {
-    const selected = await open({ directory: true, multiple: false, title: 'Choose a repository' });
-    if (typeof selected !== 'string') return;
+  function chooseProject(groupID: string | null = null) {
+    pathPicker = {
+      kind: 'project',
+      groupID,
+      initialPath: directory || undefined,
+    };
+  }
+
+  async function selectProject(path: string, groupID: string | null) {
     try {
-      const path = await invoke<string>('validate_repository', { path: selected });
+      path = await invoke<string>('validate_repository', { path });
       if (
         !projectCatalog.repositories.includes(path) &&
         !Object.values(projectCatalog.worktrees).some((worktrees) =>
@@ -3431,9 +3475,10 @@
       snapshotsError = 'Wait for running agent turns before restoring.';
       return;
     }
-    const confirmed = await ask(
+    const confirmed = await confirmInApp(
+      'Restore worktree',
       'Restore the worktree to this saved state? Current file changes will be saved as an undo entry.',
-      { title: 'Restore worktree', kind: 'warning' },
+      'Restore',
     );
     if (!confirmed) return;
     if (
@@ -3858,17 +3903,40 @@
     }
   }
 
-  async function attachFiles() {
+  function attachFiles() {
     const current = selection;
     const originalSessionID = sessionID;
     const path = directory;
     const e2ePath =
       import.meta.env.MODE === 'e2e' ? sessionStorage.getItem('sai-e2e-attachment-path') : null;
     if (e2ePath) sessionStorage.removeItem('sai-e2e-attachment-path');
-    const selected =
-      e2ePath ?? (await open({ multiple: true, directory: false, title: 'Attach files' }));
-    if (current !== selection || originalSessionID !== sessionID || path !== directory) return;
-    const paths = typeof selected === 'string' ? [selected] : (selected ?? []);
+    if (e2ePath) {
+      attachedFiles = [...new Set([...attachedFiles, e2ePath])];
+      return;
+    }
+    pathPicker = {
+      kind: 'attachments',
+      selection: current,
+      sessionID: originalSessionID,
+      directory: path,
+      initialPath: path || undefined,
+    };
+  }
+
+  async function selectPickerPaths(paths: string[]) {
+    const request = pathPicker;
+    pathPicker = null;
+    if (!request || !paths.length) return;
+    if (request.kind === 'project') {
+      await selectProject(paths[0], request.groupID);
+      return;
+    }
+    if (
+      request.selection !== selection ||
+      request.sessionID !== sessionID ||
+      request.directory !== directory
+    )
+      return;
     attachedFiles = [...new Set([...attachedFiles, ...paths])];
   }
 
@@ -3929,10 +3997,11 @@
         ? true
         : e2eAnswer === 'No'
           ? false
-          : await ask(`Delete “${session.title ?? 'Untitled plan'}”? This cannot be undone.`, {
-              title: 'Delete plan session',
-              kind: 'warning',
-            });
+          : await confirmInApp(
+              'Delete plan session',
+              `Delete “${session.title ?? 'Untitled plan'}”? This cannot be undone.`,
+              'Delete session',
+            );
     if (!confirmed) return;
     try {
       await client.session.remove({ sessionID: session.id });
@@ -5456,6 +5525,15 @@
     />
   </div>
 </div>
+<ConfirmDialog request={confirmation} onanswer={answerConfirmation} />
+<PathPicker
+  open={pathPicker !== null}
+  title={pathPicker?.kind === 'attachments' ? 'Attach files' : 'Choose a repository'}
+  mode={pathPicker?.kind === 'attachments' ? 'files' : 'directory'}
+  initialPath={pathPicker?.initialPath}
+  onselect={(paths) => void selectPickerPaths(paths)}
+  oncancel={() => (pathPicker = null)}
+/>
 <dialog
   class="commands-dialog worktree-approval-dialog"
   bind:this={worktreeApprovalDialog}
@@ -5665,14 +5743,25 @@
   >
     <label>Name<input bind:value={commandName} required /></label>
     <label>Command<textarea bind:value={commandText} required rows="3"></textarea></label>
-    <label
-      >Scope<select bind:value={commandScope}>
-        <option value="global">Global</option>
-        <option value="project" disabled={!selectedRepository(projectCatalog, directory)}
-          >Current project</option
-        >
-      </select></label
-    >
+    <div class="command-scope-field">
+      Scope
+      <OptionPicker
+        label="Scope"
+        value={commandScope}
+        options={[
+          { value: 'global', name: 'Global' },
+          {
+            value: 'project',
+            name: 'Current project',
+            disabled: !selectedRepository(projectCatalog, directory),
+          },
+        ]}
+        open={commandScopePickerOpen}
+        onopen={() => (commandScopePickerOpen = true)}
+        onclose={() => (commandScopePickerOpen = false)}
+        onchoose={(value) => (commandScope = value as 'global' | 'project')}
+      />
+    </div>
     <button type="submit" disabled={!commandName.trim() || !commandText.trim()}
       >{editingCommand ? 'Save changes' : 'Save command'}</button
     >

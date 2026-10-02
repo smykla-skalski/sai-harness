@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { open } from '@tauri-apps/plugin-dialog';
   import { invoke } from '@tauri-apps/api/core';
+  import PathPicker from './PathPicker.svelte';
+  import OptionPicker from './OptionPicker.svelte';
   import type { AgentAvailability } from './lib/acp';
   import type { ProjectCatalog, ProjectWorktree } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
@@ -104,9 +105,11 @@
   let worktreeNameInput = $state<HTMLInputElement>();
   let worktreeName = $state('');
   let worktreeDestination = $state<string | null>(null);
+  let choosingDestination = $state(false);
   let worktreeBase = $state('');
   let worktreeAgent = $state('');
   let worktreeAgentTouched = $state(false);
+  let agentPickerOpen = $state(false);
   let worktreeBusy = $state(false);
   let worktreeError = $state('');
   let issueQuery = $state('');
@@ -389,13 +392,8 @@
     void tick().then(() => worktreeNameInput?.focus());
   }
 
-  async function chooseWorktreeDestination() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: 'Worktree parent folder',
-    });
-    if (typeof selected === 'string') worktreeDestination = selected;
+  function chooseWorktreeDestination() {
+    choosingDestination = true;
   }
 
   async function createWorktree(path: string) {
@@ -953,8 +951,9 @@
         class="danger"
         aria-label={`Delete worktree ${target.worktree.branch}`}
         onclick={() => {
+          const { repository, worktree } = target;
           closeMenu();
-          void ondeleteworktree(target.repository, target.worktree.path, target.worktree.branch);
+          void ondeleteworktree(repository, worktree.path, worktree.branch);
         }}>Delete worktree…</button
       >
     {/if}
@@ -1069,18 +1068,27 @@
       </label>
       {#if !worktreeFromPalette}<label
           >Start with agent
-          <select
-            aria-label="Agent for new worktree"
-            bind:value={worktreeAgent}
-            onchange={() => (worktreeAgentTouched = true)}
+          <OptionPicker
+            label="Agent for new worktree"
+            value={worktreeAgent}
+            options={[
+              { value: '', name: 'Choose after creation' },
+              { value: 'opencode', name: 'OpenCode', disabled: !openCodeAvailable },
+              ...agents.map((agent) => ({
+                value: agent.id,
+                name: agent.name,
+                disabled: !agent.available,
+              })),
+            ]}
+            open={agentPickerOpen}
             disabled={worktreeBusy}
-          >
-            <option value="">Choose after creation</option>
-            <option value="opencode" disabled={!openCodeAvailable}>OpenCode</option>
-            {#each agents as agent (agent.id)}<option value={agent.id} disabled={!agent.available}
-                >{agent.name}</option
-              >{/each}
-          </select>
+            onopen={() => (agentPickerOpen = true)}
+            onclose={() => (agentPickerOpen = false)}
+            onchoose={(value) => {
+              worktreeAgent = value;
+              worktreeAgentTouched = true;
+            }}
+          />
         </label>{:else}<p class="worktree-issue-note">
           Choose an agent and session after creation.
         </p>{/if}
@@ -1114,6 +1122,17 @@
       </div>
     </form>{/if}
 </dialog>
+<PathPicker
+  open={choosingDestination}
+  title="Worktree parent folder"
+  mode="directory"
+  initialPath={worktreeDestination ?? creatingWorktreeFor ?? undefined}
+  onselect={(paths) => {
+    worktreeDestination = paths[0] ?? null;
+    choosingDestination = false;
+  }}
+  oncancel={() => (choosingDestination = false)}
+/>
 
 <dialog
   class="worktree-dialog"

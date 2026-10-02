@@ -59,11 +59,8 @@ describe('disk-backed settings', () => {
     await expect($(`.project-repository-select[title="${path}"]`)).toBeDisplayed();
 
     await openSettings();
-    await browser.execute(() => {
-      const select = document.querySelector<HTMLSelectElement>('#theme-select')!;
-      select.value = 'dark';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await $('[aria-label^="Theme:"]').click();
+    await $('.option-menu [role="option"]:nth-child(2)').click();
     await returnToWorkspace();
     try {
       await browser.waitUntil(async () => (await read())['sai-theme'] === 'dark');

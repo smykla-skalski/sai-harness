@@ -203,6 +203,7 @@ describe('repository setup', () => {
     const worktree = await browser.execute(() => localStorage.getItem('sai-directory'));
     if (!worktree) throw new Error('Expected the created worktree to remain selected');
     const row = $(`.project-worktree-select[title="${worktree}"]`);
+    const deleteMenuItem = '[aria-label="Delete worktree sidebar-task"]';
 
     await row.click({ button: 'right' });
     try {
@@ -218,14 +219,16 @@ describe('repository setup', () => {
       throw cause;
     }
     await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'No'));
-    await $('.worktree-menu button').click();
+    await $(deleteMenuItem).click();
+    await expect($('.worktree-menu')).not.toExist();
     await expect(row).toBeDisplayed();
 
     const dirty = join(worktree, 'keep-me.txt');
     writeFileSync(dirty, 'unsaved work\n');
     await row.click({ button: 'right' });
+    await expect($('.worktree-menu')).toBeDisplayed();
     await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
-    await $('.worktree-menu button').click();
+    await $(deleteMenuItem).click();
     await expect($('.app-shell [role="alert"]')).toHaveText(
       expect.stringContaining('Cannot delete worktree'),
     );
@@ -238,7 +241,7 @@ describe('repository setup', () => {
     writeFileSync(ignored, 'local secret\n');
     await row.click({ button: 'right' });
     await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
-    await $('.worktree-menu button').click();
+    await $(deleteMenuItem).click();
     await expect($('.app-shell [role="alert"]')).toHaveText(
       expect.stringContaining('Worktree has ignored files'),
     );
@@ -248,7 +251,7 @@ describe('repository setup', () => {
     rmSync(ignored);
     await row.click({ button: 'right' });
     await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
-    await $('.worktree-menu button').click();
+    await $(deleteMenuItem).click();
     await expect(row).not.toExist();
     expect(existsSync(worktree)).toBe(false);
     expect(
@@ -262,14 +265,8 @@ describe('repository setup', () => {
     const name = path.split('/').at(-1);
     await $(`[aria-label="Create worktree for ${name}"]`).click();
     await $(`[aria-label="Worktree name for ${name}"]`).setValue('agent-launch');
-    await browser.execute(() => {
-      const select = document.querySelector<HTMLSelectElement>(
-        '[aria-label="Agent for new worktree"]',
-      );
-      if (!select) throw new Error('Agent selection missing from worktree dialog');
-      select.value = 'claude';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await $('[aria-label^="Agent for new worktree:"]').click();
+    await $('.option-menu [role="option"]:nth-child(3)').click();
     await $('.worktree-form button[type="submit"]').click();
     await expect($('.worktree-dialog')).not.toBeDisplayed();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
@@ -280,7 +277,7 @@ describe('repository setup', () => {
       'page',
     );
     await $(`[aria-label="Create worktree for ${name}"]`).click();
-    await expect($('[aria-label="Agent for new worktree"]')).toHaveValue('claude');
+    await expect($('[aria-label^="Agent for new worktree:"]')).toHaveText('Claude');
     await $('.worktree-dialog .worktree-cancel').click();
   });
 

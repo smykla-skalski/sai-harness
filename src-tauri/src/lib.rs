@@ -67,6 +67,63 @@ struct RuntimeInfo {
     binary_path: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickerEntry {
+    name: String,
+    path: String,
+    is_directory: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickerDirectory {
+    path: String,
+    parent: Option<String>,
+    entries: Vec<PickerEntry>,
+}
+
+#[tauri::command]
+fn list_picker_directory(path: Option<String>) -> Result<PickerDirectory, String> {
+    let chosen = match path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => PathBuf::from(
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .ok_or("Cannot find the home folder")?,
+        ),
+    };
+    let chosen = chosen.canonicalize().map_err(|error| error.to_string())?;
+    if !chosen.is_dir() {
+        return Err("Choose a folder to browse".to_string());
+    }
+    let mut entries = std::fs::read_dir(&chosen)
+        .map_err(|error| error.to_string())?
+        .filter_map(|item| {
+            let item = item.ok()?;
+            let path = item.path();
+            let is_directory = path.is_dir();
+            if !is_directory && !path.is_file() {
+                return None;
+            }
+            Some(PickerEntry {
+                name: item.file_name().to_string_lossy().into_owned(),
+                path: path.to_string_lossy().into_owned(),
+                is_directory,
+            })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| {
+        b.is_directory
+            .cmp(&a.is_directory)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(PickerDirectory {
+        parent: chosen.parent().map(|path| path.to_string_lossy().into_owned()),
+        path: chosen.to_string_lossy().into_owned(),
+        entries,
+    })
+}
+
 struct OwnedRuntime {
     child: Child,
     info: RuntimeInfo,
@@ -1187,13 +1244,13 @@ pub fn run() {
         .manage(terminal::TerminalManager::default())
         .manage(browser_agent::BrowserManager::default())
         .manage(browser::CaptureStore::default())
-        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             settings::load_settings,
             settings::migrate_settings,
             settings::save_setting,
             start_runtime,
             validate_repository,
+            list_picker_directory,
             working_tree_diff,
             working_tree_revision,
             worktree_snapshots::record_turn_snapshot,

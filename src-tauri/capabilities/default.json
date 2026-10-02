@@ -9,6 +9,7 @@
     "allow-save-setting",
     "allow-start-runtime",
     "allow-validate-repository",
+    "allow-list-picker-directory",
     "allow-working-tree-diff",
     "allow-working-tree-revision",
     "allow-record-turn-snapshot",
@@ -80,8 +81,6 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-set-focus",
-    "core:webview:allow-set-webview-zoom",
-    "dialog:allow-open",
-    "dialog:allow-message"
+    "core:webview:allow-set-webview-zoom"
   ]
 }

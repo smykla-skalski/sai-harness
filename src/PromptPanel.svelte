@@ -9,6 +9,7 @@
   } from '@opencode/client';
   import type { OpenCodeClient } from './lib/opencode';
   import { openExternalLink } from './lib/external-link';
+  import OptionPicker from './OptionPicker.svelte';
 
   interface Props {
     pendingPermissions: PermissionRequest[];
@@ -24,6 +25,8 @@
   let customInputs = $state<Record<string, string>>({});
   let feedback = $state<Record<string, string>>({});
   let busyID = $state<string | null>(null);
+  let pickerOpen = $state<string | null>(null);
+  let suggestionOpen = $state<string | null>(null);
   let error = $state('');
   let status = $state('');
 
@@ -332,42 +335,79 @@
                   </div>
                 {/if}
               {:else if field.type === 'string' && field.options?.length && !field.custom}
-                <select
-                  aria-label={field.title ?? field.key}
+                <OptionPicker
+                  label={field.title ?? field.key}
                   value={String(value(form, field.key))}
-                  onchange={(event) => setValue(form, field.key, event.currentTarget.value)}
-                >
-                  <option value="">Choose…</option
-                  >{#each field.options as option (option.value)}<option value={option.value}
-                      >{option.label}</option
-                    >{/each}
-                </select>
-              {:else}<input
-                  type={field.type === 'string'
-                    ? field.format === 'uri'
-                      ? 'url'
-                      : field.format === 'date-time'
-                        ? 'text'
-                        : (field.format ?? 'text')
-                    : 'text'}
-                  aria-label={field.title ?? field.key}
-                  inputmode={field.type === 'number' || field.type === 'integer'
-                    ? 'decimal'
-                    : undefined}
-                  list={field.type === 'string' && field.custom && field.options?.length
-                    ? `options-${form.id}-${field.key}`
-                    : undefined}
-                  value={String(value(form, field.key))}
-                  placeholder={field.type === 'string' ? (field.placeholder ?? '') : ''}
-                  oninput={(event) => setValue(form, field.key, event.currentTarget.value)}
+                  options={[
+                    { value: '', name: 'Choose…' },
+                    ...field.options.map((option) => ({ value: option.value, name: option.label })),
+                  ]}
+                  open={pickerOpen === `${form.id}:${field.key}`}
+                  onopen={() => (pickerOpen = `${form.id}:${field.key}`)}
+                  onclose={() => (pickerOpen = null)}
+                  onchoose={(next) => setValue(form, field.key, next)}
                 />
-                {#if field.type === 'string' && field.custom && field.options?.length}
-                  <datalist id={`options-${form.id}-${field.key}`}>
-                    {#each field.options as option (option.value)}<option value={option.value}
-                        >{option.label}</option
-                      >{/each}
-                  </datalist>
-                {/if}
+              {:else}<div
+                  class="prompt-custom-combo"
+                  onfocusout={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                      suggestionOpen = null;
+                  }}
+                >
+                  <input
+                    type={field.type === 'string'
+                      ? field.format === 'uri'
+                        ? 'url'
+                        : field.format === 'date-time'
+                          ? 'text'
+                          : (field.format ?? 'text')
+                      : 'text'}
+                    aria-label={field.title ?? field.key}
+                    inputmode={field.type === 'number' || field.type === 'integer'
+                      ? 'decimal'
+                      : undefined}
+                    value={String(value(form, field.key))}
+                    placeholder={field.type === 'string' ? (field.placeholder ?? '') : ''}
+                    oninput={(event) => setValue(form, field.key, event.currentTarget.value)}
+                    onfocus={() => (suggestionOpen = `${form.id}:${field.key}`)}
+                    onkeydown={(event) => {
+                      if (event.key === 'Escape') suggestionOpen = null;
+                      if (
+                        event.key === 'ArrowDown' &&
+                        field.type === 'string' &&
+                        field.options?.length
+                      ) {
+                        event.preventDefault();
+                        event.currentTarget.parentElement
+                          ?.querySelector<HTMLButtonElement>('.prompt-suggestions button')
+                          ?.focus();
+                      }
+                    }}
+                  />
+                  {#if suggestionOpen === `${form.id}:${field.key}` && field.type === 'string' && field.custom && field.options?.length}
+                    <div
+                      class="prompt-suggestions"
+                      role="listbox"
+                      aria-label={`${field.title ?? field.key} suggestions`}
+                    >
+                      {#each field.options
+                        .filter((option) => `${option.label} ${option.value}`
+                            .toLowerCase()
+                            .includes(String(value(form, field.key)).toLowerCase()))
+                        .slice(0, 8) as option (option.value)}
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={value(form, field.key) === option.value}
+                          onclick={() => {
+                            setValue(form, field.key, option.value);
+                            suggestionOpen = null;
+                          }}>{option.label}</button
+                        >
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
               {/if}
             </div>
           {/if}
