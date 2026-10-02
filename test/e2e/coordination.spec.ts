@@ -10,6 +10,41 @@ describe('agent coordination bridge', () => {
   before(() => execFileSync('git', ['init', '-q', repository]));
   after(() => rmSync(repository, { recursive: true, force: true }));
 
+  it('automatically exposes the Sail skill to connected agents', async () => {
+    const config = await browser.tauri.execute(
+      async ({ core }, directory) =>
+        core.invoke<{ command: string; args: string[]; env: Record<string, string> }>(
+          'browser_mcp_config',
+          { directory, agent: 'claude' },
+        ),
+      realpathSync(repository),
+    );
+    const requests = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'sail_skill', arguments: {} },
+      },
+    ];
+    const output = execFileSync(config.command, config.args, {
+      env: { ...process.env, ...config.env },
+      input: `${requests.map((request) => JSON.stringify(request)).join('\n')}\n`,
+      timeout: 30_000,
+      encoding: 'utf8',
+    });
+    const [initialization, tools, skill] = output
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(initialization.result.instructions).toContain('# Sail');
+    expect(initialization.result.instructions).toContain('agent_spawn');
+    expect(tools.result.tools.map((tool: { name: string }) => tool.name)).toContain('sail_skill');
+    expect(skill.result.content[0].text).toBe(initialization.result.instructions);
+  });
+
   it('rejects a saved ACP source session that is no longer running', async () => {
     const path = realpathSync(repository);
     await browser.execute((directory) => {

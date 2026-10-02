@@ -47,6 +47,8 @@ mise run dev
 
 Select the repository in the app and complete the repository setup checks, then describe the work in chat. The first message creates an Architect session. The app detects OpenCode in common installation locations. Open **OpenCode settings** to see the detected binary or set an absolute path; the app remembers an override. You can also set `SAIL_OPENCODE_BIN` before starting the app.
 
+Sail connects its MCP server to each Claude, Codex, and OpenCode agent session. The server sends the bundled [Sail skill](skills/sail/SKILL.md) during initialization and exposes it through the `sail_skill` tool, so agents can discover how to use Sail's worktree, agent, terminal, thread, and embedded browser tools.
+
 Use **+ Group** and **+ Repo** in the sidebar to organize saved repositories. Each repository row has a **+** control to create a worktree. Sail uses the remote default branch when Git records one, then `main` or `master`, then the main checkout branch. Enter a base branch in the form to choose another starting point. By default, new worktrees live in `~/sail/worktrees/<repository>-<id>/<name>` so repositories with the same name stay separate; choose a different parent folder in the form when needed. `SAIL_WORKTREE_ROOT` overrides the default root.
 
 To customize worktrees, commit `.sail/worktree.json` in the repository:
