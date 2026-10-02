@@ -202,6 +202,45 @@ for await (const line of createInterface({ input: process.stdin })) {
     const user = { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } };
     sessions.get(sessionId).history.push(user);
     update(sessionId, user);
+    if (text === 'Activity demo') {
+      const record = (value) => {
+        sessions.get(sessionId).history.push(value);
+        update(sessionId, value);
+      };
+      const tool = (name, status, content) => ({
+        sessionUpdate: status === 'in_progress' ? 'tool_call' : 'tool_call_update',
+        toolCallId: `demo-${message.id}-${name}`,
+        title: name,
+        status,
+        ...(content
+          ? { content: [{ type: 'content', content: { type: 'text', text: content } }] }
+          : {}),
+      });
+      record({
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: 'I’ll inspect the files, run checks, and summarize the result.',
+        },
+      });
+      setTimeout(() => record(tool('Read files', 'in_progress')), 300);
+      setTimeout(() => record(tool('Read files', 'completed', 'Found 12 source files.')), 1300);
+      setTimeout(() => record(tool('Search references', 'in_progress')), 1600);
+      setTimeout(() => record(tool('Search references', 'completed', 'Found 4 references.')), 2600);
+      setTimeout(() => record(tool('Run checks', 'in_progress')), 2900);
+      setTimeout(() => record(tool('Run checks', 'completed', 'All checks passed.')), 3900);
+      setTimeout(() => {
+        record({
+          sessionUpdate: 'agent_message_chunk',
+          content: {
+            type: 'text',
+            text: 'The checks passed. The tool details are available above.',
+          },
+        });
+        send({ id: message.id, result: { stopReason: 'end_turn' } });
+      }, 4200);
+      continue;
+    }
     update(sessionId, {
       sessionUpdate: 'tool_call',
       toolCallId: 'review',
