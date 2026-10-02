@@ -12,7 +12,6 @@ import {
   clampPaneRatio,
   splitPane,
   updatePane,
-  withoutSideChats,
 } from '../src/lib/panes.ts';
 
 void test('browser pop history selects duplicate URLs in travel direction', () => {
@@ -121,31 +120,6 @@ void test('pane layouts survive serialization and reject malformed saved trees',
   };
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': invalidDirection })), {});
   assert.deepEqual(loadPaneLayouts('{invalid'), {});
-});
-
-void test('side chats disappear from saved layouts without losing adjacent threads', () => {
-  const first = splitPane(mainPane(), 'main', 'row');
-  const thread = {
-    agent: 'claude',
-    sessionId: 'parent',
-    directory: '/repo',
-    title: 'Parent',
-    updated: 1,
-  };
-  const withThread = updatePane(first, leaves(first)[1].id, { agent: 'claude', thread });
-  const second = splitPane(withThread, leaves(withThread)[1].id, 'row');
-  const side = updatePane(second, leaves(second)[2].id, {
-    kind: 'side-chat',
-    source: { kind: 'acp', agent: 'claude', context: 'private context' },
-  });
-  const saved = withoutSideChats(side);
-  assert.deepEqual(
-    leaves(saved).map((pane) => pane.id),
-    leaves(withThread).map((pane) => pane.id),
-  );
-  assert.deepEqual(leaves(saved)[1].thread, thread);
-  assert.equal(JSON.stringify(saved).includes('private context'), false);
-  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': saved }))['/repo'], saved);
 });
 
 void test('canonical path migration updates threads inside nested panes', () => {

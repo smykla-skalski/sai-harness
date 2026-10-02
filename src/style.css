@@ -931,6 +931,19 @@ button:disabled {
   outline: 2px solid transparent;
   outline-offset: -2px;
 }
+.pane-leaf-frame {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.pane-leaf-frame.side-open > .pane-leaf {
+  flex: 1 1 50%;
+}
+.pane-leaf-frame.side-open > .side-chat-leaf {
+  border-left: 8px solid var(--shell-divider);
+}
 .pane-leaf.focused {
   outline-color: var(--sui-primary);
 }

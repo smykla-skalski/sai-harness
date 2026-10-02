@@ -15,7 +15,13 @@
   import type { BrowserAttachment } from './lib/browser-pick';
   import type { DiffComment } from './lib/diff-comments';
   import type { ThreadStatus } from './lib/attention';
-  import { clampPaneRatio, paneRatioBounds, type BrowserTab, type Pane } from './lib/panes';
+  import {
+    clampPaneRatio,
+    paneRatioBounds,
+    type BrowserTab,
+    type Pane,
+    type SideChat as SideChatState,
+  } from './lib/panes';
 
   type Props = {
     pane: Pane;
@@ -23,6 +29,7 @@
     directory: string;
     dark: boolean;
     agents: AgentAvailability[];
+    sideChat: SideChatState | null;
     client: OpenCodeClient | null;
     onentries: (
       id: string,
@@ -69,6 +76,7 @@
     directory,
     dark,
     agents,
+    sideChat,
     client,
     onentries,
     changesPanes,
@@ -193,6 +201,7 @@
       {directory}
       {dark}
       {agents}
+      {sideChat}
       {client}
       {onentries}
       {changesPanes}
@@ -261,6 +270,7 @@
       {directory}
       {dark}
       {agents}
+      {sideChat}
       {client}
       {onentries}
       {changesPanes}
@@ -297,162 +307,177 @@
     />
   </div>
 {:else}
-  <section
-    class="pane-leaf"
-    class:focused={focused === pane.id}
-    data-pane-id={pane.id}
-    aria-keyshortcuts="Meta+Alt+ArrowLeft Meta+Alt+ArrowRight Meta+Alt+ArrowUp Meta+Alt+ArrowDown F6 Shift+F6"
-    aria-label={pane.id === 'main'
-      ? 'Main pane'
-      : pane.kind === 'terminal'
-        ? 'Terminal pane'
-        : pane.kind === 'agent-terminal'
-          ? 'Agent terminal pane'
-          : pane.kind === 'browser'
-            ? 'Browser pane'
-            : pane.kind === 'side-chat'
-              ? 'Side chat pane'
+  <div class="pane-leaf-frame" class:side-open={sideChat?.parentId === pane.id}>
+    <section
+      class="pane-leaf"
+      class:focused={focused === pane.id}
+      data-pane-id={pane.id}
+      aria-keyshortcuts="Meta+Alt+ArrowLeft Meta+Alt+ArrowRight Meta+Alt+ArrowUp Meta+Alt+ArrowDown F6 Shift+F6"
+      aria-label={pane.id === 'main'
+        ? 'Main pane'
+        : pane.kind === 'terminal'
+          ? 'Terminal pane'
+          : pane.kind === 'agent-terminal'
+            ? 'Agent terminal pane'
+            : pane.kind === 'browser'
+              ? 'Browser pane'
               : pane.agent
                 ? `${pane.agent} pane`
                 : 'Empty pane'}
-    tabindex="-1"
-    onfocusin={() => onfocus(pane.id)}
-    onpointerdown={(event) => {
-      onfocus(pane.id);
-      if (
-        pane.id === 'main' ||
-        pane.agent ||
-        pane.kind === 'terminal' ||
-        pane.kind === 'agent-terminal' ||
-        pane.kind === 'browser' ||
-        pane.kind === 'side-chat' ||
-        !(event.target instanceof Element)
-      )
-        return;
-      if (event.target.closest('button, input, textarea, select')) return;
-      (
-        event.currentTarget.querySelector<HTMLButtonElement>(
-          '[data-agent-choice]:not(:disabled), [data-pane-picker]',
-        ) ?? event.currentTarget
-      ).focus();
-    }}
-  >
-    {#if pane.id !== 'main'}
-      <div class="pane-heading">
-        <span
-          >{pane.kind === 'terminal'
-            ? 'Terminal'
-            : pane.kind === 'agent-terminal'
-              ? 'Agent terminal'
-              : pane.kind === 'browser'
-                ? 'Browser'
-                : pane.kind === 'side-chat'
-                  ? 'Side chat'
+      tabindex="-1"
+      onfocusin={() => onfocus(pane.id)}
+      onpointerdown={(event) => {
+        onfocus(pane.id);
+        if (
+          pane.id === 'main' ||
+          pane.agent ||
+          pane.kind === 'terminal' ||
+          pane.kind === 'agent-terminal' ||
+          pane.kind === 'browser' ||
+          !(event.target instanceof Element)
+        )
+          return;
+        if (event.target.closest('button, input, textarea, select')) return;
+        (
+          event.currentTarget.querySelector<HTMLButtonElement>(
+            '[data-agent-choice]:not(:disabled), [data-pane-picker]',
+          ) ?? event.currentTarget
+        ).focus();
+      }}
+    >
+      {#if pane.id !== 'main'}
+        <div class="pane-heading">
+          <span
+            >{pane.kind === 'terminal'
+              ? 'Terminal'
+              : pane.kind === 'agent-terminal'
+                ? 'Agent terminal'
+                : pane.kind === 'browser'
+                  ? 'Browser'
                   : (pane.thread?.title ??
                     (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
-        ><small>⌘⌥ + arrow to switch</small><button
-          aria-label="Close pane"
-          onclick={() => onclose(pane.id)}>×</button
-        >
-      </div>
-    {:else if canClose}
-      <div class="pane-heading">
-        <span>Main thread</span><small>⌘⌥ + arrow to switch</small><button
-          aria-label="Close main pane"
-          onclick={() => onclose(pane.id)}>×</button
-        >
-      </div>
-    {/if}
-    {#if pane.id === 'main'}
-      {@render main()}
-    {:else if pane.kind === 'terminal'}
-      {#key `${directory}:${pane.id}`}
-        <TerminalPane
-          id={pane.id}
-          {directory}
-          {dark}
-          focused={focused === pane.id}
-          {onshortcut}
-          command={pendingCommands[pane.id]}
-          {oncommandstarted}
-          onexit={onterminalexit}
-        />
-      {/key}
-    {:else if pane.kind === 'agent-terminal'}
-      <AgentTerminalPane id={pane.terminalId} {dark} />
-    {:else if pane.kind === 'browser'}
-      {#key `${directory}:${pane.id}`}
-        <BrowserPane
-          {pane}
-          {directory}
-          onstate={(tabs, activeTab) => onbrowserstate(pane.id, tabs, activeTab)}
-          onpick={(attachment) => onbrowserpick(pane.id, attachment)}
-          onfocus={() => onfocus(pane.id)}
-          {onshortcut}
-        />
-      {/key}
-    {:else if pane.kind === 'side-chat'}
-      <SideChat
-        source={pane.source}
-        {client}
-        {directory}
-        focused={focused === pane.id}
-        focusPrompt={focusPromptPane === pane.id}
-        {onpromptfocused}
-      />
-    {:else if pane.agent}
-      {#key `${pane.id}:${pane.agent}`}
-        <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>
-          <AgentWorkspace
-            agent={pane.agent}
-            agentName={agents.find((agent) => agent.id === pane.agent)?.name ?? pane.agent}
-            {directory}
-            thread={pane.thread}
-            running={running(pane.thread)}
-            focused={focused === pane.id}
-            focusPrompt={focusPromptPane === pane.id}
-            picked={pickedAttachments[pane.id]}
-            externalPrompt={pendingAgentBatches[pane.id]}
-            onexternalresult={onbatchcomplete}
-            {onpickedconsumed}
-            {onpromptfocused}
-            onentrieschange={(entries, sessionId, ready) =>
-              onentries(pane.id, entries, sessionId, ready)}
-            oncreated={(thread) => oncreated(pane.id, thread)}
-            {onactivity}
-            {onstatus}
-            onterminal={onagentterminal}
-          />
-          {#if changesPanes.includes(pane.id)}
-            <DiffPanel
-              {directory}
-              files={diffs}
-              annotations={{}}
-              selected={selectedFile}
-              loading={diffLoading}
-              error={diffError}
-              onselect={(file) => (selectedFile = file)}
-              onrefresh={refreshDiff}
-              onclose={() => onchanges(pane.id)}
-              scope={`${directory}\0${pane.id}\0acp:${pane.agent}:${pane.thread?.sessionId ?? 'new'}`}
-              comments={diffComments[
-                `${directory}\0${pane.id}\0acp:${pane.agent}:${pane.thread?.sessionId ?? 'new'}`
-              ] ?? []}
-              oncomments={ondiffcomments}
-              oncommentssent={ondiffcommentssent}
-              onsendcomments={(scope, text) => onsenddiffcomments(pane.id, scope, text)}
-            />
-          {/if}
+          ><small>⌘⌥ + arrow to switch</small><button
+            aria-label="Close pane"
+            onclick={() => onclose(pane.id)}>×</button
+          >
         </div>
+      {:else if canClose}
+        <div class="pane-heading">
+          <span>Main thread</span><small>⌘⌥ + arrow to switch</small><button
+            aria-label="Close main pane"
+            onclick={() => onclose(pane.id)}>×</button
+          >
+        </div>
+      {/if}
+      {#if pane.id === 'main'}
+        {@render main()}
+      {:else if pane.kind === 'terminal'}
+        {#key `${directory}:${pane.id}`}
+          <TerminalPane
+            id={pane.id}
+            {directory}
+            {dark}
+            focused={focused === pane.id}
+            {onshortcut}
+            command={pendingCommands[pane.id]}
+            {oncommandstarted}
+            onexit={onterminalexit}
+          />
+        {/key}
+      {:else if pane.kind === 'agent-terminal'}
+        <AgentTerminalPane id={pane.terminalId} {dark} />
+      {:else if pane.kind === 'browser'}
+        {#key `${directory}:${pane.id}`}
+          <BrowserPane
+            {pane}
+            {directory}
+            onstate={(tabs, activeTab) => onbrowserstate(pane.id, tabs, activeTab)}
+            onpick={(attachment) => onbrowserpick(pane.id, attachment)}
+            onfocus={() => onfocus(pane.id)}
+            {onshortcut}
+          />
+        {/key}
+      {:else if pane.agent}
+        {#key `${pane.id}:${pane.agent}`}
+          <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>
+            <AgentWorkspace
+              agent={pane.agent}
+              agentName={agents.find((agent) => agent.id === pane.agent)?.name ?? pane.agent}
+              {directory}
+              thread={pane.thread}
+              running={running(pane.thread)}
+              focused={focused === pane.id}
+              focusPrompt={focusPromptPane === pane.id}
+              picked={pickedAttachments[pane.id]}
+              externalPrompt={pendingAgentBatches[pane.id]}
+              onexternalresult={onbatchcomplete}
+              {onpickedconsumed}
+              {onpromptfocused}
+              onentrieschange={(entries, sessionId, ready) =>
+                onentries(pane.id, entries, sessionId, ready)}
+              oncreated={(thread) => oncreated(pane.id, thread)}
+              {onactivity}
+              {onstatus}
+              onterminal={onagentterminal}
+            />
+            {#if changesPanes.includes(pane.id)}
+              <DiffPanel
+                {directory}
+                files={diffs}
+                annotations={{}}
+                selected={selectedFile}
+                loading={diffLoading}
+                error={diffError}
+                onselect={(file) => (selectedFile = file)}
+                onrefresh={refreshDiff}
+                onclose={() => onchanges(pane.id)}
+                scope={`${directory}\0${pane.id}\0acp:${pane.agent}:${pane.thread?.sessionId ?? 'new'}`}
+                comments={diffComments[
+                  `${directory}\0${pane.id}\0acp:${pane.agent}:${pane.thread?.sessionId ?? 'new'}`
+                ] ?? []}
+                oncomments={ondiffcomments}
+                oncommentssent={ondiffcommentssent}
+                onsendcomments={(scope, text) => onsenddiffcomments(pane.id, scope, text)}
+              />
+            {/if}
+          </div>
+        {/key}
+      {:else}
+        <EmptyPanePicker
+          {agents}
+          focused={focused === pane.id}
+          onselect={(agent) => onchooseagent(pane.id, agent)}
+          onterminal={() => onchooseterminal(pane.id)}
+          onbrowser={() => onchoosebrowser(pane.id)}
+        />
+      {/if}
+    </section>
+    {#if sideChat?.parentId === pane.id}
+      {#key sideChat.id}
+        <section
+          class="pane-leaf side-chat-leaf"
+          class:focused={focused === sideChat.id}
+          data-pane-id={sideChat.id}
+          aria-label="Side chat pane"
+          tabindex="-1"
+          onfocusin={() => onfocus(sideChat.id)}
+        >
+          <div class="pane-heading">
+            <span>Side chat</span><small>⌘⌥ + arrow to switch</small><button
+              aria-label="Close pane"
+              onclick={() => onclose(sideChat.id)}>×</button
+            >
+          </div>
+          <SideChat
+            source={sideChat.source}
+            {client}
+            {directory}
+            focused={focused === sideChat.id}
+            focusPrompt={focusPromptPane === sideChat.id}
+            {onpromptfocused}
+          />
+        </section>
       {/key}
-    {:else}
-      <EmptyPanePicker
-        {agents}
-        focused={focused === pane.id}
-        onselect={(agent) => onchooseagent(pane.id, agent)}
-        onterminal={() => onchooseterminal(pane.id)}
-        onbrowser={() => onchoosebrowser(pane.id)}
-      />
     {/if}
-  </section>
+  </div>
 {/if}

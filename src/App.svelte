@@ -63,9 +63,9 @@
     newBrowserTab,
     splitPane,
     updatePane,
-    withoutSideChats,
     type BrowserTab,
     type Pane,
+    type SideChat,
   } from './lib/panes';
   import {
     acp,
@@ -209,6 +209,7 @@
   let runningAgentThreads = $state<Record<string, boolean>>({});
   const savedPaneLayouts = loadPaneLayouts(getSetting('sai-pane-layouts'));
   let paneLayouts = $state<Record<string, Pane>>(savedPaneLayouts);
+  let sideChat = $state<SideChat | null>(null);
   let focusedPane = $state(leaves(savedPaneLayouts[savedDirectory] ?? mainPane())[0]?.id ?? 'main');
   let paneLayout = $derived(paneLayouts[directory] ?? mainPane());
   let agentChangesOpen = $state(false);
@@ -266,6 +267,30 @@
   let editingSessionID = $state<string | null>(null);
   let editedTitle = $state('');
   let sessionID = $state<string | null>(null);
+  $effect(() => {
+    const side = sideChat;
+    if (!side) return;
+    const parent = leaves(paneLayout).find((leaf) => leaf.id === side.parentId);
+    if (!parent) {
+      sideChat = null;
+      return;
+    }
+    if (side.source.kind === 'opencode') {
+      if (side.parentId !== 'main' || acpAgent || sessionID !== side.source.sessionID)
+        sideChat = null;
+      return;
+    }
+    const agent = side.parentId === 'main' ? acpAgent : parent.agent;
+    const thread = side.parentId === 'main' ? acpThread : parent.thread;
+    if (
+      agent !== side.source.agent ||
+      (side.parentThreadId && thread?.sessionId !== side.parentThreadId)
+    ) {
+      sideChat = null;
+      return;
+    }
+    if (!side.parentThreadId && thread) sideChat = { ...side, parentThreadId: thread.sessionId };
+  });
   let messages = $state<SessionMessageInfo[]>([]);
   let olderMessageCursor = $state<string | null>(null);
   let loadingOlder = $state(false);
@@ -1455,7 +1480,7 @@
 
   async function loadProject(path: string, recordRestoredThread = true) {
     if (directory !== path) {
-      paneLayouts = { ...paneLayouts, [directory]: withoutSideChats(paneLayout) };
+      sideChat = null;
       agentEntrySnapshots = {};
       for (const batch of Object.values(pendingAgentBatches))
         completeAgentBatch(batch.id, 'Project changed before comments were sent.');
@@ -1782,6 +1807,7 @@
 
   function openAgent(agent: AgentId, thread: AgentThread | null = null, preserveCycle = false) {
     if (!directory) return;
+    sideChat = null;
     if (!preserveCycle) {
       recentCycleKeys = null;
       ++recentJumpGeneration;
@@ -2126,14 +2152,7 @@
   }
 
   function persistPaneLayouts() {
-    setSetting(
-      'sai-pane-layouts',
-      JSON.stringify(
-        Object.fromEntries(
-          Object.entries(paneLayouts).map(([path, layout]) => [path, withoutSideChats(layout)]),
-        ),
-      ),
-    );
+    setSetting('sai-pane-layouts', JSON.stringify(paneLayouts));
   }
 
   function savePaneLayout(layout: Pane) {
@@ -2209,9 +2228,10 @@
   }
 
   function openSideChat() {
+    if (focusedPane === sideChat?.id) return;
     const current = leaves(paneLayout).find((leaf) => leaf.id === focusedPane);
-    if (!current || current.kind === 'side-chat') return;
-    let source: Extract<Pane, { kind: 'side-chat' }>['source'];
+    if (!current) return;
+    let source: SideChat['source'];
     if (focusedPane === 'main' && !acpAgent && sessionID && client) {
       source = { kind: 'opencode', sessionID };
     } else {
@@ -2241,10 +2261,18 @@
         .slice(-40000);
       source = { kind: 'acp', agent, context };
     }
-    const created = splitFocusedPane('row');
-    if (!created) return;
-    savePaneLayout(updatePane(paneLayout, created, { kind: 'side-chat', source }));
-    focusPaneForTyping(created);
+    if ((paneSpan(focusedPane, 'row') ?? 0) < 2 * minPaneSpan + 8) {
+      error = 'Enlarge the focused pane before opening a side chat.';
+      return;
+    }
+    const id = crypto.randomUUID();
+    sideChat = {
+      id,
+      parentId: focusedPane,
+      parentThreadId: focusedPane === 'main' ? acpThread?.sessionId : current.thread?.sessionId,
+      source,
+    };
+    focusPaneForTyping(id);
   }
 
   function focusPaneForTyping(id: string) {
@@ -2370,6 +2398,13 @@
   }
 
   function closeFocusedPane(id: string) {
+    if (id === sideChat?.id) {
+      const parentId = sideChat.parentId;
+      sideChat = null;
+      focusPaneForTyping(parentId);
+      return;
+    }
+    if (id === sideChat?.parentId) sideChat = null;
     const batch = pendingAgentBatches[id];
     if (batch) completeAgentBatch(batch.id, 'Agent pane closed before comments were sent.');
     ++recentJumpGeneration;
@@ -2387,6 +2422,11 @@
 
   function closeCurrentPane() {
     ++recentJumpGeneration;
+    if (focusedPane === sideChat?.id) {
+      closeFocusedPane(focusedPane);
+      return;
+    }
+    if (focusedPane === sideChat?.parentId && leaves(paneLayout).length === 1) sideChat = null;
     if (leaves(paneLayout).length > 1) {
       closeFocusedPane(focusedPane);
       return;
@@ -3675,17 +3715,18 @@
           !event.shiftKey &&
           ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)))
     ) {
-      const panes = leaves(paneLayout);
-      if (panes.length < 2) return;
+      const paneIDs = [
+        ...leaves(paneLayout).map((leaf) => leaf.id),
+        ...(sideChat ? [sideChat.id] : []),
+      ];
+      if (paneIDs.length < 2) return;
       event.preventDefault();
       const next =
         event.key === 'F6'
-          ? panes[
-              (panes.findIndex((leaf) => leaf.id === focusedPane) +
-                (event.shiftKey ? -1 : 1) +
-                panes.length) %
-                panes.length
-            ]?.id
+          ? paneIDs[
+              (paneIDs.indexOf(focusedPane) + (event.shiftKey ? -1 : 1) + paneIDs.length) %
+                paneIDs.length
+            ]
           : adjacentPaneId(
               [...document.querySelectorAll<HTMLElement>('[data-pane-id]')].map((element) => {
                 const { left, right, top, bottom } = element.getBoundingClientRect();
@@ -4370,12 +4411,13 @@
       {directory}
       {dark}
       agents={agentAvailability}
+      {sideChat}
       {client}
       onentries={(id, entries, sessionId, ready) =>
         (agentEntrySnapshots = { ...agentEntrySnapshots, [id]: { entries, sessionId, ready } })}
       {changesPanes}
       main={mainPaneContent}
-      canClose={leaves(paneLayout).length > 1}
+      canClose={leaves(paneLayout).length > 1 || !!sideChat}
       onfocus={focusPane}
       onclose={closeFocusedPane}
       onratio={updatePaneRatio}
