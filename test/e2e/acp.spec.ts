@@ -327,6 +327,7 @@ describe('ACP agent threads', () => {
     await $('.agent-launches button').click();
     await $('.agent-composer textarea').setValue('Main action');
     await $('.agent-actions button').click();
+    await expect($('.agent-permission button')).toBeDisplayed();
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Done: Main action'));
     await browser.keys(['Meta', 'd']);
@@ -334,6 +335,7 @@ describe('ACP agent threads', () => {
     await $('.agent-launches button').click();
     await $('.pane-leaf.focused .agent-composer textarea').setValue('Split action');
     await $('.pane-leaf.focused .agent-actions button').click();
+    await expect($('.pane-leaf.focused .agent-permission button')).toBeDisplayed();
     await $('.pane-leaf.focused .agent-permission button').click();
     await expect($('.pane-leaf.focused .agent-conversation')).toHaveText(
       expect.stringContaining('Done: Split action'),
