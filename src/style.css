@@ -1569,6 +1569,7 @@ button:disabled {
 }
 @media (prefers-reduced-motion: reduce) {
   .activity-spinner,
+  .project-worktree-spinner,
   .thread-status-dot.working {
     animation: none;
   }

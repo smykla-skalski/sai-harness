@@ -128,6 +128,10 @@ describe('responsive worktree operations', () => {
     if (!createdPath) throw new Error('Created worktree missing from catalog');
     expect(existsSync(join(secondRepository, 'setup-path.txt'))).toBe(false);
     expect(existsSync(join(createdPath, 'setup-path.txt'))).toBe(false);
+    await browser.refresh();
+    await expect(
+      $(`.project-default-worktree-select[title="${secondRepository}"]`),
+    ).toHaveAttribute('aria-current', 'page');
     await $(`.project-worktree-select[title="${createdPath}"]`).click();
     await browser.waitUntil(() => existsSync(join(createdPath, 'setup-path.txt')));
   });

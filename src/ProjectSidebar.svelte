@@ -409,11 +409,10 @@
     if (!worktreeName.trim()) return;
     if (
       worktreeCreations.some(
-        (creation) =>
-          creation.repository === path && creation.name === worktreeName.trim() && !creation.error,
+        (creation) => creation.repository === path && creation.name === worktreeName.trim(),
       )
     ) {
-      worktreeError = 'This worktree is already being created.';
+      worktreeError = 'This worktree already has a pending entry. Retry or dismiss it first.';
       return;
     }
     if (selectedIssue && !worktreeAgent) {
