@@ -32,6 +32,7 @@
   let generation = 0;
   let timeout: ReturnType<typeof setTimeout> | null = null;
   let expectedUrl: string | null = null;
+  let popDirection: -1 | 1 = -1;
   let mounted = false;
 
   const current = $derived(pane.tabs.find((tab) => tab.id === pane.activeTab));
@@ -82,12 +83,17 @@
       return;
     }
     if (mode === 'pop') {
-      const index = tab.history.lastIndexOf(url);
+      const previous = tab.history.slice(0, tab.index).lastIndexOf(url);
+      const next = tab.history.findIndex((item, index) => index > tab.index && item === url);
+      const index =
+        popDirection < 0 ? (previous >= 0 ? previous : next) : next >= 0 ? next : previous;
       if (index >= 0) {
+        popDirection = index < tab.index ? -1 : 1;
         updateTab({ ...tab, index });
         return;
       }
     }
+    popDirection = -1;
     const history = [...tab.history.slice(0, tab.index + 1), url].slice(-100);
     updateTab({ ...tab, history, index: history.length - 1 });
   }
@@ -198,6 +204,7 @@
     const index = tab.index + step;
     const url = tab.history[index];
     if (!url) return;
+    popDirection = step < 0 ? -1 : 1;
     updateTab({ ...tab, index });
     address = url;
     try {

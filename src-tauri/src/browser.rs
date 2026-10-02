@@ -71,7 +71,10 @@ struct BrowserRouteEvent {
 
 const SHORTCUT_SCRIPT: &str = r#"
   (() => {
-    const route = (mode) => window.__TAURI_INTERNALS__?.invoke('browser_route', { mode });
+    const route = (mode) => window.__TAURI_INTERNALS__?.invoke('browser_route', {
+      mode,
+      url: location.href,
+    });
     for (const mode of ['pushState', 'replaceState']) {
       const original = history[mode];
       history[mode] = function (...args) {
@@ -82,6 +85,12 @@ const SHORTCUT_SCRIPT: &str = r#"
     }
     window.addEventListener('popstate', () => route('pop'));
     window.addEventListener('hashchange', () => route('pop'));
+    let observedUrl = location.href;
+    setInterval(() => {
+      if (location.href === observedUrl) return;
+      observedUrl = location.href;
+      route('push');
+    }, 250);
   })();
   document.addEventListener('keydown', (event) => {
     if (event.shiftKey) return;
@@ -95,6 +104,16 @@ const SHORTCUT_SCRIPT: &str = r#"
   }, true);
   document.addEventListener('pointerdown', () => {
     window.__TAURI_INTERNALS__?.invoke('browser_shortcut', { action: 'focus' });
+  }, true);
+"#;
+
+#[cfg(target_os = "linux")]
+const CLOSE_SCRIPT: &str = r#"
+  document.addEventListener('keydown', (event) => {
+    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'w') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.__TAURI_INTERNALS__?.invoke('browser_shortcut', { action: 'close' });
   }, true);
 "#;
 
@@ -163,6 +182,8 @@ pub async fn browser_open(
                     );
                 }
             });
+        #[cfg(target_os = "linux")]
+        let builder = builder.initialization_script(CLOSE_SCRIPT);
         window
             .add_child(
                 builder,
@@ -241,7 +262,16 @@ pub fn browser_close(window: Window, label: String) -> Result<(), String> {
 #[tauri::command]
 pub fn browser_shortcut(webview: tauri::Webview, action: String) -> Result<(), String> {
     let label = validate_label(webview.label())?;
-    if !["focus", "arrowleft", "arrowright", "arrowup", "arrowdown"].contains(&action.as_str()) {
+    if ![
+        "focus",
+        "close",
+        "arrowleft",
+        "arrowright",
+        "arrowup",
+        "arrowdown",
+    ]
+    .contains(&action.as_str())
+    {
         return Err("Invalid browser action".to_string());
     }
     webview
@@ -257,13 +287,16 @@ pub fn browser_shortcut(webview: tauri::Webview, action: String) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn browser_route(webview: tauri::Webview, mode: String) -> Result<(), String> {
+pub fn browser_route(webview: tauri::Webview, mode: String, url: String) -> Result<(), String> {
     let label = validate_label(webview.label())?;
     if !["push", "replace", "pop"].contains(&mode.as_str()) {
         return Err("Invalid browser route action".to_string());
     }
-    let url = webview.url().map_err(|error| error.to_string())?;
-    parse_url(url.as_str())?;
+    let url = parse_url(&url)?;
+    let current = webview.url().map_err(|error| error.to_string())?;
+    if url.origin() != current.origin() {
+        return Err("Browser route changed origin".to_string());
+    }
     webview
         .emit_to(
             "main",
