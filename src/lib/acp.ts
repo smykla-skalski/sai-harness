@@ -195,6 +195,52 @@ export function updateEntries(
   entries: AgentEntry[],
   update: Record<string, unknown>,
 ): AgentEntry[] {
+  const next = entries.slice();
+  return applyEntryUpdate(next, update) ? next : entries;
+}
+
+export function updateEntriesBatch(
+  entries: AgentEntry[],
+  updates: Record<string, unknown>[],
+): AgentEntry[] {
+  const next = entries.slice();
+  const toolIndexes = updates.some(
+    (update) => update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update',
+  )
+    ? indexTools(next)
+    : undefined;
+  let changed = false;
+  for (const update of updates) changed = applyEntryUpdate(next, update, toolIndexes) || changed;
+  return changed ? next : entries;
+}
+
+const replayToolIndexes = new WeakMap<AgentEntry[], Map<string, number>>();
+
+export function updateEntriesInPlace(entries: AgentEntry[], update: Record<string, unknown>): void {
+  let toolIndexes = replayToolIndexes.get(entries);
+  if (
+    !toolIndexes &&
+    (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')
+  ) {
+    toolIndexes = indexTools(entries);
+    replayToolIndexes.set(entries, toolIndexes);
+  }
+  applyEntryUpdate(entries, update, toolIndexes);
+}
+
+function indexTools(entries: AgentEntry[]): Map<string, number> {
+  const indexes = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    if (entry.type === 'tool' && !indexes.has(entry.id)) indexes.set(entry.id, index);
+  });
+  return indexes;
+}
+
+function applyEntryUpdate(
+  entries: AgentEntry[],
+  update: Record<string, unknown>,
+  toolIndexes?: Map<string, number>,
+): boolean {
   const type = update.sessionUpdate;
   if (
     type === 'agent_message_chunk' ||
@@ -203,7 +249,7 @@ export function updateEntries(
   ) {
     const block = update.content;
     if (!block || typeof block !== 'object' || !('text' in block) || typeof block.text !== 'string')
-      return entries;
+      return false;
     const role =
       type === 'user_message_chunk'
         ? 'user'
@@ -212,16 +258,20 @@ export function updateEntries(
           : 'assistant';
     const last = entries.at(-1);
     if (last?.type === role) {
-      return [...entries.slice(0, -1), { ...last, text: last.text + block.text }];
+      entries[entries.length - 1] = { ...last, text: last.text + block.text };
+      return true;
     }
-    return [...entries, { id: crypto.randomUUID(), type: role, text: block.text }];
+    entries.push({ id: crypto.randomUUID(), type: role, text: block.text });
+    return true;
   }
   if (type === 'tool_call' || type === 'tool_call_update') {
     const id = update.toolCallId;
-    if (typeof id !== 'string') return entries;
-    const existing = entries.find(
-      (entry): entry is AgentTool => entry.type === 'tool' && entry.id === id,
-    );
+    if (typeof id !== 'string') return false;
+    const index =
+      toolIndexes?.get(id) ??
+      entries.findIndex((entry) => entry.type === 'tool' && entry.id === id);
+    const found = index >= 0 ? entries[index] : undefined;
+    const existing = found?.type === 'tool' ? found : undefined;
     const content = Array.isArray(update.content)
       ? update.content
           .map((item) => {
@@ -262,11 +312,14 @@ export function updateEntries(
       content,
       terminalIds,
     };
-    return existing
-      ? entries.map((entry) => (entry.type === 'tool' && entry.id === id ? next : entry))
-      : [...entries, next];
+    if (index >= 0) entries[index] = next;
+    else {
+      toolIndexes?.set(id, entries.length);
+      entries.push(next);
+    }
+    return true;
   }
-  return entries;
+  return false;
 }
 
 export const acp = {

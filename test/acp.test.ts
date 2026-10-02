@@ -6,9 +6,14 @@ import {
   loadRecentTranscript,
   saveRecentTranscript,
   updateEntries,
+  updateEntriesBatch,
+  updateEntriesInPlace,
   type AgentEntry,
   type AgentThread,
 } from '../src/lib/acp.ts';
+
+const normalizeEntries = (entries: AgentEntry[]) =>
+  entries.map((entry) => (entry.type === 'tool' ? entry : { ...entry, id: entry.type }));
 
 void test('ACP chunks stream into one assistant message and tool updates keep their place', () => {
   const first = updateEntries([], {
@@ -59,6 +64,38 @@ void test('ACP tool calls keep terminal references across updates', () => {
     content: [{ type: 'content', content: { type: 'text', text: 'Finished' } }],
   });
   assert.deepEqual(completed[0]?.type === 'tool' && completed[0].terminalIds, ['terminal-1']);
+});
+
+void test('batched and replayed ACP updates preserve transcript order and content', () => {
+  const updates = [
+    { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Plan' } },
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'I will ' } },
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'check.' } },
+    { sessionUpdate: 'tool_call', toolCallId: 'read', title: 'Read', status: 'pending' },
+    {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'read',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'Found file' } }],
+    },
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } },
+    { sessionUpdate: 'unknown' },
+  ];
+  const seed = updateEntries([], updates[0]);
+  const snapshot = structuredClone(seed);
+  const expected = updates.slice(1).reduce(updateEntries, seed);
+  const batched = updateEntriesBatch(seed, updates.slice(1));
+  const splitBatches = updateEntriesBatch(
+    updateEntriesBatch(seed, updates.slice(1, 4)),
+    updates.slice(4),
+  );
+  const replayed = structuredClone(seed);
+  for (const update of updates.slice(1)) updateEntriesInPlace(replayed, update);
+  assert.deepEqual(normalizeEntries(batched), normalizeEntries(expected));
+  assert.deepEqual(normalizeEntries(splitBatches), normalizeEntries(expected));
+  assert.deepEqual(normalizeEntries(replayed), normalizeEntries(expected));
+  assert.deepEqual(seed, snapshot);
+  assert.equal(updateEntriesBatch(seed, [{ sessionUpdate: 'unknown' }]), seed);
 });
 
 void test('recent transcript cache keeps the latest entries within a size budget', () => {

@@ -6,12 +6,12 @@
   import type { PickedBrowserElement, BrowserAttachment } from './lib/browser-pick';
   import { describePickedElement } from './lib/browser-pick';
   import { browserPopIndex, newBrowserTab } from './lib/panes';
+  import { watchDetectedServers, type DetectedServer } from './lib/detected-servers';
 
   type BrowserLeaf = Extract<Pane, { kind: 'browser' }>;
   type BrowserEvent = { label: string; url: string };
   type BrowserShortcut = { label: string; action: string };
   type BrowserRoute = BrowserEvent & { mode: 'push' | 'replace' | 'pop' };
-  type DetectedServer = { port: number; url: string };
 
   let {
     pane,
@@ -36,8 +36,6 @@
   let loading = $state(false);
   let agentAction = $state('');
   let servers = $state<DetectedServer[]>([]);
-  let serverRequest = 0;
-  let serverScanRunning = false;
   let agentActionTimer: ReturnType<typeof setTimeout> | null = null;
   let liveLabel = $state<string | null>(null);
   let ready = $state(false);
@@ -48,23 +46,6 @@
   let popDirection: -1 | 1 = -1;
   let mounted = false;
   let picking = $state(false);
-
-  async function refreshServers() {
-    if (serverScanRunning) return;
-    serverScanRunning = true;
-    const request = ++serverRequest;
-    const path = directory;
-    try {
-      const detected = await invoke<DetectedServer[]>('browser_detected_servers', {
-        directory: path,
-      });
-      if (mounted && request === serverRequest && path === directory) servers = detected;
-    } catch {
-      if (mounted && request === serverRequest) servers = [];
-    } finally {
-      serverScanRunning = false;
-    }
-  }
 
   const current = $derived(pane.tabs.find((tab) => tab.id === pane.activeTab));
   const currentUrl = $derived(current?.history[current.index] ?? '');
@@ -367,8 +348,7 @@
 
   onMount(() => {
     mounted = true;
-    void refreshServers();
-    const serverInterval = setInterval(() => void refreshServers(), 5000);
+    const stopServers = watchDetectedServers(directory, (detected) => (servers = detected));
     const observer = new ResizeObserver(() => void resize());
     observer.observe(viewport);
     const overlayObserver = new MutationObserver(() => {
@@ -442,8 +422,7 @@
     window.addEventListener('keydown', cancelPickerOnEscape, true);
     return () => {
       mounted = false;
-      ++serverRequest;
-      clearInterval(serverInterval);
+      stopServers();
       if (agentActionTimer) clearTimeout(agentActionTimer);
       ++generation;
       observer.disconnect();
@@ -461,10 +440,6 @@
 
   $effect(() => {
     if (mounted && pane.activeTab !== mountedTab) void mountCurrent();
-  });
-
-  $effect(() => {
-    if (mounted && directory) void refreshServers();
   });
 
   $effect(() => {

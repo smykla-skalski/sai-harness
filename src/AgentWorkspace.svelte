@@ -10,7 +10,8 @@
     groupAgentEntries,
     loadRecentTranscript,
     saveRecentTranscript,
-    updateEntries,
+    updateEntriesBatch,
+    updateEntriesInPlace,
     type AgentEntry,
     type AgentTool,
     type AgentEvent,
@@ -147,7 +148,7 @@
     clipboardAttachments = [...clipboardAttachments, ...stagedAttachments];
   }
   let error = $state('');
-  let entries = $state<AgentEntry[]>([]);
+  let entries = $state.raw<AgentEntry[]>([]);
   let visibleCount = $state(50);
   let historyLoaded = $state(true);
   let historyLoading = $state(false);
@@ -276,8 +277,7 @@
     clearTimeout(updateTimer);
     updateTimer = undefined;
     if (!pendingUpdates.length) return;
-    let next = entries;
-    for (const update of pendingUpdates) next = updateEntries(next, update);
+    const next = updateEntriesBatch(entries, pendingUpdates);
     pendingUpdates = [];
     entries = next;
     if (autoFollow) void follow();
@@ -285,7 +285,7 @@
 
   function applyUpdate(update: Record<string, unknown>) {
     if (replaying) {
-      replayEntries = updateEntries(replayEntries, update);
+      updateEntriesInPlace(replayEntries, update);
       return;
     }
     pendingUpdates.push(update);
