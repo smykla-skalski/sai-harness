@@ -3787,11 +3787,14 @@
             (thread) => thread.directory === target && runningAgentThreads[agentThreadKey(thread)],
           )
           .toSorted((a, b) => b.updated - a.updated)[0];
-        if (!acpThread && !running && runningThread) {
+        const panes = leaves(paneLayout);
+        const savedThreadPane = panes.find((pane) => pane.id !== 'main' && pane.thread);
+        if (!acpThread && !sessionID && savedThreadPane) {
+          focusPaneForTyping(savedThreadPane.id);
+        } else if (!acpThread && !running && runningThread) {
           focusMainPane();
           openAgent(runningThread.agent, runningThread);
         } else if (!acpThread && !sessionID) {
-          const panes = leaves(paneLayout);
           const emptyPane = panes.find(
             (pane) => pane.id !== 'main' && !pane.agent && !pane.thread && !pane.kind,
           );

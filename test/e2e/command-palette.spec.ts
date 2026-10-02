@@ -217,6 +217,45 @@ describe('command palette project flow', () => {
     await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 2);
   });
 
+  it('focuses a saved session in a secondary pane', async () => {
+    const repoPath = realpathSync(repository);
+    await browser.execute((repo) => {
+      localStorage.setItem('sai-directory', repo);
+      localStorage.setItem(
+        'sai-pane-layouts',
+        JSON.stringify({
+          [repo]: {
+            id: 'split',
+            direction: 'row',
+            ratio: 0.5,
+            first: { id: 'main', agent: null, thread: null },
+            second: {
+              id: 'saved-agent',
+              agent: 'claude',
+              thread: {
+                agent: 'claude',
+                directory: repo,
+                sessionId: 'saved-secondary',
+                title: 'Saved secondary thread',
+                updated: Date.now(),
+              },
+            },
+          },
+        }),
+      );
+    }, repoPath);
+    await browser.refresh();
+    await expect($('.agent-launches button')).toBeDisplayed();
+    await openPalette();
+    await searchAndEnter(repoPath.split('/').at(-1)!);
+    await $('[data-kind="worktree"]').click();
+    await expect($('.command-palette[open]')).not.toExist();
+    await expect($('.pane-leaf.focused .agent-header')).toHaveText(
+      expect.stringContaining('Saved secondary thread'),
+    );
+    expect((await $$('.pane-leaf')).length).toBe(2);
+  });
+
   it('opens the full worktree popup with Cmd+N for the current project', async () => {
     await browser.keys(['Meta', 'n']);
     await expect($('.worktree-dialog[open]')).toBeDisplayed();
