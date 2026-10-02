@@ -11,7 +11,13 @@ export type ProjectCatalog = {
   worktrees: Record<string, ProjectWorktree[]>;
 };
 
-export type ProjectWorktree = { path: string; branch: string };
+export type PullRequestLink = { number: number; url: string };
+export type ProjectWorktree = {
+  path: string;
+  branch: string;
+  base?: string;
+  pullRequest?: PullRequestLink;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -36,10 +42,18 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
   if (isRecord(value.worktrees)) {
     for (const [parent, entries] of Object.entries(value.worktrees)) {
       if (!Array.isArray(entries)) continue;
-      worktrees[parent] = entries.filter(
-        (entry): entry is ProjectWorktree =>
-          isRecord(entry) && typeof entry.path === 'string' && typeof entry.branch === 'string',
-      );
+      worktrees[parent] = entries.flatMap((entry): ProjectWorktree[] => {
+        if (!isRecord(entry) || typeof entry.path !== 'string' || typeof entry.branch !== 'string')
+          return [];
+        const worktree: ProjectWorktree = { path: entry.path, branch: entry.branch };
+        if (typeof entry.base === 'string') worktree.base = entry.base;
+        if (isRecord(entry.pullRequest)) {
+          const { number, url } = entry.pullRequest;
+          if (typeof number === 'number' && validPullRequestLink(number, url))
+            worktree.pullRequest = { number, url };
+        }
+        return [worktree];
+      });
     }
   }
   if (
@@ -69,6 +83,22 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
     });
   }
   return { repositories, groups, worktrees };
+}
+
+function validPullRequestLink(number: unknown, value: unknown): value is string {
+  if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) return false;
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      /^\/[^/]+\/[^/]+\/pull\/\d+$/.test(url.pathname) &&
+      Number(url.pathname.split('/').at(-1)) === number
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function ungroupedRepositories(catalog: ProjectCatalog): string[] {
@@ -132,6 +162,23 @@ export function removeWorktree(
     worktrees: {
       ...catalog.worktrees,
       [repository]: (catalog.worktrees[repository] ?? []).filter((item) => item.path !== path),
+    },
+  };
+}
+
+export function setWorktreePullRequest(
+  catalog: ProjectCatalog,
+  repository: string,
+  path: string,
+  pullRequest: PullRequestLink,
+): ProjectCatalog {
+  return {
+    ...catalog,
+    worktrees: {
+      ...catalog.worktrees,
+      [repository]: (catalog.worktrees[repository] ?? []).map((worktree) =>
+        worktree.path === path ? Object.assign({}, worktree, { pullRequest }) : worktree,
+      ),
     },
   };
 }

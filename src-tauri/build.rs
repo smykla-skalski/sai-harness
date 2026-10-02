@@ -9,6 +9,8 @@ fn main() {
             "working_tree_diff",
             "create_worktree",
             "delete_worktree",
+            "create_pull_request",
+            "open_pull_request",
             "local_plugin_version",
             "acp_agents",
             "acp_connect",

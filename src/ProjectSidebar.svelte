@@ -1,8 +1,9 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { invoke } from '@tauri-apps/api/core';
   import type { AgentAvailability } from './lib/acp';
-  import type { ProjectCatalog } from './lib/projects';
+  import type { ProjectCatalog, ProjectWorktree } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
   import { getSetting, setSetting } from './lib/settings';
 
@@ -28,6 +29,14 @@
       agent: string | null,
     ) => Promise<void>;
     ondeleteworktree: (repository: string, path: string, branch: string) => Promise<void>;
+    oncreatepullrequest: (
+      repository: string,
+      worktree: ProjectWorktree,
+      base: string,
+      title: string,
+      body: string,
+      draft: boolean,
+    ) => Promise<void>;
   };
 
   let {
@@ -46,6 +55,7 @@
     onremoverepository,
     oncreateworktree,
     ondeleteworktree,
+    oncreatepullrequest,
   }: Props = $props();
   let creatingGroup = $state(false);
   let editingGroupID = $state<string | null>(null);
@@ -64,6 +74,17 @@
   let worktreeAgent = $state('');
   let worktreeBusy = $state(false);
   let worktreeError = $state('');
+  let creatingPullRequestFor = $state<{ repository: string; worktree: ProjectWorktree } | null>(
+    null,
+  );
+  let pullRequestDialog: HTMLDialogElement;
+  let pullRequestTitleInput = $state<HTMLInputElement>();
+  let pullRequestBase = $state('');
+  let pullRequestTitle = $state('');
+  let pullRequestBody = $state('');
+  let pullRequestDraft = $state(false);
+  let pullRequestBusy = $state(false);
+  let pullRequestError = $state('');
   let ungrouped = $derived(ungroupedRepositories(catalog));
 
   function repositoryName(path: string) {
@@ -158,6 +179,42 @@
 
   function closeWorktreeDialog() {
     if (!worktreeBusy) worktreeDialog.close();
+  }
+
+  async function startPullRequest(repository: string, worktree: ProjectWorktree) {
+    creatingPullRequestFor = { repository, worktree };
+    const base = worktree.base?.replace(/^origin\//, '');
+    pullRequestBase = base && base !== 'HEAD' ? base : 'main';
+    pullRequestTitle = worktree.branch.replace(/[-_]+/g, ' ');
+    pullRequestBody = '';
+    pullRequestDraft = false;
+    pullRequestError = '';
+    menuWorktree = null;
+    await tick();
+    pullRequestDialog.showModal();
+    pullRequestTitleInput?.focus();
+  }
+
+  async function createPullRequest() {
+    const target = creatingPullRequestFor;
+    if (!target || pullRequestBusy || !pullRequestBase.trim() || !pullRequestTitle.trim()) return;
+    pullRequestBusy = true;
+    pullRequestError = '';
+    try {
+      await oncreatepullrequest(
+        target.repository,
+        target.worktree,
+        pullRequestBase.trim(),
+        pullRequestTitle.trim(),
+        pullRequestBody,
+        pullRequestDraft,
+      );
+      pullRequestDialog.close();
+    } catch (cause) {
+      pullRequestError = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      pullRequestBusy = false;
+    }
   }
 </script>
 
@@ -336,8 +393,33 @@
                     onclick={() => onselect(worktree.path)}
                     ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                   >
+                  {#if worktree.pullRequest}<a
+                      class="project-worktree-pr"
+                      href={worktree.pullRequest.url}
+                      onclick={(event) => {
+                        event.preventDefault();
+                        void invoke('open_pull_request', { url: worktree.pullRequest?.url });
+                      }}
+                      aria-label={`Open pull request ${worktree.pullRequest.number}`}
+                      title={`Open pull request #${worktree.pullRequest.number}`}
+                      >#{worktree.pullRequest.number}</a
+                    >{/if}
+                  <button
+                    class="project-icon-button"
+                    aria-label={`Manage worktree ${worktree.branch}`}
+                    aria-expanded={menuWorktree === worktree.path}
+                    onclick={(event) => {
+                      event.stopPropagation();
+                      menuWorktree = menuWorktree === worktree.path ? null : worktree.path;
+                    }}>⋯</button
+                  >
                 </div>
                 {#if menuWorktree === worktree.path}<div class="project-menu worktree-menu">
+                    {#if !worktree.pullRequest}<button
+                        aria-label={`Create pull request for ${worktree.branch}`}
+                        onclick={() => startPullRequest(path, worktree)}
+                        >Create pull request…</button
+                      >{/if}
                     <button
                       aria-label={`Delete worktree ${worktree.branch}`}
                       onclick={() => {
@@ -426,8 +508,32 @@
                   onclick={() => onselect(worktree.path)}
                   ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                 >
+                {#if worktree.pullRequest}<a
+                    class="project-worktree-pr"
+                    href={worktree.pullRequest.url}
+                    onclick={(event) => {
+                      event.preventDefault();
+                      void invoke('open_pull_request', { url: worktree.pullRequest?.url });
+                    }}
+                    aria-label={`Open pull request ${worktree.pullRequest.number}`}
+                    title={`Open pull request #${worktree.pullRequest.number}`}
+                    >#{worktree.pullRequest.number}</a
+                  >{/if}
+                <button
+                  class="project-icon-button"
+                  aria-label={`Manage worktree ${worktree.branch}`}
+                  aria-expanded={menuWorktree === worktree.path}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    menuWorktree = menuWorktree === worktree.path ? null : worktree.path;
+                  }}>⋯</button
+                >
               </div>
               {#if menuWorktree === worktree.path}<div class="project-menu worktree-menu">
+                  {#if !worktree.pullRequest}<button
+                      aria-label={`Create pull request for ${worktree.branch}`}
+                      onclick={() => startPullRequest(path, worktree)}>Create pull request…</button
+                    >{/if}
                   <button
                     aria-label={`Delete worktree ${worktree.branch}`}
                     onclick={() => {
@@ -527,6 +633,83 @@
           class="worktree-create"
           disabled={worktreeBusy || !worktreeName.trim()}
           >{worktreeBusy ? 'Creating…' : 'Create worktree'}</button
+        >
+      </div>
+    </form>{/if}
+</dialog>
+
+<dialog
+  class="worktree-dialog"
+  aria-labelledby="pull-request-dialog-title"
+  bind:this={pullRequestDialog}
+  oncancel={(event) => {
+    if (pullRequestBusy) event.preventDefault();
+  }}
+  onclose={() => (creatingPullRequestFor = null)}
+>
+  {#if creatingPullRequestFor}<form
+      class="worktree-form"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void createPullRequest();
+      }}
+    >
+      <div class="worktree-dialog-heading">
+        <div>
+          <h2 id="pull-request-dialog-title">Create pull request</h2>
+          <p title={creatingPullRequestFor.worktree.path}>
+            For {creatingPullRequestFor.worktree.branch}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="worktree-dialog-close"
+          aria-label="Close pull request dialog"
+          onclick={() => pullRequestDialog.close()}
+          disabled={pullRequestBusy}>×</button
+        >
+      </div>
+      <label
+        >Base branch
+        <input
+          aria-label="Pull request base branch"
+          bind:value={pullRequestBase}
+          disabled={pullRequestBusy}
+        />
+      </label>
+      <label
+        >Title
+        <input
+          aria-label="Pull request title"
+          bind:value={pullRequestTitle}
+          bind:this={pullRequestTitleInput}
+          disabled={pullRequestBusy}
+        />
+      </label>
+      <label
+        >Body
+        <textarea
+          aria-label="Pull request body"
+          bind:value={pullRequestBody}
+          disabled={pullRequestBusy}></textarea>
+      </label>
+      <label class="pull-request-draft"
+        ><input type="checkbox" bind:checked={pullRequestDraft} disabled={pullRequestBusy} /> Create as
+        draft</label
+      >
+      {#if pullRequestError}<p class="worktree-error" role="alert">{pullRequestError}</p>{/if}
+      <div class="worktree-form-actions">
+        <button
+          type="button"
+          class="worktree-cancel"
+          disabled={pullRequestBusy}
+          onclick={() => pullRequestDialog.close()}>Cancel</button
+        >
+        <button
+          type="submit"
+          class="worktree-create"
+          disabled={pullRequestBusy || !pullRequestBase.trim() || !pullRequestTitle.trim()}
+          >{pullRequestBusy ? 'Creating…' : 'Create pull request'}</button
         >
       </div>
     </form>{/if}

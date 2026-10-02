@@ -48,6 +48,7 @@ fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 mod acp;
 mod attention;
 mod browser;
+mod github;
 mod settings;
 mod terminal;
 
@@ -722,6 +723,8 @@ pub fn run() {
             working_tree_diff,
             create_worktree,
             delete_worktree,
+            github::create_pull_request,
+            github::open_pull_request,
             local_plugin_version,
             acp::acp_agents,
             acp::acp_connect,

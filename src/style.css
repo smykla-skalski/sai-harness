@@ -214,9 +214,9 @@ button:disabled {
 }
 .project-worktree-select {
   display: flex;
+  flex: 1;
   align-items: center;
   gap: 7px;
-  width: 100%;
   min-width: 0;
   padding: 5px 4px 5px 32px;
   border: 0;
@@ -225,6 +225,20 @@ button:disabled {
   text-align: left;
   font: inherit;
   font-size: 11px;
+}
+.project-worktree-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.project-worktree-pr {
+  padding: 3px 4px;
+  color: var(--sui-primary);
+  font-size: 11px;
+  text-decoration: none;
+}
+.project-worktree-pr:hover {
+  text-decoration: underline;
 }
 .project-worktree-select span:last-child {
   overflow: hidden;
@@ -353,6 +367,7 @@ button:disabled {
   font-weight: 400;
 }
 .worktree-form input,
+.worktree-form textarea,
 .worktree-form select {
   width: 100%;
   padding: 10px 12px;
@@ -363,6 +378,18 @@ button:disabled {
   font: inherit;
   font-size: 13px;
   font-weight: 400;
+}
+.worktree-form textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+.worktree-form .pull-request-draft {
+  display: flex;
+  align-items: center;
+}
+.pull-request-draft input {
+  width: auto;
+  padding: 0;
 }
 .worktree-destination span {
   overflow: hidden;

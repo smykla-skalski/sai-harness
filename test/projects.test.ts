@@ -6,6 +6,7 @@ import {
   loadProjectCatalog,
   removeRepository,
   replaceRepositoryPath,
+  setWorktreePullRequest,
   ungroupedRepositories,
 } from '../src/lib/projects.ts';
 
@@ -76,4 +77,25 @@ await test('keeps a created worktree beneath its repository after restart', () =
   assert.deepEqual(restored.worktrees['/repo'], [
     { path: '/sail/worktrees/repo/task', branch: 'task' },
   ]);
+});
+
+await test('keeps the worktree PR link after restart and rejects unsafe links', () => {
+  const catalog = addWorktree(loadProjectCatalog(null, '/repo'), '/repo', {
+    path: '/repo-pr',
+    branch: 'feature',
+    base: 'origin/main',
+  });
+  const linked = setWorktreePullRequest(catalog, '/repo', '/repo-pr', {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+  });
+  assert.deepEqual(loadProjectCatalog(JSON.stringify(linked), '/repo-pr').worktrees['/repo'], [
+    linked.worktrees['/repo'][0],
+  ]);
+  const malformed = JSON.parse(JSON.stringify(linked));
+  malformed.worktrees['/repo'][0].pullRequest.url = 'javascript:alert(1)';
+  assert.equal(
+    loadProjectCatalog(JSON.stringify(malformed), '/repo-pr').worktrees['/repo'][0].pullRequest,
+    undefined,
+  );
 });

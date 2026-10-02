@@ -12,6 +12,8 @@
     "allow-working-tree-diff",
     "allow-create-worktree",
     "allow-delete-worktree",
+    "allow-create-pull-request",
+    "allow-open-pull-request",
     "allow-local-plugin-version",
     "allow-acp-agents",
     "allow-acp-connect",

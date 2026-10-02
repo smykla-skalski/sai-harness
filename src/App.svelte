@@ -99,7 +99,9 @@
     removeRepository,
     removeWorktree,
     replaceRepositoryPath,
+    setWorktreePullRequest,
     type ProjectCatalog,
+    type ProjectWorktree,
   } from './lib/projects';
 
   let dark = $state(getSetting('sai-theme') === 'dark');
@@ -1147,6 +1149,28 @@
       if (wasSelected) await loadProject(path);
       error = describe(cause);
     }
+  }
+
+  async function createProjectPullRequest(
+    repository: string,
+    worktree: ProjectWorktree,
+    base: string,
+    title: string,
+    body: string,
+    isDraft: boolean,
+  ) {
+    const pullRequest = await invoke<{ number: number; url: string }>('create_pull_request', {
+      repository,
+      worktree: worktree.path,
+      branch: worktree.branch,
+      base,
+      title,
+      body,
+      draft: isDraft,
+    });
+    saveProjectCatalog(
+      setWorktreePullRequest(projectCatalog, repository, worktree.path, pullRequest),
+    );
   }
 
   async function chooseProject(groupID: string | null = null) {
@@ -3120,6 +3144,7 @@
         onremoverepository={removeProjectRepository}
         oncreateworktree={createProjectWorktree}
         ondeleteworktree={deleteProjectWorktree}
+        oncreatepullrequest={createProjectPullRequest}
       />
       <div class="sidebar-sessions">
         <div class="session-heading">
