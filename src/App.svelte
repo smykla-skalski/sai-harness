@@ -580,6 +580,7 @@
   }
   let mobileView = $state<'sessions' | 'chat' | 'details'>('chat');
   let sidebarVisible = $state(true);
+  let mobileLayout = $state(window.matchMedia('(max-width: 850px)').matches);
   const viewStates = new SvelteMap<
     string,
     {
@@ -614,6 +615,13 @@
   let topbarHeight = $state(80);
   let chatArea: HTMLElement;
   let detailsArea = $state<HTMLElement>();
+
+  $effect(() => {
+    const query = window.matchMedia('(max-width: 850px)');
+    const update = () => (mobileLayout = query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  });
 
   $effect(() => {
     if (!workspaceElement) return;
@@ -5291,8 +5299,7 @@
 
   function keydownWorkspace(event: KeyboardEvent) {
     if (
-      event.metaKey &&
-      !event.ctrlKey &&
+      (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
       !event.shiftKey &&
       event.key.toLowerCase() === 'b'
@@ -5623,7 +5630,8 @@
         bind:this={sidebarToggleElement}
         aria-label="Toggle project sidebar"
         aria-controls="project-sidebar"
-        title="Toggle project sidebar (⌘B)"
+        aria-expanded={sidebarVisible && (!mobileLayout || mobileView === 'sessions')}
+        title="Toggle project sidebar (⌘B / Ctrl+B)"
         onclick={toggleSidebar}>☰</button
       >
       <nav class="mobile-switcher" aria-label="Workspace panels">

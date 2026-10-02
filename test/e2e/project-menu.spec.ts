@@ -120,15 +120,31 @@ describe('project context menus', () => {
     await browser.refresh();
     await browser.setWindowSize(1280, 850);
     await expect($('.sidebar')).toBeDisplayed();
+    await expect($('[aria-label="Toggle project sidebar"]')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
     await expect($('.sidebar-sessions')).not.toExist();
     await browser.keys(['Meta', 'b']);
     await expect($('.sidebar')).not.toBeDisplayed();
+    await expect($('[aria-label="Toggle project sidebar"]')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
     await $('[aria-label="Toggle project sidebar"]').click();
+    await expect($('.sidebar')).toBeDisplayed();
+    await browser.keys(['Control', 'b']);
+    await expect($('.sidebar')).not.toBeDisplayed();
+    await browser.keys(['Control', 'b']);
     await expect($('.sidebar')).toBeDisplayed();
 
     await browser.setWindowSize(320, 500);
     await $('.mobile-switcher button:first-child').click();
     await expect($('.sidebar')).toBeDisplayed();
+    await expect($('[aria-label="Toggle project sidebar"]')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
     const bounds = await browser.execute(() => ({
       topbarBottom: document.querySelector('.topbar')!.getBoundingClientRect().bottom,
       sidebarTop: document.querySelector('.sidebar')!.getBoundingClientRect().top,
@@ -136,6 +152,10 @@ describe('project context menus', () => {
     expect(bounds.sidebarTop).toBeGreaterThanOrEqual(bounds.topbarBottom - 1);
     await browser.keys(['Meta', 'b']);
     await expect($('.sidebar')).not.toBeDisplayed();
+    await expect($('[aria-label="Toggle project sidebar"]')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
     await expect($('.app-shell')).toHaveAttribute('data-mobile-view', 'chat');
   });
 
