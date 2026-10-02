@@ -2,7 +2,7 @@ import { browser, $, expect } from '@wdio/globals';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { z } from 'zod';
 
 type McpConfig = { command: string; args: string[]; env: Record<string, string> };
@@ -282,13 +282,13 @@ describe('provider selected agent spawn', () => {
     expect(result.content[0].text).toContain('Worktree setup exited with code 7');
     const threadsRaw = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
     const threads = z.array(agentThread).parse(JSON.parse(threadsRaw ?? '[]'));
-    expect(threads.some((thread) => thread.directory.endsWith('/failing-setup'))).toBe(false);
+    expect(threads.some((thread) => basename(thread.directory) === 'failing-setup')).toBe(false);
     const catalogRaw = await browser.execute(() => localStorage.getItem('sai-project-catalog'));
     const catalog = z
       .object({ worktrees: z.record(z.string(), z.array(z.object({ path: z.string() }))) })
       .parse(JSON.parse(catalogRaw ?? '{}'));
-    const failedPath = catalog.worktrees[path].find((item) =>
-      item.path.endsWith('/failing-setup'),
+    const failedPath = catalog.worktrees[path].find(
+      (item) => basename(item.path) === 'failing-setup',
     )?.path;
     if (!failedPath) throw new Error('Failed setup worktree was not saved');
     const retry = await callMcp(config, sessionId, {
