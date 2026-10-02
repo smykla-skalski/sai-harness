@@ -63,6 +63,7 @@
     newBrowserTab,
     splitPane,
     updatePane,
+    withoutSideChats,
     type BrowserTab,
     type Pane,
   } from './lib/panes';
@@ -70,6 +71,7 @@
     acp,
     loadAgentThreads,
     saveAgentThreads,
+    type AgentEntry,
     type AgentAvailability,
     type AgentEvent,
     type AgentId,
@@ -234,6 +236,9 @@
   let diffComments = $state<Record<string, DiffComment[]>>({});
   let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
   let issuePrefills = $state<Record<string, { id: string; text: string }>>({});
+  let agentEntrySnapshots = $state<
+    Record<string, { sessionId: string | null; entries: AgentEntry[]; ready: boolean }>
+  >({});
   let pendingOpenCodeIssue = $state<{ path: string; text: string } | null>(null);
   const batchWaiters = new SvelteMap<
     string,
@@ -1450,6 +1455,8 @@
 
   async function loadProject(path: string, recordRestoredThread = true) {
     if (directory !== path) {
+      paneLayouts = { ...paneLayouts, [directory]: withoutSideChats(paneLayout) };
+      agentEntrySnapshots = {};
       for (const batch of Object.values(pendingAgentBatches))
         completeAgentBatch(batch.id, 'Project changed before comments were sent.');
       for (const resolve of terminalExitWaiters.values()) resolve(-1);
@@ -2119,7 +2126,14 @@
   }
 
   function persistPaneLayouts() {
-    setSetting('sai-pane-layouts', JSON.stringify(paneLayouts));
+    setSetting(
+      'sai-pane-layouts',
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(paneLayouts).map(([path, layout]) => [path, withoutSideChats(layout)]),
+        ),
+      ),
+    );
   }
 
   function savePaneLayout(layout: Pane) {
@@ -2192,6 +2206,37 @@
     );
     focusPaneForTyping(created.id);
     return created.id;
+  }
+
+  function openSideChat() {
+    const current = leaves(paneLayout).find((leaf) => leaf.id === focusedPane);
+    if (!current || current.kind === 'side-chat') return;
+    let source: Extract<Pane, { kind: 'side-chat' }>['source'];
+    if (focusedPane === 'main' && !acpAgent && sessionID && client) {
+      source = { kind: 'opencode', sessionID };
+    } else {
+      const agent = focusedPane === 'main' ? acpAgent : current.agent;
+      const thread = focusedPane === 'main' ? acpThread : current.thread;
+      if (!agent || !thread) {
+        error = 'Select an agent thread before opening a side chat.';
+        return;
+      }
+      const transcript = agentEntrySnapshots[focusedPane];
+      if (!transcript || transcript.sessionId !== thread.sessionId || !transcript.ready) {
+        error = 'Wait for this thread to finish loading before opening a side chat.';
+        return;
+      }
+      const context = transcript.entries
+        .filter((entry) => entry.type === 'user' || entry.type === 'assistant')
+        .map((entry) => `${entry.type}: ${'text' in entry ? entry.text : ''}`)
+        .join('\n\n')
+        .slice(-40000);
+      source = { kind: 'acp', agent, context };
+    }
+    const created = splitFocusedPane('row');
+    if (!created) return;
+    savePaneLayout(updatePane(paneLayout, created, { kind: 'side-chat', source }));
+    focusPaneForTyping(created);
   }
 
   function focusPaneForTyping(id: string) {
@@ -3511,6 +3556,19 @@
   }
 
   function keydownWorkspace(event: KeyboardEvent) {
+    if (
+      event.metaKey &&
+      event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === 'j' &&
+      !event.repeat &&
+      !document.querySelector('dialog[open]')
+    ) {
+      event.preventDefault();
+      openSideChat();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key === ',') {
       event.preventDefault();
       if (!event.repeat) void openSettings();
@@ -4018,6 +4076,11 @@
                 onexternalresult={completeAgentBatch}
                 onpickedconsumed={markPickConsumed}
                 onpromptfocused={() => (promptFocusPane = null)}
+                onentrieschange={(entries, sessionId, ready) =>
+                  (agentEntrySnapshots = {
+                    ...agentEntrySnapshots,
+                    main: { entries, sessionId, ready },
+                  })}
                 running={!!(acpThread && runningAgentThreads[agentThreadKey(acpThread)])}
                 focused={focusedPane === 'main'}
                 oncreated={createAgentThread}
@@ -4299,6 +4362,9 @@
       {directory}
       {dark}
       agents={agentAvailability}
+      {client}
+      onentries={(id, entries, sessionId, ready) =>
+        (agentEntrySnapshots = { ...agentEntrySnapshots, [id]: { entries, sessionId, ready } })}
       {changesPanes}
       main={mainPaneContent}
       canClose={leaves(paneLayout).length > 1}

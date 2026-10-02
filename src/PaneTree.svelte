@@ -9,7 +9,9 @@
   import TerminalPane from './TerminalPane.svelte';
   import AgentTerminalPane from './AgentTerminalPane.svelte';
   import BrowserPane from './BrowserPane.svelte';
-  import type { AgentThread, AgentAvailability } from './lib/acp';
+  import SideChat from './SideChat.svelte';
+  import type { AgentThread, AgentAvailability, AgentEntry } from './lib/acp';
+  import type { OpenCodeClient } from './lib/opencode';
   import type { BrowserAttachment } from './lib/browser-pick';
   import type { DiffComment } from './lib/diff-comments';
   import type { ThreadStatus } from './lib/attention';
@@ -21,6 +23,13 @@
     directory: string;
     dark: boolean;
     agents: AgentAvailability[];
+    client: OpenCodeClient | null;
+    onentries: (
+      id: string,
+      entries: AgentEntry[],
+      sessionId: string | null,
+      ready: boolean,
+    ) => void;
     changesPanes: string[];
     main: Snippet;
     canClose: boolean;
@@ -60,6 +69,8 @@
     directory,
     dark,
     agents,
+    client,
+    onentries,
     changesPanes,
     main,
     canClose,
@@ -182,6 +193,8 @@
       {directory}
       {dark}
       {agents}
+      {client}
+      {onentries}
       {changesPanes}
       {main}
       {canClose}
@@ -248,6 +261,8 @@
       {directory}
       {dark}
       {agents}
+      {client}
+      {onentries}
       {changesPanes}
       {main}
       {canClose}
@@ -295,9 +310,11 @@
           ? 'Agent terminal pane'
           : pane.kind === 'browser'
             ? 'Browser pane'
-            : pane.agent
-              ? `${pane.agent} pane`
-              : 'Empty pane'}
+            : pane.kind === 'side-chat'
+              ? 'Side chat pane'
+              : pane.agent
+                ? `${pane.agent} pane`
+                : 'Empty pane'}
     tabindex="-1"
     onfocusin={() => onfocus(pane.id)}
     onpointerdown={(event) => {
@@ -308,6 +325,7 @@
         pane.kind === 'terminal' ||
         pane.kind === 'agent-terminal' ||
         pane.kind === 'browser' ||
+        pane.kind === 'side-chat' ||
         !(event.target instanceof Element)
       )
         return;
@@ -328,8 +346,10 @@
               ? 'Agent terminal'
               : pane.kind === 'browser'
                 ? 'Browser'
-                : (pane.thread?.title ??
-                  (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
+                : pane.kind === 'side-chat'
+                  ? 'Side chat'
+                  : (pane.thread?.title ??
+                    (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
         ><small>⌘⌥ + arrow to switch</small><button
           aria-label="Close pane"
           onclick={() => onclose(pane.id)}>×</button
@@ -371,6 +391,15 @@
           {onshortcut}
         />
       {/key}
+    {:else if pane.kind === 'side-chat'}
+      <SideChat
+        source={pane.source}
+        {client}
+        {directory}
+        focused={focused === pane.id}
+        focusPrompt={focusPromptPane === pane.id}
+        {onpromptfocused}
+      />
     {:else if pane.agent}
       {#key `${pane.id}:${pane.agent}`}
         <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>
@@ -387,6 +416,8 @@
             onexternalresult={onbatchcomplete}
             {onpickedconsumed}
             {onpromptfocused}
+            onentrieschange={(entries, sessionId, ready) =>
+              onentries(pane.id, entries, sessionId, ready)}
             oncreated={(thread) => oncreated(pane.id, thread)}
             {onactivity}
             {onstatus}

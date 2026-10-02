@@ -8,6 +8,14 @@ export type Pane =
       id: string;
       agent: null;
       thread: null;
+      kind: 'side-chat';
+      source:
+        { kind: 'opencode'; sessionID: string } | { kind: 'acp'; agent: AgentId; context: string };
+    }
+  | {
+      id: string;
+      agent: null;
+      thread: null;
       kind: 'browser';
       tabs: BrowserTab[];
       activeTab: string;
@@ -123,6 +131,14 @@ export function closePane(pane: Pane, id: string): Pane {
   return { ...pane, second: closePane(pane.second, id) };
 }
 
+export function withoutSideChats(pane: Pane): Pane {
+  let result = pane;
+  for (const leaf of leaves(pane)) {
+    if (leaf.kind === 'side-chat') result = closePane(result, leaf.id);
+  }
+  return result;
+}
+
 export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane {
   if ('direction' in pane) {
     if (pane.id === id && 'ratio' in update && typeof update.ratio === 'number')
@@ -135,6 +151,10 @@ export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane 
   }
   if (pane.id !== id) return pane;
   const next = { ...pane, ...update };
+  if (next.kind === 'side-chat') {
+    if (!next.source) return pane;
+    return { id: next.id, kind: 'side-chat', agent: null, thread: null, source: next.source };
+  }
   return next.kind === 'terminal'
     ? { id: next.id, kind: 'terminal', agent: null, thread: null }
     : next.kind === 'agent-terminal'
@@ -164,7 +184,12 @@ export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane
       first: migratePaneDirectory(pane.first, from, to),
       second: migratePaneDirectory(pane.second, from, to),
     };
-  if (pane.kind === 'terminal' || pane.kind === 'agent-terminal' || pane.kind === 'browser')
+  if (
+    pane.kind === 'terminal' ||
+    pane.kind === 'agent-terminal' ||
+    pane.kind === 'browser' ||
+    pane.kind === 'side-chat'
+  )
     return pane;
   return pane.thread?.directory === from
     ? { ...pane, thread: { ...pane.thread, directory: to } }

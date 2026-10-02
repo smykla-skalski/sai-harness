@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
@@ -38,6 +38,9 @@
     onactivity: (thread: AgentThread) => void;
     onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
     onterminal: (id: string) => void;
+    onentrieschange?: (entries: AgentEntry[], sessionId: string | null, ready: boolean) => void;
+    ephemeral?: boolean;
+    seedContext?: string;
   }
   let {
     agent,
@@ -58,6 +61,9 @@
     onactivity,
     onstatus,
     onterminal,
+    onentrieschange,
+    ephemeral = false,
+    seedContext = '',
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -76,6 +82,11 @@
   }
   let error = $state('');
   let entries = $state<AgentEntry[]>([]);
+  $effect(() => {
+    const snapshot = entries;
+    const available = ready;
+    untrack(() => onentrieschange?.(snapshot, activeSessionId, available));
+  });
   let permissions = $state<AgentPermission[]>([]);
   let configOptions = $state<AgentConfigOption[]>([]);
   let pickerOpen = $state<'model' | 'effort' | null>(null);
@@ -264,7 +275,10 @@
     const current = generation;
     creatingSession = (async () => {
       const session = await acp.create(agent, directory);
-      if (current !== generation) throw new Error('Agent pane closed while creating the thread.');
+      if (current !== generation) {
+        if (ephemeral) await acp.cancel(agent, session.sessionId, null).catch(() => {});
+        throw new Error('Agent pane closed while creating the thread.');
+      }
       configOptions = session.configOptions ?? [];
       activeSessionId = session.sessionId;
       selectedThreadId = session.sessionId;
@@ -347,6 +361,11 @@
       disposed = true;
       generation++;
       unlisten?.();
+      if (ephemeral && activeSessionId) {
+        void acp.cancel(agent, activeSessionId, activeTurnId).catch(() => {});
+        for (const permission of permissions)
+          void acp.permission(agent, permission.id, null).catch(() => {});
+      }
       images.forEach((image) => void invoke('browser_remove_capture', { path: image.imagePath }));
     };
   });
@@ -408,10 +427,14 @@
       }
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
       void follow();
+      const promptText =
+        ephemeral && seedContext && entries.length === 1
+          ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
+          : text;
       const result = await acp.prompt(
         agent,
         id!,
-        text,
+        promptText,
         turnId,
         sentImages.map((item) => item.imagePath),
       );
