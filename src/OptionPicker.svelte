@@ -81,7 +81,7 @@
     aria-expanded={open}
     {disabled}
     onclick={onopen}
-    >{label}: {options.find((option) => option.value === value)?.name ?? value ?? 'Choose'} ▾</button
+    >{label}: {options.find((option) => option.value === value)?.name ?? (value || 'Choose')} ▾</button
   >
   {#if open}
     <div
