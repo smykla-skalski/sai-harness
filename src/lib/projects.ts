@@ -22,6 +22,14 @@ export type ProjectWorktree = {
   setupStatus?: 'pending' | 'ready' | 'failed';
 };
 
+export type WorktreeCreation = {
+  id: string;
+  repository: string;
+  name: string;
+  stage: string;
+  error?: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
