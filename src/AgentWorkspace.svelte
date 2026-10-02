@@ -36,6 +36,11 @@
     coordinationPrompt,
     type CoordinationMessage,
   } from './lib/coordination';
+  import {
+    isFailedStatus,
+    notificationStats,
+    splitTaskNotifications,
+  } from './lib/task-notification';
 
   interface Props {
     agent: AgentId;
@@ -958,40 +963,65 @@
           </details>
         {/if}
       {:else}
-        {@const attribution =
+        {@const segments =
           entry.type === 'user'
-            ? coordinationMessageForText(entry.text, coordinationMessages)
-            : undefined}
-        <article
-          class:user-message={entry.type === 'user'}
-          class:assistant-message={entry.type !== 'user'}
-          class:thought={entry.type === 'thought'}
-          class="agent-message message"
-        >
-          <div
-            class:agent-avatar={entry.type !== 'user'}
-            class:user-avatar={entry.type === 'user'}
-            class="avatar"
-          >
-            {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
-          </div>
-          <div class="message-body">
-            <div class="message-author">
-              {entry.type === 'user'
-                ? attribution
-                  ? `From ${attribution.sender}`
-                  : 'You'
-                : entry.type === 'thought'
-                  ? `${name} · thinking`
-                  : name}
+            ? splitTaskNotifications(entry.text)
+            : [{ type: 'text' as const, text: entry.text }]}
+        {#each segments as segment, index (index)}
+          {#if segment.type === 'notification'}
+            {@const note = segment.notification}
+            <div
+              class="agent-subagent-card"
+              class:stopped={note.status !== 'completed'}
+              aria-label={`Subagent ${note.status}`}
+              role="group"
+            >
+              <span class="agent-tool-status" class:failed={isFailedStatus(note.status)}
+                >{note.status.replaceAll('_', ' ')}</span
+              >
+              <span class="agent-subagent-summary">{note.summary}</span>
+              {#each notificationStats(note) as stat (stat)}<span class="agent-subagent-stat"
+                  >{stat}</span
+                >{/each}
             </div>
-            <Markdown
-              source={attribution
-                ? entry.text.replace(coordinationPrompt(attribution), attribution.text)
-                : entry.text}
-            />
-          </div>
-        </article>
+          {:else}
+            {@const text = segment.text}
+            {@const attribution =
+              entry.type === 'user'
+                ? coordinationMessageForText(text, coordinationMessages)
+                : undefined}
+            <article
+              class:user-message={entry.type === 'user'}
+              class:assistant-message={entry.type !== 'user'}
+              class:thought={entry.type === 'thought'}
+              class="agent-message message"
+            >
+              <div
+                class:agent-avatar={entry.type !== 'user'}
+                class:user-avatar={entry.type === 'user'}
+                class="avatar"
+              >
+                {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
+              </div>
+              <div class="message-body">
+                <div class="message-author">
+                  {entry.type === 'user'
+                    ? attribution
+                      ? `From ${attribution.sender}`
+                      : 'You'
+                    : entry.type === 'thought'
+                      ? `${name} · thinking`
+                      : name}
+                </div>
+                <Markdown
+                  source={attribution
+                    ? text.replace(coordinationPrompt(attribution), attribution.text)
+                    : text}
+                />
+              </div>
+            </article>
+          {/if}
+        {/each}
       {/if}
     {/each}
     {#each coordinationMessages.filter((message) => !entries.some((entry) => entry.type === 'user' && entry.text.includes(coordinationPrompt(message)))) as message (message.id)}
@@ -1256,6 +1286,29 @@
   .agent-tool-status.failed,
   .agent-tool-error {
     color: var(--danger, #d66);
+  }
+  .agent-subagent-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 0 0 8px 42px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .agent-subagent-card.stopped {
+    border-style: dashed;
+  }
+  .agent-subagent-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .agent-subagent-stat {
+    color: var(--text-muted, #888);
+    font-size: 0.75rem;
+    white-space: nowrap;
   }
   .agent-tool-current {
     padding: 7px 12px;

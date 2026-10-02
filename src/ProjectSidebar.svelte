@@ -23,7 +23,7 @@
     disabled: boolean;
     agents: AgentAvailability[];
     openCodeAvailable: boolean;
-    worktreeDialogRequest: { id: string; path: string } | null;
+    worktreeDialogRequest: { id: string; path: string; fromPalette: boolean } | null;
     onworktreecreated: (repository: string, path: string) => void;
     onworktreecancelled: (repository: string) => void;
     onselect: (path: string) => void;
@@ -331,7 +331,7 @@
     const request = worktreeDialogRequest;
     if (!request || request.id === lastWorktreeRequest) return;
     lastWorktreeRequest = request.id;
-    void startWorktree(request.path, true);
+    void startWorktree(request.path, request.fromPalette);
   });
 
   async function startWorktree(path: string, fromPalette = false) {

@@ -339,7 +339,11 @@
   let paletteError = $state('');
   let paletteSessionGeneration = 0;
   let paletteSearchTimer: ReturnType<typeof setTimeout> | undefined;
-  let paletteWorktreeRequest = $state<{ id: string; path: string } | null>(null);
+  let paletteWorktreeRequest = $state<{
+    id: string;
+    path: string;
+    fromPalette: boolean;
+  } | null>(null);
   let promptFocusPane = $state<string | null>(null);
   let paletteDialog: HTMLDialogElement;
   let paletteInput: HTMLInputElement;
@@ -2792,7 +2796,11 @@
     }
     if (step.kind === 'worktrees' && entry.kind === 'new-worktree') {
       closeCommandPalette(false);
-      paletteWorktreeRequest = { id: crypto.randomUUID(), path: step.repository };
+      paletteWorktreeRequest = {
+        id: crypto.randomUUID(),
+        path: step.repository,
+        fromPalette: true,
+      };
       return;
     }
     if (step.kind === 'agents' && entry.kind === 'agent' && entry.agent) {
@@ -5071,6 +5079,18 @@
     ) {
       event.preventDefault();
       openCommandPalette();
+      return;
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 'n'
+    ) {
+      event.preventDefault();
+      const repository = directory ? coordinationProject(directory) : null;
+      if (repository && !event.repeat && !document.querySelector('dialog[open]'))
+        paletteWorktreeRequest = { id: crypto.randomUUID(), path: repository, fromPalette: false };
       return;
     }
     if (
