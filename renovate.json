@@ -27,7 +27,7 @@
   "packageRules": [
     {
       "description": "WebKit2GTK snapshot surfaces require cairo-rs 0.18",
-      "enabled": false,
+      "allowedVersions": "<0.19.0",
       "matchManagers": ["cargo"],
       "matchDepNames": ["cairo-rs-gtk"]
     },
