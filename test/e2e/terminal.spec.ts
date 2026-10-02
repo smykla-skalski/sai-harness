@@ -90,6 +90,17 @@ describe('shell terminal panes', () => {
     await expect($('.terminal-screen .xterm')).toBeDisplayed();
   });
 
+  it('opens the worktree dialog on Cmd+N without writing to the focused terminal', async () => {
+    await browser.keys(['Meta', 't']);
+    await browser.waitUntil(() =>
+      browser.execute(() => document.activeElement?.classList.contains('xterm-helper-textarea')),
+    );
+    await browser.keys(['Meta', 'n']);
+    await expect($('.worktree-dialog[open]')).toBeDisplayed();
+    await $('.worktree-cancel').click();
+    await expect($('.worktree-dialog[open]')).not.toExist();
+  });
+
   it('starts in the project, retains scrollback across project switches, and restarts after exit', async () => {
     const paths = [realpathSync(repository), realpathSync(other)];
     await browser.execute(([first, second]) => {

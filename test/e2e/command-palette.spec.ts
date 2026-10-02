@@ -185,7 +185,7 @@ describe('command palette project flow', () => {
     await expect($('.worktree-dialog[open]')).toBeDisplayed();
     await expect($('.command-palette[open]')).not.toExist();
     await expect($('.worktree-dialog')).toHaveText(
-      expect.stringContaining(realpathSync(repository).split('/').at(-1)!),
+      expect.stringContaining(realpathSync(repository).split(/[\\/]/).at(-1)!),
     );
     await expect($('.worktree-dialog')).not.toHaveText(
       expect.stringContaining('Choose an agent and session after creation.'),
