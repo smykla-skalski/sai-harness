@@ -65,7 +65,7 @@ impl AcpTerminalManager {
             output.released = true;
             terminal.changed.notify_all();
             for _ in 0..20 {
-                if output.exit.is_some() {
+                if output.exit.is_some() && output.output_complete {
                     break;
                 }
                 let (next, _) = terminal
@@ -122,6 +122,7 @@ struct TerminalOutput {
     start: u64,
     truncated: bool,
     exit: Option<ExitStatus>,
+    output_complete: bool,
     released: bool,
 }
 
@@ -175,6 +176,7 @@ pub struct TerminalDelta {
     reset: bool,
     truncated: bool,
     exit_status: Option<ExitStatus>,
+    output_complete: bool,
     released: bool,
 }
 
@@ -215,6 +217,7 @@ fn delta(session: &AcpTerminal, cursor: u64) -> Result<TerminalDelta, String> {
         reset,
         truncated: output.truncated,
         exit_status: output.exit.clone(),
+        output_complete: output.output_complete,
         released: output.released,
     })
 }
@@ -352,6 +355,7 @@ pub fn handle(
                 start: 0,
                 truncated: false,
                 exit: None,
+                output_complete: false,
                 released: false,
             }),
             changed: Condvar::new(),
@@ -377,7 +381,12 @@ pub fn handle(
                         Ok(size) => append(&terminal, &buffer[..size]),
                     }
                 }
-                done.fetch_add(1, Ordering::Release);
+                if done.fetch_add(1, Ordering::AcqRel) == 1 {
+                    if let Ok(mut output) = terminal.output.lock() {
+                        output.output_complete = true;
+                        terminal.changed.notify_all();
+                    }
+                }
             });
         }
         let waiting = Arc::clone(&terminal);
@@ -522,6 +531,7 @@ pub fn acp_terminal_delta(
         reset,
         truncated: snapshot.truncated,
         exit_status: snapshot.exit_status.clone(),
+        output_complete: true,
         released: snapshot.released,
     })
 }

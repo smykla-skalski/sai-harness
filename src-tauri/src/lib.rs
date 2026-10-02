@@ -735,6 +735,13 @@ async fn working_tree_revision(path: String) -> Result<String, String> {
             if let Ok(metadata) = Path::new(&root).join(path.as_ref()).symlink_metadata() {
                 metadata.len().hash(&mut hash);
                 metadata.modified().ok().hash(&mut hash);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    metadata.permissions().mode().hash(&mut hash);
+                }
+                #[cfg(not(unix))]
+                metadata.permissions().readonly().hash(&mut hash);
             }
         }
         let index = Command::new("git")
@@ -1265,7 +1272,7 @@ pub fn run() {
 mod tests {
     use super::{
         git_change_action, git_patch, repository_namespace, server_args, version_number,
-        working_tree_diff,
+        working_tree_diff, working_tree_revision,
     };
     use std::fs;
     use std::path::Path;
@@ -1282,6 +1289,34 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn working_tree_revision_detects_mode_changes_to_modified_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("sail-revision-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let path = root.to_str().unwrap();
+        git(path, &["init", "-q"]);
+        git(path, &["config", "user.name", "Sail Test"]);
+        git(path, &["config", "user.email", "sail@example.test"]);
+        git(path, &["config", "core.filemode", "true"]);
+        let file = root.join("file.txt");
+        fs::write(&file, "original\n").unwrap();
+        git(path, &["add", "file.txt"]);
+        git(path, &["commit", "-qm", "seed"]);
+        fs::write(&file, "changed\n").unwrap();
+        let before = tauri::async_runtime::block_on(working_tree_revision(path.into())).unwrap();
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_mode(permissions.mode() ^ 0o111);
+        fs::set_permissions(&file, permissions).unwrap();
+        let after = tauri::async_runtime::block_on(working_tree_revision(path.into())).unwrap();
+        assert_ne!(before, after);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

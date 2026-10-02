@@ -917,8 +917,7 @@
       clearTimeout(inboxRefreshTimer);
       clearInterval(healthTimer);
       clearInterval(diffPollTimer);
-      clearTimeout(textTimer);
-      pendingTextDeltas = {};
+      discardLiveText();
       unlistenAgentEvents?.();
       unlistenBrowserAccess?.();
       unlistenAgentTerminals?.();
@@ -1071,7 +1070,7 @@
 
   async function resync() {
     if (!client || !directory) return;
-    liveText = {};
+    discardLiveText();
     const current = selection;
     await refreshSetup(directory);
     if (current !== selection) return;
@@ -3388,15 +3387,12 @@
   }
 
   function resetTimeline() {
-    clearTimeout(textTimer);
-    textTimer = undefined;
-    pendingTextDeltas = {};
+    discardLiveText();
     ++timelineRefresh;
     timelineSession = '';
     messages = [];
     olderMessageCursor = null;
     loadingOlder = false;
-    liveText = {};
     followChat = true;
     for (const pending of messageTimers.values()) clearTimeout(pending.timer);
     messageTimers.clear();
@@ -3656,6 +3652,13 @@
     if (!textTimer) textTimer = setTimeout(flushTextDeltas, 50);
   }
 
+  function discardLiveText() {
+    clearTimeout(textTimer);
+    textTimer = undefined;
+    pendingTextDeltas = {};
+    liveText = {};
+  }
+
   function flushTextDeltas() {
     clearTimeout(textTimer);
     textTimer = undefined;
@@ -3678,7 +3681,7 @@
 
   async function reconcileExecution(id: string, current: number) {
     await refreshTimeline(id, current);
-    if (id === sessionID && !running) liveText = {};
+    if (id === sessionID && !running) discardLiveText();
   }
 
   async function watchEvents(source: OpenCodeClient, signal: AbortSignal) {

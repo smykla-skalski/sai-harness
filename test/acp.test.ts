@@ -91,6 +91,27 @@ void test('recent transcript cache keeps the latest entries within a size budget
     saveRecentTranscript(thread, [{ id: 'large', type: 'assistant', text: 'x'.repeat(500_000) }]);
     assert.ok((values.get('sai-agent-transcript-cache')?.length ?? 0) < 130_000);
     assert.equal(loadRecentTranscript(thread).at(-1)?.id, 'large');
+    saveRecentTranscript(thread, [
+      { id: 'x'.repeat(200_000), type: 'assistant', text: 'oversized' },
+      { id: 'small', type: 'assistant', text: 'kept' },
+    ]);
+    assert.deepEqual(
+      loadRecentTranscript(thread).map((entry) => entry.id),
+      ['small'],
+    );
+    assert.ok((values.get('sai-agent-transcript-cache')?.length ?? 0) <= 128 * 1024);
+    saveRecentTranscript(thread, [
+      {
+        id: 'tool',
+        type: 'tool',
+        title: 'x'.repeat(200_000),
+        status: 'completed',
+        content: '',
+        terminalIds: [],
+      },
+    ]);
+    assert.deepEqual(loadRecentTranscript(thread), []);
+    assert.ok((values.get('sai-agent-transcript-cache')?.length ?? 0) <= 128 * 1024);
     forgetRecentTranscript(thread);
     assert.deepEqual(loadRecentTranscript(thread), []);
   } finally {

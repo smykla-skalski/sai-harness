@@ -12,6 +12,7 @@
     reset: boolean;
     truncated: boolean;
     exitStatus: { exitCode: number | null; signal: string | null } | null;
+    outputComplete: boolean;
     released: boolean;
   };
 
@@ -23,6 +24,7 @@
   let error = $state('');
   let exitStatus = $state<Delta['exitStatus']>(null);
   let released = $state(false);
+  let outputComplete = false;
   let unavailable = $state(false);
   let cursor = 0;
   let poll: ReturnType<typeof setTimeout>;
@@ -46,6 +48,7 @@
       }
       cursor = delta.cursor;
       exitStatus = delta.exitStatus;
+      outputComplete = delta.outputComplete;
       released = delta.released;
       error = '';
     } catch (cause) {
@@ -55,7 +58,7 @@
       }
     } finally {
       refreshing = false;
-      if (!disposed && !exitStatus && !released && !unavailable)
+      if (!disposed && !(outputComplete && (exitStatus || released)) && !unavailable)
         poll = setTimeout(() => void refresh(), 250);
     }
   }
