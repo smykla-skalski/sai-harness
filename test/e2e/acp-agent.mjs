@@ -84,6 +84,7 @@ function configOptions(sessionId) {
       options: [
         { value: 'test', name: 'Test model' },
         { value: 'fast', name: 'Fast model' },
+        { value: 'broken', name: 'Reject model' },
       ],
     },
     {
@@ -163,6 +164,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
   } else if (message.method === 'session/set_config_option') {
     const { sessionId, configId, value } = message.params;
+    if (value === 'broken') {
+      send({ id: message.id, error: { code: -1, message: 'Model change rejected' } });
+      continue;
+    }
     sessions.get(sessionId).config[configId] = value;
     send({ id: message.id, result: { configOptions: configOptions(sessionId) } });
   } else if (message.method === 'session/prompt') {

@@ -224,6 +224,10 @@
   let selectedModelKey = $state('');
   let selectedVariant = $state('');
   let modelPickerOpen = $state<'model' | 'effort' | null>(null);
+
+  $effect(() => {
+    if (running || sending || switching) modelPickerOpen = null;
+  });
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
   let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
@@ -2783,7 +2787,7 @@
   }
 
   async function chooseModel(key: string) {
-    if (switching) return;
+    if (running || sending || switching) return;
     const previous = selectedModelKey;
     const previousVariant = selectedVariant;
     selectedModelKey = key;
@@ -2816,7 +2820,7 @@
   }
 
   async function chooseEffort(variant: string) {
-    if (switching || !chosenModel) return;
+    if (running || sending || switching || !chosenModel) return;
     const previous = selectedVariant;
     selectedVariant = variant;
     if (!client || !sessionID) return;
@@ -3360,6 +3364,7 @@
   async function send() {
     const command = draft.trim().toLowerCase();
     if (command === '/model' || command === '/effort') {
+      if (!inputReady || running || sending || switching) return;
       draft = '';
       modelPickerOpen = command.slice(1) as 'model' | 'effort';
       return;

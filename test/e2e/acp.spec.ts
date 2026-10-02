@@ -57,6 +57,18 @@ describe('ACP agent threads', () => {
     await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
       expect.stringContaining('Fast model'),
     );
+    await $('.option-trigger[aria-label="Choose model"]').click();
+    await $('.option-menu button[role="option"]:nth-child(3)').click();
+    await $('.agent-composer textarea').setValue('Keep this draft');
+    await $('.agent-actions button').click();
+    await expect($('.agent-error')).toHaveText(expect.stringContaining('Model change rejected'));
+    await expect($('.agent-composer textarea')).toHaveValue('Keep this draft');
+    await expect($('.agent-conversation')).not.toHaveText(
+      expect.stringContaining('Keep this draft'),
+    );
+    await $('.option-trigger[aria-label="Choose model"]').click();
+    await $('.option-menu button[role="option"]:nth-child(2)').click();
+    await $('.agent-composer textarea').setValue('');
     await $('.agent-composer textarea').setValue('/effort');
     await browser.keys('Enter');
     await browser.keys('ArrowDown');

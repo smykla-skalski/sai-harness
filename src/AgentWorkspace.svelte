@@ -76,6 +76,7 @@
   let pickerOpen = $state<'model' | 'effort' | null>(null);
   let creatingSession = $state<Promise<AgentThread> | null>(null);
   let settingConfig = $state<Promise<void> | null>(null);
+  let configFailure = $state('');
   let authMethods = $state<AgentAuthMethod[]>([]);
   let authNeeded = $state(false);
   let authenticating = $state(false);
@@ -100,6 +101,10 @@
         option.type === 'select',
     ),
   );
+
+  $effect(() => {
+    if (isBusy) pickerOpen = null;
+  });
 
   async function focusPromptWhenReady() {
     await tick();
@@ -195,6 +200,7 @@
     pickerOpen = null;
     creatingSession = null;
     settingConfig = null;
+    configFailure = '';
     authNeeded = false;
     busy = false;
     stopRequested = false;
@@ -267,8 +273,9 @@
   }
 
   async function openPicker(kind: 'model' | 'effort') {
+    if (!ready || !directory || isBusy) return;
     pickerOpen = kind;
-    if (!ready || !directory || activeSessionId) return;
+    if (activeSessionId) return;
     try {
       await ensureSession('New thread');
     } catch (cause) {
@@ -335,7 +342,13 @@
     const external = externalText !== undefined;
     const text = (externalText ?? draft).trim();
     const command = text.toLowerCase();
-    if (!external && (command === '/model' || command === '/effort')) {
+    if (
+      !external &&
+      !isBusy &&
+      ready &&
+      directory &&
+      (command === '/model' || command === '/effort')
+    ) {
       draft = '';
       await openPicker(command.slice(1) as 'model' | 'effort');
       return;
@@ -367,6 +380,7 @@
       if (current !== generation) return;
       if (activityThread) onstatus(activityThread, 'working');
       if (settingConfig) await settingConfig;
+      if (configFailure) throw new Error(configFailure);
       if (activityThread) onactivity(activityThread);
       const id = activeSessionId;
       if (stopRequested) {
@@ -454,7 +468,8 @@
   }
 
   function setConfig(configId: string, value: string) {
-    if (!activeSessionId) return;
+    if (!activeSessionId || isBusy) return;
+    configFailure = '';
     const sessionId = activeSessionId;
     const previous = settingConfig;
     const task = (async () => {
@@ -468,7 +483,8 @@
             option.id === configId ? Object.assign({}, option, { currentValue: value }) : option,
           );
       } catch (cause) {
-        error = describe(cause);
+        configFailure = describe(cause);
+        error = configFailure;
       }
     })();
     settingConfig = task;
