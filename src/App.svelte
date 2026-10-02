@@ -190,6 +190,9 @@
       | 'agent_status'
       | 'agent_wait'
       | 'agent_result'
+      | 'terminal_list'
+      | 'terminal_read'
+      | 'terminal_wait'
       | 'worktree_list'
       | 'worktree_info'
       | 'worktree_status'
@@ -1805,6 +1808,46 @@
       const worktree = worktrees.find((item) => item.path === path);
       if (!worktree) throw new Error('Worktree is not in this project.');
       return worktree;
+    }
+    if (
+      request.name === 'terminal_list' ||
+      request.name === 'terminal_read' ||
+      request.name === 'terminal_wait'
+    ) {
+      if (!agentWorktreesEnabled) throw new Error('Agent worktree access is disabled in settings.');
+      const registered = await invoke<RegisteredWorktree[]>('registered_worktrees', {
+        repository: project,
+        paths: [project, ...(projectCatalog.worktrees[project] ?? []).map((item) => item.path)],
+      });
+      const allowed = [...new Set([project, ...registered.map((item) => item.path)])];
+      if (request.name === 'terminal_list') {
+        const [shells, agents] = await Promise.all([
+          invoke<Record<string, unknown>[]>('terminal_inspect_list', { allowed }),
+          invoke<Record<string, unknown>[]>('acp_terminal_inspect_list', { allowed }),
+        ]);
+        return {
+          terminals: [...shells, ...agents].toSorted((a, b) =>
+            String(a.terminalId).localeCompare(String(b.terminalId)),
+          ),
+        };
+      }
+      const id = request.arguments.terminalId;
+      const cursor = request.arguments.cursor ?? 0;
+      const maxBytes = request.arguments.maxBytes ?? 16_384;
+      const timeoutMs = request.arguments.timeoutMs ?? 30_000;
+      if (typeof id !== 'string' || (!id.startsWith('shell:') && !id.startsWith('agent:')))
+        throw new Error('Choose a terminal ID from terminal_list.');
+      if (!Number.isSafeInteger(cursor) || Number(cursor) < 0)
+        throw new Error('Terminal cursor must be a non-negative integer.');
+      if (!Number.isSafeInteger(maxBytes) || Number(maxBytes) < 1 || Number(maxBytes) > 65_536)
+        throw new Error('Terminal page size must be 1–65536 bytes.');
+      if (
+        request.name === 'terminal_wait' &&
+        (!Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 0 || Number(timeoutMs) > 30_000)
+      )
+        throw new Error('Wait timeout must be 0–30000 milliseconds.');
+      const command = `${id.startsWith('shell:') ? 'terminal' : 'acp_terminal'}_inspect_${request.name === 'terminal_wait' ? 'wait' : 'read'}`;
+      return invoke(command, { id, allowed, cursor, maxBytes, timeoutMs });
     }
     if (request.name === 'worktree_status') {
       if (!agentStatusEnabled) throw new Error('Agent status updates are disabled in settings.');

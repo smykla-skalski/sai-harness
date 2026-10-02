@@ -76,12 +76,16 @@ impl AcpTerminalManager {
             }
         }
         let mut archived = snapshot(terminal)?;
-        if archived.output.len() > 256 * 1024 {
-            let mut start = archived.output.len() - 256 * 1024;
-            while !archived.output.is_char_boundary(start) {
-                start += 1;
+        if archived.bytes.len() > 256 * 1024 {
+            let mut start = archived.bytes.len() - 256 * 1024;
+            if let Ok(text) = std::str::from_utf8(&archived.bytes) {
+                while !text.is_char_boundary(start) {
+                    start += 1;
+                }
             }
-            archived.output = archived.output[start..].to_string();
+            archived.bytes.drain(..start);
+            archived.output = String::from_utf8_lossy(&archived.bytes).into_owned();
+            archived.base_cursor += start as u64;
             archived.truncated = true;
         }
         self.active
@@ -163,9 +167,13 @@ struct TerminalParams {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSnapshot {
     output: String,
+    #[serde(skip_serializing)]
+    bytes: Vec<u8>,
     truncated: bool,
     exit_status: Option<ExitStatus>,
     released: bool,
+    directory: String,
+    base_cursor: u64,
 }
 
 #[derive(Serialize)]
@@ -227,9 +235,12 @@ fn snapshot(session: &AcpTerminal) -> Result<TerminalSnapshot, String> {
     let bytes: Vec<u8> = output.bytes.iter().copied().collect();
     Ok(TerminalSnapshot {
         output: String::from_utf8_lossy(&bytes).into_owned(),
+        bytes,
         truncated: output.truncated,
         exit_status: output.exit.clone(),
         released: output.released,
+        directory: session.directory.to_string_lossy().into_owned(),
+        base_cursor: output.start,
     })
 }
 
@@ -522,12 +533,17 @@ pub fn acp_terminal_delta(
         .find(|(stored, _)| stored == &id)
         .map(|(_, snapshot)| snapshot)
         .ok_or("Terminal is no longer available.")?;
-    let bytes = snapshot.output.as_bytes();
-    let reset = cursor > bytes.len() as u64;
-    let skip = if reset { 0 } else { cursor as usize };
+    let bytes = &snapshot.bytes;
+    let end = snapshot.base_cursor + bytes.len() as u64;
+    let reset = cursor < snapshot.base_cursor || cursor > end;
+    let skip = if reset {
+        0
+    } else {
+        (cursor - snapshot.base_cursor) as usize
+    };
     Ok(TerminalDelta {
         output_base64: base64::engine::general_purpose::STANDARD.encode(&bytes[skip..]),
-        cursor: bytes.len() as u64,
+        cursor: end,
         reset,
         truncated: snapshot.truncated,
         exit_status: snapshot.exit_status.clone(),
@@ -546,4 +562,292 @@ pub fn acp_terminal_stop(manager: State<'_, AcpTerminalManager>, id: String) -> 
         .cloned()
         .ok_or("Terminal is no longer available.")?;
     stop(&terminal)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectedTerminal {
+    terminal_id: String,
+    worktree: String,
+    state: &'static str,
+    exit_code: Option<i32>,
+    cursor: u64,
+    base_cursor: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectedOutput {
+    terminal_id: String,
+    worktree: String,
+    state: &'static str,
+    exit_code: Option<i32>,
+    output: String,
+    output_base64: String,
+    cursor: u64,
+    base_cursor: u64,
+    truncated: bool,
+    reset: bool,
+    timed_out: bool,
+}
+
+struct PageSource<'a> {
+    id: &'a str,
+    directory: &'a Path,
+    bytes: &'a [u8],
+    base: u64,
+    exit_code: Option<i32>,
+    exited: bool,
+}
+
+fn inspected_page(
+    source: PageSource<'_>,
+    cursor: u64,
+    max_bytes: usize,
+    timed_out: bool,
+) -> InspectedOutput {
+    let end = source.base + source.bytes.len() as u64;
+    let truncated = cursor < source.base;
+    let reset = cursor > end;
+    let offset = if truncated || reset {
+        0
+    } else {
+        (cursor - source.base) as usize
+    };
+    let page = &source.bytes[offset..(offset + max_bytes.clamp(1, 65_536)).min(source.bytes.len())];
+    InspectedOutput {
+        terminal_id: format!("agent:{}", source.id),
+        worktree: source.directory.to_string_lossy().into_owned(),
+        state: if source.exited { "exited" } else { "running" },
+        exit_code: source.exit_code,
+        output: String::from_utf8_lossy(page).into_owned(),
+        output_base64: base64::engine::general_purpose::STANDARD.encode(page),
+        cursor: source.base + offset as u64 + page.len() as u64,
+        base_cursor: source.base,
+        truncated,
+        reset,
+        timed_out,
+    }
+}
+
+fn inspected_active(
+    manager: &AcpTerminalManager,
+    id: &str,
+    allowed: &[PathBuf],
+) -> Result<Option<Arc<AcpTerminal>>, String> {
+    let terminal = manager
+        .active
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(id)
+        .cloned();
+    Ok(terminal.filter(|item| allowed.contains(&item.directory)))
+}
+
+fn inspected_archived(
+    manager: &AcpTerminalManager,
+    id: &str,
+    allowed: &[PathBuf],
+) -> Result<Option<TerminalSnapshot>, String> {
+    Ok(manager
+        .archived
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .find(|(stored, snapshot)| {
+            stored == id
+                && allowed
+                    .iter()
+                    .any(|path| path == Path::new(&snapshot.directory))
+        })
+        .map(|(_, snapshot)| snapshot.clone()))
+}
+
+#[tauri::command]
+pub fn acp_terminal_inspect_list(
+    manager: State<'_, AcpTerminalManager>,
+    allowed: Vec<String>,
+) -> Result<Vec<InspectedTerminal>, String> {
+    let allowed = crate::terminal::canonical_terminal_paths(&allowed);
+    let mut result = Vec::new();
+    for (id, terminal) in manager
+        .active
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+    {
+        if !allowed.contains(&terminal.directory) {
+            continue;
+        }
+        let output = terminal.output.lock().map_err(|error| error.to_string())?;
+        result.push(InspectedTerminal {
+            terminal_id: format!("agent:{id}"),
+            worktree: terminal.directory.to_string_lossy().into_owned(),
+            state: if output.exit.is_some() || output.released {
+                "exited"
+            } else {
+                "running"
+            },
+            exit_code: output.exit.as_ref().and_then(|status| status.exit_code),
+            cursor: output.start + output.bytes.len() as u64,
+            base_cursor: output.start,
+        });
+    }
+    for (id, snapshot) in manager
+        .archived
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+    {
+        if !allowed
+            .iter()
+            .any(|path| path == Path::new(&snapshot.directory))
+        {
+            continue;
+        }
+        result.push(InspectedTerminal {
+            terminal_id: format!("agent:{id}"),
+            worktree: snapshot.directory.clone(),
+            state: "exited",
+            exit_code: snapshot
+                .exit_status
+                .as_ref()
+                .and_then(|status| status.exit_code),
+            cursor: snapshot.base_cursor + snapshot.bytes.len() as u64,
+            base_cursor: snapshot.base_cursor,
+        });
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn acp_terminal_inspect_read(
+    manager: State<'_, AcpTerminalManager>,
+    id: String,
+    allowed: Vec<String>,
+    cursor: u64,
+    max_bytes: usize,
+) -> Result<InspectedOutput, String> {
+    let id = id.strip_prefix("agent:").ok_or("Unknown terminal ID.")?;
+    let allowed = crate::terminal::canonical_terminal_paths(&allowed);
+    if let Some(terminal) = inspected_active(&manager, id, &allowed)? {
+        let output = terminal.output.lock().map_err(|error| error.to_string())?;
+        let bytes: Vec<_> = output.bytes.iter().copied().collect();
+        return Ok(inspected_page(
+            PageSource {
+                id,
+                directory: &terminal.directory,
+                bytes: &bytes,
+                base: output.start,
+                exit_code: output.exit.as_ref().and_then(|status| status.exit_code),
+                exited: output.exit.is_some() || output.released,
+            },
+            cursor,
+            max_bytes,
+            false,
+        ));
+    }
+    let snapshot = inspected_archived(&manager, id, &allowed)?.ok_or("Unknown terminal ID.")?;
+    Ok(inspected_page(
+        PageSource {
+            id,
+            directory: Path::new(&snapshot.directory),
+            bytes: &snapshot.bytes,
+            base: snapshot.base_cursor,
+            exit_code: snapshot
+                .exit_status
+                .as_ref()
+                .and_then(|status| status.exit_code),
+            exited: true,
+        },
+        cursor,
+        max_bytes,
+        false,
+    ))
+}
+
+fn wait_for_agent_terminal(
+    terminal: Arc<AcpTerminal>,
+    id: String,
+    cursor: u64,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<InspectedOutput, String> {
+    let output = terminal.output.lock().map_err(|error| error.to_string())?;
+    let end = output.start + output.bytes.len() as u64;
+    let (output, timed_out) =
+        if cursor == end && output.exit.is_none() && !output.released && timeout_ms > 0 {
+            let (state, result) = terminal
+                .changed
+                .wait_timeout_while(
+                    output,
+                    Duration::from_millis(timeout_ms.min(30_000)),
+                    |state| {
+                        state.start + state.bytes.len() as u64 == cursor
+                            && state.exit.is_none()
+                            && !state.released
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            (state, result.timed_out())
+        } else {
+            let timed_out =
+                cursor == end && timeout_ms == 0 && output.exit.is_none() && !output.released;
+            (output, timed_out)
+        };
+    let bytes: Vec<_> = output.bytes.iter().copied().collect();
+    Ok(inspected_page(
+        PageSource {
+            id: &id,
+            directory: &terminal.directory,
+            bytes: &bytes,
+            base: output.start,
+            exit_code: output.exit.as_ref().and_then(|status| status.exit_code),
+            exited: output.exit.is_some() || output.released,
+        },
+        cursor,
+        max_bytes,
+        timed_out,
+    ))
+}
+
+#[tauri::command]
+pub async fn acp_terminal_inspect_wait(
+    manager: State<'_, AcpTerminalManager>,
+    id: String,
+    allowed: Vec<String>,
+    cursor: u64,
+    max_bytes: usize,
+    timeout_ms: u64,
+) -> Result<InspectedOutput, String> {
+    let id = id
+        .strip_prefix("agent:")
+        .ok_or("Unknown terminal ID.")?
+        .to_string();
+    let allowed = crate::terminal::canonical_terminal_paths(&allowed);
+    let Some(terminal) = inspected_active(&manager, &id, &allowed)? else {
+        let snapshot =
+            inspected_archived(&manager, &id, &allowed)?.ok_or("Unknown terminal ID.")?;
+        return Ok(inspected_page(
+            PageSource {
+                id: &id,
+                directory: Path::new(&snapshot.directory),
+                bytes: &snapshot.bytes,
+                base: snapshot.base_cursor,
+                exit_code: snapshot
+                    .exit_status
+                    .as_ref()
+                    .and_then(|status| status.exit_code),
+                exited: true,
+            },
+            cursor,
+            max_bytes,
+            false,
+        ));
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        wait_for_agent_terminal(terminal, id, cursor, max_bytes, timeout_ms)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
