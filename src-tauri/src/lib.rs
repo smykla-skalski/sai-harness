@@ -984,6 +984,45 @@ struct CreatedWorktree {
     setup: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredWorktree {
+    path: String,
+    branch: Option<String>,
+    present: bool,
+}
+
+#[tauri::command]
+fn registered_worktrees(repository: String) -> Result<Vec<RegisteredWorktree>, String> {
+    let repository = validate_repository(repository)?;
+    let listed = git_reference(Path::new(&repository), &["worktree", "list", "--porcelain"])
+        .ok_or("Cannot inspect repository worktrees.")?;
+    Ok(parse_registered_worktrees(&listed))
+}
+
+fn parse_registered_worktrees(listed: &str) -> Vec<RegisteredWorktree> {
+    listed
+        .split("\n\n")
+        .filter_map(|entry| {
+            let path = entry
+                .lines()
+                .find_map(|line| line.strip_prefix("worktree "))?;
+            let branch = entry
+                .lines()
+                .find_map(|line| line.strip_prefix("branch refs/heads/"))
+                .map(str::to_string);
+            let prunable = entry
+                .lines()
+                .any(|line| line == "prunable" || line.starts_with("prunable "));
+            Some(RegisteredWorktree {
+                path: path.to_string(),
+                branch,
+                present: !prunable && Path::new(path).is_dir(),
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn worktree_config(worktree: String) -> Result<Option<worktree_config::WorktreeConfig>, String> {
     let root = validate_repository(worktree)?;
@@ -1279,6 +1318,7 @@ pub fn run() {
             git_change_action,
             diff_file_contents,
             create_worktree,
+            registered_worktrees,
             delete_worktree,
             worktree_config,
             github::create_pull_request,
@@ -1353,12 +1393,29 @@ mod tests {
     #[cfg(unix)]
     use super::working_tree_revision;
     use super::{
-        git_change_action, git_patch, normalize_picker_path, repository_namespace, server_args,
-        version_number, working_tree_diff,
+        git_change_action, git_patch, normalize_picker_path, parse_registered_worktrees,
+        repository_namespace, server_args, version_number, working_tree_diff,
     };
     use std::fs;
     use std::path::Path;
     use std::process::Command;
+
+    #[test]
+    fn parses_registered_and_prunable_worktrees() {
+        let present = std::env::temp_dir();
+        let missing = present.join(format!("sail-missing-{}", uuid::Uuid::new_v4()));
+        let listed = format!(
+            "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\ndetached\nprunable gitdir missing\n",
+            present.display(),
+            missing.display()
+        );
+        let worktrees = parse_registered_worktrees(&listed);
+        assert_eq!(worktrees.len(), 2);
+        assert_eq!(worktrees[0].branch.as_deref(), Some("main"));
+        assert!(worktrees[0].present);
+        assert_eq!(worktrees[1].branch, None);
+        assert!(!worktrees[1].present);
+    }
 
     #[test]
     fn picker_paths_remove_windows_verbatim_prefixes() {

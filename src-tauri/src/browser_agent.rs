@@ -457,7 +457,7 @@ impl BrowserManager {
         arguments: Value,
     ) -> Result<Value, String> {
         let setting = match name {
-            "worktree_create" => "sai-agent-worktrees-enabled",
+            "worktree_create" | "worktree_list" | "worktree_info" => "sai-agent-worktrees-enabled",
             "worktree_status" => "sai-agent-status-enabled",
             "project_threads" => "sai-agent-thread-list-enabled",
             "thread_message" => "sai-agent-messages-enabled",
@@ -525,7 +525,12 @@ impl BrowserManager {
         drop(clients);
         if matches!(
             request.name.as_str(),
-            "worktree_create" | "worktree_status" | "project_threads" | "thread_message"
+            "worktree_create"
+                | "worktree_list"
+                | "worktree_info"
+                | "worktree_status"
+                | "project_threads"
+                | "thread_message"
         ) {
             return self.coordinate(app, &session, &directory, &request.name, request.arguments);
         }
@@ -1032,6 +1037,16 @@ pub fn browser_pane_register(
 }
 
 const TOOLS: &[(&str, &str, &str)] = &[
+    (
+        "worktree_list",
+        "List this project's main checkout and known worktrees with their live state and known agent threads.",
+        "",
+    ),
+    (
+        "worktree_info",
+        "Inspect one known worktree in this project by its path from worktree_list.",
+        "path",
+    ),
     (
         "worktree_create",
         "Ask the user to create a worktree, start a new agent thread there, and send its starting prompt.",

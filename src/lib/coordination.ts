@@ -1,3 +1,54 @@
+import type { AgentThread } from './acp';
+import type { AttentionMap, ThreadStatus } from './attention';
+import type { ProjectCatalog } from './projects';
+import { threadKey } from './recent-threads.ts';
+
+export type RegisteredWorktree = { path: string; branch: string | null; present: boolean };
+export type WorktreeInfo = {
+  repository: string;
+  path: string;
+  branch: string | null;
+  statusComment: string | null;
+  stale: boolean;
+  threadCount: number;
+  threadStatuses: Record<ThreadStatus | 'unknown', number>;
+};
+
+export function projectWorktreeInfo(
+  catalog: ProjectCatalog,
+  project: string,
+  registered: RegisteredWorktree[],
+  threads: AgentThread[],
+  attention: AttentionMap,
+): WorktreeInfo[] {
+  if (!catalog.repositories.includes(project)) return [];
+  const live = new Map(registered.map((worktree) => [worktree.path, worktree]));
+  return [
+    { path: project, branch: '', statusComment: undefined },
+    ...(catalog.worktrees[project] ?? []),
+  ].map((worktree) => {
+    const known = threads.filter((thread) => thread.directory === worktree.path);
+    const threadStatuses: WorktreeInfo['threadStatuses'] = {
+      working: 0,
+      waiting: 0,
+      done: 0,
+      failed: 0,
+      unknown: 0,
+    };
+    for (const thread of known) threadStatuses[attention[threadKey(thread)]?.status ?? 'unknown']++;
+    const registeredWorktree = live.get(worktree.path);
+    return {
+      repository: project,
+      path: worktree.path,
+      branch: registeredWorktree ? registeredWorktree.branch : (worktree.branch ?? null),
+      statusComment: worktree.statusComment ?? null,
+      stale: !registeredWorktree?.present,
+      threadCount: known.length,
+      threadStatuses,
+    };
+  });
+}
+
 export type CoordinationMessage = {
   id: string;
   target: string;

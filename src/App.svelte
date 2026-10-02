@@ -105,7 +105,9 @@
     coordinationPrompt,
     enqueueCoordinationMessage,
     loadCoordinationMessages,
+    projectWorktreeInfo,
     type CoordinationMessage,
+    type RegisteredWorktree,
   } from './lib/coordination';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
   import {
@@ -167,7 +169,13 @@
     id: string;
     sessionId: string;
     directory: string;
-    name: 'worktree_create' | 'worktree_status' | 'project_threads' | 'thread_message';
+    name:
+      | 'worktree_create'
+      | 'worktree_list'
+      | 'worktree_info'
+      | 'worktree_status'
+      | 'project_threads'
+      | 'thread_message';
     arguments: Record<string, unknown>;
     expiresAt: number;
   };
@@ -1348,7 +1356,12 @@
     const thread = agentThreads.find(
       (item) => item.directory === request.directory && item.sessionId === request.sessionId,
     );
-    if (thread) return { kind: 'acp', agent: thread.agent, title: thread.title };
+    if (thread) {
+      const runtime = (await acp.activity())[thread.agent];
+      if (!runtime?.alive || !runtime.sessions.includes(thread.sessionId))
+        throw new Error('The source agent session is unavailable.');
+      return { kind: 'acp', agent: thread.agent, title: thread.title };
+    }
     if (!client) throw new Error('The source agent session is unavailable.');
     const session = await client.session.get({ sessionID: request.sessionId });
     if (session.location.directory !== request.directory)
@@ -1532,6 +1545,25 @@
       source.kind === 'acp'
         ? `acp:${source.agent}:${request.sessionId}`
         : `opencode:${request.sessionId}`;
+    if (request.name === 'worktree_list' || request.name === 'worktree_info') {
+      if (!agentWorktreesEnabled) throw new Error('Agent worktree access is disabled in settings.');
+      const registered = await invoke<RegisteredWorktree[]>('registered_worktrees', {
+        repository: project,
+      });
+      const worktrees = projectWorktreeInfo(
+        projectCatalog,
+        project,
+        registered,
+        [...agentThreads, ...nativeThreads],
+        threadAttention,
+      );
+      if (request.name === 'worktree_list') return { repository: project, worktrees };
+      const path = request.arguments.path;
+      if (typeof path !== 'string') throw new Error('Worktree path is required.');
+      const worktree = worktrees.find((item) => item.path === path);
+      if (!worktree) throw new Error('Worktree is not in this project.');
+      return worktree;
+    }
     if (request.name === 'worktree_status') {
       if (!agentStatusEnabled) throw new Error('Agent status updates are disabled in settings.');
       const comment = request.arguments.comment;

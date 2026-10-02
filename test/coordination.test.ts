@@ -6,7 +6,48 @@ import {
   coordinationPrompt,
   enqueueCoordinationMessage,
   loadCoordinationMessages,
+  projectWorktreeInfo,
 } from '../src/lib/coordination.ts';
+
+await test('worktree discovery stays in the source project and marks stale entries', () => {
+  const threads = [
+    { agent: 'claude', directory: '/repo/task', sessionId: 'one', title: 'Build', updated: 1 },
+    { agent: 'codex', directory: '/repo/task', sessionId: 'two', title: 'Review', updated: 2 },
+    { agent: 'codex', directory: '/other', sessionId: 'three', title: 'Private', updated: 3 },
+  ];
+  const catalog = {
+    repositories: ['/repo', '/other'],
+    groups: [],
+    worktrees: {
+      '/repo': [
+        { path: '/repo/task', branch: 'task', statusComment: 'Working' },
+        { path: '/repo/stale', branch: 'old' },
+      ],
+      '/other': [{ path: '/other/task', branch: 'private' }],
+    },
+  };
+  const registered = [
+    { path: '/repo', branch: 'main', present: true },
+    { path: '/repo/task', branch: 'updated', present: true },
+    { path: '/other/task', branch: 'private', present: true },
+  ];
+  const attention = {
+    '["claude","/repo/task","one"]': { status: 'working' as const, unread: false },
+  };
+  const details = projectWorktreeInfo(catalog, '/repo', registered, threads, attention);
+  assert.deepEqual(
+    details.map(({ path, branch, stale, threadCount }) => ({ path, branch, stale, threadCount })),
+    [
+      { path: '/repo', branch: 'main', stale: false, threadCount: 0 },
+      { path: '/repo/task', branch: 'updated', stale: false, threadCount: 2 },
+      { path: '/repo/stale', branch: 'old', stale: true, threadCount: 0 },
+    ],
+  );
+  assert.equal(details[1].statusComment, 'Working');
+  assert.equal(details[1].threadStatuses.working, 1);
+  assert.equal(details[1].threadStatuses.unknown, 1);
+  assert.deepEqual(projectWorktreeInfo(catalog, '/missing', registered, threads, attention), []);
+});
 
 await test('messages keep sender and target across reload', () => {
   const target = coordinationKey('/repo/worktree', 'acp:claude:session-1');
