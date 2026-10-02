@@ -19,6 +19,7 @@ fn main() {
             "failed_check_log",
             "open_pull_request",
             "open_check_url",
+            "open_external_url",
             "acp_terminal_snapshot",
             "acp_terminal_stop",
             "local_plugin_version",

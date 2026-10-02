@@ -221,7 +221,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       message.result?.outcome?.optionId === 'allow'
         ? pending.text === 'Long answer'
           ? Array.from({ length: 100 }, (_, index) => `Answer line ${index}`).join('\n')
-          : `Done: ${pending.text}`
+          : pending.text === 'Link example'
+            ? '[Example](https://example.com/path) [Section](#section) [Unsafe](javascript:alert(1))'
+            : `Done: ${pending.text}`
         : 'Rejected';
     const finish = () => {
       const reply = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } };

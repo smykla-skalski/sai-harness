@@ -1,5 +1,6 @@
 <script lang="ts">
   import { marked, type Token } from 'marked';
+  import { openExternalLink } from './lib/external-link';
   import { safeMarkdownHref } from './lib/markdown';
 
   let { source, compact = false }: { source: string; compact?: boolean } = $props();
@@ -17,7 +18,9 @@
       {#if safeMarkdownHref(token.href)}<a
           href={safeMarkdownHref(token.href) ?? '#'}
           target="_blank"
-          rel="noopener noreferrer">{@render inline(token.tokens ?? [])}</a
+          rel="noopener noreferrer"
+          onclick={(event) => openExternalLink(event, token.href)}
+          >{@render inline(token.tokens ?? [])}</a
         >
       {:else}{@render inline(token.tokens ?? [])}{/if}
     {:else if token.type === 'image'}{token.text}

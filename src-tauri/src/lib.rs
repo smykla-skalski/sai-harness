@@ -1143,6 +1143,7 @@ pub fn run() {
             github::failed_check_log,
             github::open_pull_request,
             github::open_check_url,
+            github::open_external_url,
             acp_terminal::acp_terminal_snapshot,
             acp_terminal::acp_terminal_stop,
             local_plugin_version,

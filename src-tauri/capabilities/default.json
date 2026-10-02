@@ -22,6 +22,7 @@
     "allow-failed-check-log",
     "allow-open-pull-request",
     "allow-open-check-url",
+    "allow-open-external-url",
     "allow-acp-terminal-snapshot",
     "allow-acp-terminal-stop",
     "allow-local-plugin-version",

@@ -8,6 +8,7 @@
     type PermissionRequest,
   } from '@opencode/client';
   import type { OpenCodeClient } from './lib/opencode';
+  import { openExternalLink } from './lib/external-link';
 
   interface Props {
     pendingPermissions: PermissionRequest[];
@@ -275,7 +276,9 @@
                 {#if externalUrl(field.url)}<a
                     href={externalUrl(field.url)}
                     target="_blank"
-                    rel="noopener noreferrer">Open link</a
+                    rel="noopener noreferrer"
+                    onclick={(event) => openExternalLink(event, externalUrl(field.url) ?? '')}
+                    >Open link</a
                   >{:else}<span>Unsupported link</span>{/if}
               {:else if field.type === 'boolean'}<input
                   type="checkbox"

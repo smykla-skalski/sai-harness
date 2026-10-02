@@ -568,7 +568,25 @@ pub fn open_check_url(url: String) -> Result<(), String> {
     open_url(url)
 }
 
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    open_url(validate_external_url(&url)?)
+}
+
+fn validate_external_url(url: &str) -> Result<String, String> {
+    let parsed = tauri::Url::parse(url).map_err(|_| "Invalid external link.")?;
+    match parsed.scheme() {
+        "http" | "https" if parsed.host_str().is_some() => Ok(parsed.to_string()),
+        "mailto" if !parsed.path().is_empty() => Ok(parsed.to_string()),
+        _ => Err("Invalid external link.".to_string()),
+    }
+}
+
 fn open_url(url: String) -> Result<(), String> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = std::env::var_os("SAIL_E2E_OPEN_URL_LOG") {
+        return std::fs::write(path, url).map_err(|error| error.to_string());
+    }
     #[cfg(target_os = "macos")]
     let mut command = Command::new("/usr/bin/open");
     #[cfg(target_os = "linux")]
@@ -580,4 +598,31 @@ fn open_url(url: String) -> Result<(), String> {
         .spawn()
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_external_url;
+
+    #[test]
+    fn external_links_use_browser_safe_schemes() {
+        assert_eq!(
+            validate_external_url("https://example.com/path").unwrap(),
+            "https://example.com/path"
+        );
+        assert_eq!(
+            validate_external_url("mailto:user@example.com").unwrap(),
+            "mailto:user@example.com"
+        );
+        for url in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,bad",
+            "//example.com",
+            "http://",
+            "mailto:",
+        ] {
+            assert!(validate_external_url(url).is_err(), "{url}");
+        }
+    }
 }
