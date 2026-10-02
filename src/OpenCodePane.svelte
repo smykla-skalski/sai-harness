@@ -420,7 +420,7 @@
       running = true;
       if (session) onstatus(summary(session), 'working');
       await invoke('record_turn_snapshot', { path: directory, thread: `opencode:${id}` });
-      await source.session.prompt({
+      const promptRequest = source.session.prompt({
         sessionID: id,
         text,
         skills: promptSkill(skills, text)?.id
@@ -429,6 +429,8 @@
         delivery: queued ? 'queue' : undefined,
         files: paths.map((path) => ({ uri: fileUri(path), name: path.split(/[\\/]/).at(-1) })),
       });
+      sending = false;
+      await promptRequest;
       accepted = true;
       for (const path of paths)
         if (pickedImages.delete(path)) void invoke('browser_remove_capture', { path });

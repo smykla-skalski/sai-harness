@@ -4932,7 +4932,7 @@
         activityTool = '';
       }
       await invoke('record_turn_snapshot', { path, thread: `opencode:${id}` });
-      await client.session.prompt({
+      const promptRequest = client.session.prompt({
         sessionID: id,
         text,
         skills: promptSkill(skills, text)?.id
@@ -4944,6 +4944,8 @@
           name: clipboardAttachmentNames.get(filePath) ?? filePath.split(/[\\/]/).at(-1),
         })),
       });
+      sending = false;
+      await promptRequest;
       accepted = true;
       const staged = files.filter((file) => clipboardAttachmentPaths.delete(file));
       staged.forEach((file) => clipboardAttachmentNames.delete(file));
@@ -4963,7 +4965,7 @@
           draft = [text, draft.trim()].filter(Boolean).join('\n\n');
           attachedFiles = [...files, ...attachedFiles.filter((file) => !files.includes(file))];
         }
-        running = false;
+        if (!queueTurn) running = false;
         error = describe(cause);
       } else {
         for (const file of files) {
