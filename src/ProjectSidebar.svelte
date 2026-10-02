@@ -455,9 +455,6 @@
     }
   }}
   onresize={() => closeMenu()}
-  onscrollcapture={(event) => {
-    if (!menuElement?.contains(event.target as Node)) closeMenu();
-  }}
 />
 {#snippet checkBadge(worktree: ProjectWorktree)}
   {@const pr = currentPullRequest(worktree)}

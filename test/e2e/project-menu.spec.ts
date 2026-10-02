@@ -1,6 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,19 +11,24 @@ describe('project context menus', () => {
   after(() => rmSync(repository, { recursive: true, force: true }));
 
   it('opens the same management menu from dots and right click', async () => {
-    await browser.execute((path) => {
-      localStorage.setItem('sai-directory', path);
+    const path = realpathSync(repository);
+    await browser.execute((selectedPath) => {
+      localStorage.setItem('sai-directory', selectedPath);
       localStorage.setItem(
         'sai-project-catalog',
         JSON.stringify({
-          repositories: [path],
-          groups: [{ id: 'work', name: 'Work', collapsed: false, repositories: [path] }],
+          repositories: [selectedPath],
+          groups: [{ id: 'work', name: 'Work', collapsed: false, repositories: [selectedPath] }],
           worktrees: {},
         }),
       );
-    }, repository);
+    }, path);
     await browser.refresh();
     await browser.setWindowSize(1280, 850);
+    await expect($(`.project-repository-select[title="${path}"]`)).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
 
     await $('[aria-label="Manage Work"]').click();
     try {
@@ -57,7 +62,7 @@ describe('project context menus', () => {
     await expect($('[aria-label="Rename Work"]')).toBeFocused();
     await browser.keys('Escape');
 
-    const repoName = repository.split('/').at(-1)!;
+    const repoName = path.split('/').at(-1)!;
     await $(`[aria-label="Manage ${repoName}"]`).click();
     await expect($('.project-menu')).toHaveText(expect.stringContaining('Move to'));
     await expect($('.project-menu')).toHaveText(expect.stringContaining('Remove from sidebar'));
@@ -80,7 +85,7 @@ describe('project context menus', () => {
     await $('.brand').click();
     await expect($('.project-menu')).not.toExist();
 
-    await $(`.project-repository-select[title="${repository}"]`).click({ button: 'right' });
+    await $(`.project-repository-select[title="${path}"]`).click({ button: 'right' });
     await expect($('.project-menu')).toBeDisplayed();
     await $('.project-menu button:nth-of-type(2)').click();
     await expect($('.project-menu')).not.toExist();
