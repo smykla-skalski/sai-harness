@@ -135,6 +135,7 @@
   type BrowserAccessRequest = { id: string; sessionId: string; directory: string; origin?: string };
   let browserApprovalQueue: Promise<unknown> = Promise.resolve();
   type WorktreeConfig = { setup: string; run: string; archive: string; copy: string[] };
+  type TurnSnapshot = { id: string; kind: 'turn' | 'undo'; created: number };
   let selectedWorktreeConfig = $state<WorktreeConfig | null>(null);
   let configGeneration = 0;
   const terminalExitWaiters = new SvelteMap<string, (code: number) => void>();
@@ -163,6 +164,13 @@
     }[]
   >([]);
   let agentTerminalsDialog: HTMLDialogElement;
+  let snapshotsDialog: HTMLDialogElement;
+  let snapshots = $state<TurnSnapshot[]>([]);
+  let snapshotsThread = $state('');
+  let snapshotsPath = $state('');
+  let snapshotsLoading = $state(false);
+  let snapshotsError = $state('');
+  let snapshotsRestoring = $state(false);
   let commandsDialog: HTMLDialogElement;
   let commandName = $state('');
   let commandText = $state('');
@@ -2732,6 +2740,10 @@
       running = true;
       activity = 'Thinking';
       try {
+        await invoke('record_turn_snapshot', {
+          path: directory,
+          thread: `opencode:${session}`,
+        });
         await client.session.prompt({ sessionID: session, text });
         if (current === selection && session === sessionID)
           void refreshSession(session).catch((cause) => (error = describe(cause)));
@@ -2801,6 +2813,89 @@
 
   function agentThreadKey(thread: AgentThread): string {
     return threadKey(thread);
+  }
+
+  function focusedSnapshotThread(): string | null {
+    const pane =
+      focusedPane === 'main' ? null : leaves(paneLayout).find((leaf) => leaf.id === focusedPane);
+    if (focusedPane !== 'main' && !pane) return null;
+    const agent = pane ? pane.agent : acpAgent;
+    const thread = pane ? pane.thread : acpThread;
+    if (agent && thread) return `acp:${agent}:${thread.sessionId}`;
+    if (focusedPane === 'main' && !acpAgent && sessionID) return `opencode:${sessionID}`;
+    return null;
+  }
+
+  async function openSnapshots() {
+    const thread = focusedSnapshotThread();
+    if (!directory || !thread) return;
+    snapshotsThread = thread;
+    snapshotsPath = directory;
+    snapshots = [];
+    snapshotsError = '';
+    snapshotsLoading = true;
+    snapshotsDialog.showModal();
+    try {
+      snapshots = await invoke<TurnSnapshot[]>('list_turn_snapshots', { path: directory, thread });
+    } catch (cause) {
+      snapshotsError = describe(cause);
+    } finally {
+      snapshotsLoading = false;
+    }
+  }
+
+  async function restoreSnapshot(item: TurnSnapshot) {
+    if (snapshotsRestoring) return;
+    if (directory !== snapshotsPath || focusedSnapshotThread() !== snapshotsThread) {
+      snapshotsError = 'Return to the thread whose history is open.';
+      return;
+    }
+    if (
+      running ||
+      sending ||
+      activeSessionIDs.length > 0 ||
+      agentThreads.some(
+        (thread) => thread.directory === snapshotsPath && runningAgentThreads[threadKey(thread)],
+      )
+    ) {
+      snapshotsError = 'Wait for running agent turns before restoring.';
+      return;
+    }
+    const confirmed = await ask(
+      'Restore the worktree to this saved state? Current file changes will be saved as an undo entry.',
+      { title: 'Restore worktree', kind: 'warning' },
+    );
+    if (!confirmed) return;
+    if (
+      running ||
+      sending ||
+      activeSessionIDs.length > 0 ||
+      agentThreads.some(
+        (thread) => thread.directory === snapshotsPath && runningAgentThreads[threadKey(thread)],
+      )
+    ) {
+      snapshotsError = 'An agent turn started while confirmation was open. Wait before restoring.';
+      return;
+    }
+    snapshotsRestoring = true;
+    snapshotsError = '';
+    try {
+      await invoke('restore_turn_snapshot', {
+        path: snapshotsPath,
+        thread: snapshotsThread,
+        id: item.id,
+      });
+      snapshots = await invoke<TurnSnapshot[]>('list_turn_snapshots', {
+        path: snapshotsPath,
+        thread: snapshotsThread,
+      });
+      if (acpAgent) await refreshAgentDiff();
+      else await refreshDiff();
+    } catch (cause) {
+      snapshotsError = describe(cause);
+    } finally {
+      snapshotsRestoring = false;
+    }
   }
 
   function saveThreadAttention() {
@@ -3738,6 +3833,7 @@
         activity = 'Thinking';
         activityTool = '';
       }
+      await invoke('record_turn_snapshot', { path, thread: `opencode:${id}` });
       await client.session.prompt({
         sessionID: id,
         text,
@@ -4248,6 +4344,11 @@
             onclick={() => agentTerminalsDialog.showModal()}
             >Agent terminals ({agentTerminals.length})</Button
           >{/if}
+        {#if directory && focusedSnapshotThread()}<Button
+            variant="ghost"
+            size="sm"
+            onclick={() => void openSnapshots()}>Restore</Button
+          >{/if}
         <Button variant="ghost" size="sm" onclick={openCommandsDialog}>Commands</Button>
         {#if sessionID || acpAgent || focusedPane !== 'main'}<Button
             variant="ghost"
@@ -4754,6 +4855,30 @@
         Loading sessions…
       </p>{/if}
     {#if paletteError}<p class="palette-error" role="alert">{paletteError}</p>{/if}
+  </div>
+</dialog>
+<dialog class="commands-dialog" bind:this={snapshotsDialog} aria-label="Worktree restore history">
+  <div class="commands-header">
+    <h2>Restore worktree</h2>
+    <button aria-label="Close restore history" onclick={() => snapshotsDialog.close()}>×</button>
+  </div>
+  <div class="commands-list">
+    {#if snapshotsError}<p role="alert" class="notice error">{snapshotsError}</p>{/if}
+    {#if snapshotsLoading}<p>Loading saved turns…</p>{/if}
+    {#each snapshots as item (item.id)}
+      <div class="commands-row">
+        <span
+          >{item.kind === 'undo' ? 'Undo restore' : 'Before agent turn'} · {new Date(
+            item.created,
+          ).toLocaleString()}</span
+        >
+        <button disabled={snapshotsRestoring} onclick={() => void restoreSnapshot(item)}
+          >Restore</button
+        >
+      </div>
+    {:else}
+      {#if !snapshotsLoading}<p>No saved turns in this thread yet.</p>{/if}
+    {/each}
   </div>
 </dialog>
 <dialog class="commands-dialog" bind:this={agentTerminalsDialog} aria-label="Agent terminals">

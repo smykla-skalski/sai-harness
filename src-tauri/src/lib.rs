@@ -56,6 +56,7 @@ mod github;
 mod settings;
 mod terminal;
 mod worktree_config;
+mod worktree_snapshots;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1131,6 +1132,9 @@ pub fn run() {
             start_runtime,
             validate_repository,
             working_tree_diff,
+            worktree_snapshots::record_turn_snapshot,
+            worktree_snapshots::list_turn_snapshots,
+            worktree_snapshots::restore_turn_snapshot,
             git_change_action,
             diff_file_contents,
             create_worktree,

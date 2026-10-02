@@ -429,6 +429,11 @@
         }
         return;
       }
+      if (!ephemeral)
+        await invoke('record_turn_snapshot', {
+          path: directory,
+          thread: `acp:${agent}:${id}`,
+        });
       const promptText =
         ephemeral && seedContext && entries.length === 1
           ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
