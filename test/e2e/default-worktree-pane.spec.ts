@@ -60,6 +60,8 @@ describe('empty default worktree', () => {
 
     await $('.pane-picker-choices .pane-picker-choice:nth-child(2)').click();
     await expect($('.pane-leaf[aria-label="Browser pane"] .browser-pane')).toBeDisplayed();
+    await browser.refresh();
+    await expect($('.browser-pane')).toBeDisplayed();
     await defaultWorktree.click();
     await expect($('.browser-pane')).toBeDisplayed();
     await expect($('.pane-picker')).not.toExist();
@@ -85,5 +87,46 @@ describe('empty default worktree', () => {
     await $('[data-pane-picker]').click();
     await $('[data-agent-choice]:not([disabled])').click();
     await expect($('.agent-conversation')).toBeDisplayed();
+  });
+
+  it('restores terminals in two default worktrees', async () => {
+    const path = realpathSync(repository);
+    const other = realpathSync(secondRepository);
+    await browser.execute(
+      ([selectedPath, otherPath]) => {
+        const terminal = { id: 'main', agent: null, thread: null, kind: 'terminal' };
+        localStorage.setItem('sai-directory', selectedPath);
+        localStorage.setItem(
+          'sai-project-catalog',
+          JSON.stringify({ repositories: [selectedPath, otherPath], groups: [], worktrees: {} }),
+        );
+        localStorage.setItem(
+          'sai-pane-layouts',
+          JSON.stringify({ [selectedPath]: terminal, [otherPath]: terminal }),
+        );
+        localStorage.removeItem(`sai-session:${selectedPath}`);
+        localStorage.removeItem(`sai-session:${otherPath}`);
+      },
+      [path, other],
+    );
+    await browser.refresh();
+    await expect($('.terminal-pane')).toBeDisplayed();
+    await expect($('.pane-picker')).not.toExist();
+    await $(`.project-default-worktree-select[title="${other}"]`).click();
+    try {
+      await expect($('.terminal-pane')).toBeDisplayed();
+    } catch (cause) {
+      console.error(
+        'Main Terminal restore diagnostic',
+        await browser.execute(() => ({
+          directory: localStorage.getItem('sai-directory'),
+          layouts: localStorage.getItem('sai-pane-layouts'),
+          main: document.querySelector('[data-pane-id="main"]')?.outerHTML.slice(0, 1000),
+        })),
+      );
+      throw cause;
+    }
+    await browser.pause(300);
+    await expect($('.terminal-pane [role="alert"]')).not.toExist();
   });
 });

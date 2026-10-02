@@ -6,6 +6,7 @@
   import '@xterm/xterm/css/xterm.css';
   import { terminalFileLinks } from './lib/terminal-links';
   import { terminalTheme } from './lib/terminal-theme';
+  import { terminalRuntimeId } from './lib/panes';
 
   type TerminalEvent = { kind: 'output'; data: number[] } | { kind: 'exit'; code: number };
 
@@ -28,6 +29,7 @@
     oncommandstarted: (id: string) => void;
     onexit: (id: string, code: number) => void;
   } = $props();
+  const runtimeId = $derived(terminalRuntimeId(directory, id));
   let container: HTMLDivElement;
   let terminal: Terminal;
   let fit: FitAddon;
@@ -62,7 +64,7 @@
     try {
       await invoke('terminal_open', {
         params: {
-          id,
+          id: runtimeId,
           directory,
           command: initialCommand,
           size: { cols: terminal.cols, rows: terminal.rows },
@@ -84,7 +86,7 @@
   async function restart() {
     try {
       ++generation;
-      await invoke('terminal_close', { id });
+      await invoke('terminal_close', { id: runtimeId });
       terminal.reset();
       started = false;
       await open();
@@ -97,9 +99,11 @@
     if (!container.clientWidth || !container.clientHeight) return;
     fit.fit();
     if (started)
-      void invoke('terminal_resize', { id, cols: terminal.cols, rows: terminal.rows }).catch(
-        (cause) => (error = String(cause)),
-      );
+      void invoke('terminal_resize', {
+        id: runtimeId,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      }).catch((cause) => (error = String(cause)));
   }
 
   onMount(() => {
@@ -127,13 +131,14 @@
       return false;
     });
     terminal.onData((data) => {
-      void invoke('terminal_write', { id, data: [...new TextEncoder().encode(data)] }).catch(
-        (cause) => (error = String(cause)),
-      );
+      void invoke('terminal_write', {
+        id: runtimeId,
+        data: [...new TextEncoder().encode(data)],
+      }).catch((cause) => (error = String(cause)));
     });
     terminal.onBinary((data) => {
       void invoke('terminal_write', {
-        id,
+        id: runtimeId,
         data: [...data].map((character) => character.codePointAt(0) ?? 0),
       }).catch((cause) => (error = String(cause)));
     });
@@ -183,7 +188,7 @@
             },
             activate: () =>
               void invoke('terminal_open_file', {
-                id,
+                id: runtimeId,
                 path: link.path,
                 line: link.line,
               }).catch((cause) => (error = String(cause))),
@@ -203,7 +208,7 @@
       container.removeEventListener('pointerup', copySelection);
       container.removeEventListener('keyup', copySelection);
       terminal.dispose();
-      void invoke('terminal_detach', { id, attachment });
+      void invoke('terminal_detach', { id: runtimeId, attachment });
     };
   });
 

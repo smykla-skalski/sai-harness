@@ -66,6 +66,7 @@
     migratePaneDirectory,
     newBrowserTab,
     splitPane,
+    terminalRuntimeId,
     updatePane,
     type BrowserTab,
     type Pane,
@@ -2093,7 +2094,7 @@
       await Promise.all(
         leaves(paneLayouts[path] ?? mainPane())
           .filter((pane) => pane.kind === 'terminal')
-          .map((pane) => invoke('terminal_close', { id: pane.id })),
+          .map((pane) => invoke('terminal_close', { id: terminalRuntimeId(path, pane.id) })),
       );
       await invoke('delete_worktree', { repository, worktree: path, force: !!config });
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
@@ -3374,7 +3375,7 @@
     terminalExitWaiters.delete(id);
     finishCoordinationSetup(id, 1);
     if (leaves(paneLayout).find((leaf) => leaf.id === id)?.kind === 'terminal')
-      void invoke('terminal_close', { id });
+      void invoke('terminal_close', { id: terminalRuntimeId(directory, id) });
     let layout = closePane(paneLayout, id);
     if (!('direction' in layout) && layout.id === 'main')
       layout = { id: 'main', agent: acpAgent, thread: acpThread };
@@ -3400,7 +3401,9 @@
       leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)
     ) {
       if (leaves(paneLayout)[0]?.kind === 'terminal')
-        void invoke('terminal_close', { id: leaves(paneLayout)[0].id });
+        void invoke('terminal_close', {
+          id: terminalRuntimeId(directory, leaves(paneLayout)[0].id),
+        });
       acpAgent = null;
       acpThread = null;
       savePaneLayout(mainPane());

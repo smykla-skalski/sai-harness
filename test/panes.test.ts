@@ -11,6 +11,7 @@ import {
   paneRatioBounds,
   clampPaneRatio,
   splitPane,
+  terminalRuntimeId,
   updatePane,
 } from '../src/lib/panes.ts';
 
@@ -20,6 +21,11 @@ void test('browser pop history selects duplicate URLs in travel direction', () =
   assert.equal(browserPopIndex(history, 1, history[0], -1), 0);
   assert.equal(browserPopIndex(history, 0, history[1], 1), 1);
   assert.equal(browserPopIndex(history, 1, history[2], 1), 2);
+});
+
+void test('main terminal runtime IDs are unique per directory', () => {
+  assert.notEqual(terminalRuntimeId('/repo/one', 'main'), terminalRuntimeId('/repo/two', 'main'));
+  assert.equal(terminalRuntimeId('/repo/one', 'secondary'), 'secondary');
 });
 
 void test('split ratios keep both panes usable at narrow sizes', () => {
@@ -155,7 +161,16 @@ void test('pane layouts survive serialization and reject malformed saved trees',
   const hybrid = { id: 'main', kind: 'terminal', agent: 'claude', thread: null };
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': hybrid })), {});
   const mainTerminal = updatePane(mainPane(), 'main', { kind: 'terminal' });
-  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': mainTerminal })), {});
+  assert.deepEqual(
+    loadPaneLayouts(JSON.stringify({ '/repo': mainTerminal }))['/repo'],
+    mainTerminal,
+  );
+  const mainBrowser = updatePane(mainPane(), 'main', {
+    kind: 'browser',
+    tabs: [browserTab],
+    activeTab: browserTab.id,
+  });
+  assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': mainBrowser }))['/repo'], mainBrowser);
   const duplicate = {
     id: 'split',
     direction: 'row',

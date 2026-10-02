@@ -41,6 +41,10 @@ export function newBrowserTab(): BrowserTab {
 
 export const mainPane = (): Pane => ({ id: 'main', agent: null, thread: null });
 
+export function terminalRuntimeId(directory: string, paneId: string): string {
+  return paneId === 'main' ? `main:${encodeURIComponent(directory)}` : paneId;
+}
+
 export const minPaneSpan = 120;
 
 export function paneRatioBounds(span: number): { min: number; max: number } {
@@ -209,8 +213,7 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
       validPane(pane.first, ids) &&
       validPane(pane.second, ids)
     );
-  if (pane.kind === 'terminal')
-    return pane.id !== 'main' && pane.agent === null && pane.thread === null;
+  if (pane.kind === 'terminal') return pane.agent === null && pane.thread === null;
   if (pane.kind === 'agent-terminal')
     return (
       pane.id !== 'main' &&
@@ -221,7 +224,6 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
     );
   if (pane.kind === 'browser')
     return (
-      pane.id !== 'main' &&
       pane.agent === null &&
       pane.thread === null &&
       Array.isArray(pane.tabs) &&
