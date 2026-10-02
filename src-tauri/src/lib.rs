@@ -87,7 +87,7 @@ fn picker_path(path: &Path) -> String {
     let path = path.to_string_lossy();
     #[cfg(windows)]
     {
-        return normalize_picker_path(&path);
+        normalize_picker_path(&path)
     }
     #[cfg(not(windows))]
     path.into_owned()
