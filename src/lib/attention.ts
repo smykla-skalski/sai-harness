@@ -31,7 +31,7 @@ export function reconcileAttention(
     const unread = thread.viewed
       ? false
       : waiting
-        ? previous.unread || previous.status !== 'waiting'
+        ? (previous?.unread ?? false) || previous?.status !== 'waiting'
         : active
           ? false
           : outcome?.status === 'done' && outcome.notify;

@@ -1394,6 +1394,8 @@
     if (connecting || disposed) return;
     connecting = true;
     eventController?.abort();
+    ++nativeActivityGeneration;
+    nativeActivityReady = false;
     clearTimeout(recoveryTimer);
     runtimeState = 'starting';
     runtimeError = '';
@@ -4907,7 +4909,7 @@
         else if (result && !status) forgetThreadAttention(thread);
       }
     } catch {
-      nativeActivityReady = false;
+      if (generation === nativeActivityGeneration && source === client) nativeActivityReady = false;
       return;
     }
   }
@@ -6046,6 +6048,8 @@
       // A new subscription reloads missed state after the live stream fails.
     }
     if (!signal.aborted) {
+      ++nativeActivityGeneration;
+      nativeActivityReady = false;
       runtimeState = 'starting';
       recoveryTimer = setTimeout(() => void recoverRuntime(), 1500);
     }
