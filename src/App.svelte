@@ -2103,6 +2103,7 @@
   let closingWorktree: string | null = null;
 
   function closeCurrentWorktree() {
+    if (closingWorktree) return;
     const target = worktreeAt(projectCatalog, directory);
     if (!target) {
       error = projectCatalog.repositories.includes(directory)
@@ -2110,7 +2111,6 @@
         : 'Select a worktree to close it.';
       return;
     }
-    if (closingWorktree) return;
     closingWorktree = target.worktree.path;
     void deleteProjectWorktree(
       target.repository,
