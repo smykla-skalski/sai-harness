@@ -113,7 +113,14 @@
   });
 
   $effect(() => {
-    if (!externalPrompt || !ready || externalPrompt.id === lastExternalPrompt) return;
+    if (!externalPrompt || externalPrompt.id === lastExternalPrompt) return;
+    if (!ready) {
+      if (mounted && !connecting && error) {
+        lastExternalPrompt = externalPrompt.id;
+        onexternalresult?.(externalPrompt.id, error);
+      }
+      return;
+    }
     const request = externalPrompt;
     lastExternalPrompt = request.id;
     void send(request.text).then(

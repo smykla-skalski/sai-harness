@@ -1356,14 +1356,15 @@
         })
       : 'This check has no GitHub Actions job log. Open the check link for details.';
     const text = `Please investigate failed check “${check.name}” for ${worktree.branch}.\n${check.url}\n\n${log}`;
-    if (directory !== worktree.path) await loadProject(worktree.path);
-    if (directory !== worktree.path) throw new Error('Worktree changed before sending the logs.');
+    const target = await invoke<string>('validate_repository', { path: worktree.path });
+    if (directory !== target) await loadProject(target);
+    if (directory !== target) throw new Error('Worktree changed before sending the logs.');
     const pane = leaves(paneLayout).find((leaf) => leaf.agent && leaf.thread);
     if (pane?.agent) {
       await sendDiffComments(pane.id, diffCommentKey(pane.id), text);
       return;
     }
-    const thread = agentThreads.find((item) => item.directory === worktree.path);
+    const thread = agentThreads.find((item) => item.directory === target);
     if (thread) {
       focusMainPane();
       openAgent(thread.agent, thread);

@@ -9,6 +9,10 @@
 
   export type PullRequestCheck = { name: string; state: string; url: string };
   type PullRequestChecks = { number: number; url: string; checks: PullRequestCheck[] };
+  type RepositoryChecks = {
+    checks: Record<string, PullRequestChecks | null>;
+    errors: Record<string, string>;
+  };
 
   type Props = {
     catalog: ProjectCatalog;
@@ -102,9 +106,15 @@
 
   function checkState(check: PullRequestCheck) {
     if (
-      ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STALE'].includes(
-        check.state,
-      )
+      [
+        'FAILURE',
+        'ERROR',
+        'TIMED_OUT',
+        'CANCELLED',
+        'ACTION_REQUIRED',
+        'STALE',
+        'STARTUP_FAILURE',
+      ].includes(check.state)
     )
       return 'failing';
     if (['SUCCESS', 'EXPECTED', 'NEUTRAL', 'SKIPPED'].includes(check.state)) return 'passing';
@@ -130,26 +140,26 @@
     if (checking) return;
     checking = true;
     try {
-      const entries = Object.entries(catalog.worktrees).flatMap(([repository, worktrees]) =>
-        worktrees.map((worktree) => ({ repository, worktree })),
-      );
+      const entries = Object.entries(catalog.worktrees).filter(([, worktrees]) => worktrees.length);
       const results = await Promise.allSettled(
-        entries.map(({ repository, worktree }) =>
-          invoke<PullRequestChecks | null>('pull_request_checks', {
+        entries.map(([repository, worktrees]) =>
+          invoke<RepositoryChecks>('pull_request_checks', {
             repository,
-            worktree: worktree.path,
-            branch: worktree.branch,
+            worktrees: worktrees.map(({ path, branch }) => ({ path, branch })),
           }),
         ),
       );
       const next: Record<string, PullRequestChecks | null> = {};
       const errors: Record<string, string> = {};
       results.forEach((result, index) => {
-        const path = entries[index].worktree.path;
-        if (result.status === 'fulfilled') next[path] = result.value;
-        else
-          errors[path] =
+        if (result.status === 'fulfilled') {
+          Object.assign(next, result.value.checks);
+          Object.assign(errors, result.value.errors);
+        } else {
+          const cause =
             result.reason instanceof Error ? result.reason.message : String(result.reason);
+          for (const worktree of entries[index][1]) errors[worktree.path] = cause;
+        }
       });
       pullRequestChecks = next;
       checkErrors = errors;
@@ -335,9 +345,15 @@
     {#if worktree.path in pullRequestChecks}
       <span
         class={`project-check-state ${overallState(pr.checks)}`}
+        role="status"
         aria-label={`Pull request #${pr.number} checks ${overallState(pr.checks)}`}
         title={`Checks ${overallState(pr.checks)}`}
-      ></span>
+        >{overallState(pr.checks) === 'passing'
+          ? '✓'
+          : overallState(pr.checks) === 'failing'
+            ? '!'
+            : '…'}</span
+      >
     {/if}
   {/if}
 {/snippet}
