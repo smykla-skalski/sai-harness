@@ -1281,6 +1281,7 @@
     pendingOpenCodeIssue = null;
     newWork();
     draft = pending.text;
+    error = '';
     focusPaneForTyping('main');
   });
 
