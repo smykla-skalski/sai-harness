@@ -171,6 +171,7 @@
   let snapshotsLoading = $state(false);
   let snapshotsError = $state('');
   let snapshotsRestoring = $state(false);
+  let snapshotsGeneration = 0;
   let commandsDialog: HTMLDialogElement;
   let commandName = $state('');
   let commandText = $state('');
@@ -2829,23 +2830,27 @@
   async function openSnapshots() {
     const thread = focusedSnapshotThread();
     if (!directory || !thread) return;
+    const path = directory;
+    const generation = ++snapshotsGeneration;
     snapshotsThread = thread;
-    snapshotsPath = directory;
+    snapshotsPath = path;
     snapshots = [];
     snapshotsError = '';
     snapshotsLoading = true;
     snapshotsDialog.showModal();
     try {
-      snapshots = await invoke<TurnSnapshot[]>('list_turn_snapshots', { path: directory, thread });
+      const items = await invoke<TurnSnapshot[]>('list_turn_snapshots', { path, thread });
+      if (generation === snapshotsGeneration) snapshots = items;
     } catch (cause) {
-      snapshotsError = describe(cause);
+      if (generation === snapshotsGeneration) snapshotsError = describe(cause);
     } finally {
-      snapshotsLoading = false;
+      if (generation === snapshotsGeneration) snapshotsLoading = false;
     }
   }
 
   async function restoreSnapshot(item: TurnSnapshot) {
     if (snapshotsRestoring) return;
+    const generation = snapshotsGeneration;
     if (directory !== snapshotsPath || focusedSnapshotThread() !== snapshotsThread) {
       snapshotsError = 'Return to the thread whose history is open.';
       return;
@@ -2885,14 +2890,15 @@
         thread: snapshotsThread,
         id: item.id,
       });
-      snapshots = await invoke<TurnSnapshot[]>('list_turn_snapshots', {
+      const items = await invoke<TurnSnapshot[]>('list_turn_snapshots', {
         path: snapshotsPath,
         thread: snapshotsThread,
       });
+      if (generation === snapshotsGeneration) snapshots = items;
       if (acpAgent) await refreshAgentDiff();
       else await refreshDiff();
     } catch (cause) {
-      snapshotsError = describe(cause);
+      if (generation === snapshotsGeneration) snapshotsError = describe(cause);
     } finally {
       snapshotsRestoring = false;
     }
@@ -4872,8 +4878,10 @@
             item.created,
           ).toLocaleString()}</span
         >
-        <button disabled={snapshotsRestoring} onclick={() => void restoreSnapshot(item)}
-          >Restore</button
+        <button
+          aria-label={`Restore ${item.kind === 'undo' ? 'undo entry' : 'before agent turn'} from ${new Date(item.created).toLocaleString()} (${item.id.slice(-8)})`}
+          disabled={snapshotsRestoring}
+          onclick={() => void restoreSnapshot(item)}>Restore</button
         >
       </div>
     {:else}

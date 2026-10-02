@@ -1,6 +1,6 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
@@ -148,16 +148,37 @@ fn git_filename(bytes: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
-fn paths(root: &Path, id: &str) -> Result<(PrivateIndex, HashSet<PathBuf>), String> {
+fn paths(
+    root: &Path,
+    id: &str,
+) -> Result<(PrivateIndex, HashSet<PathBuf>, HashMap<PathBuf, String>), String> {
     let index = private_index(root, false)?;
     git(root, &["read-tree", id], Some(&index.0))?;
-    let output = git(root, &["ls-files", "-z"], Some(&index.0))?;
-    let files = output
+    let output = git(root, &["ls-files", "--stage", "-z"], Some(&index.0))?;
+    let mut files = HashSet::new();
+    let mut links = HashMap::new();
+    for entry in output
         .split(|byte| *byte == 0)
-        .filter(|name| !name.is_empty())
-        .map(|name| PathBuf::from(git_filename(name)))
-        .collect();
-    Ok((index, files))
+        .filter(|entry| !entry.is_empty())
+    {
+        let tab = entry
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .ok_or("Git returned an invalid index entry.")?;
+        let mut metadata = entry[..tab].split(|byte| *byte == b' ');
+        let mode = metadata
+            .next()
+            .ok_or("Git returned an invalid index mode.")?;
+        let object = metadata
+            .next()
+            .ok_or("Git returned an invalid index object.")?;
+        let path = PathBuf::from(git_filename(&entry[tab + 1..]));
+        if mode == b"160000" {
+            links.insert(path.clone(), String::from_utf8_lossy(object).into_owned());
+        }
+        files.insert(path);
+    }
+    Ok((index, files, links))
 }
 
 fn safe_path(root: &Path, relative: &Path) -> Result<PathBuf, String> {
@@ -224,12 +245,18 @@ fn known_directory(
 }
 
 fn apply(root: &Path, target: &str, previous: &str) -> Result<(), String> {
-    let (target_index, target_files) = paths(root, target)?;
-    let (_, previous_files) = paths(root, previous)?;
+    let (target_index, target_files, target_links) = paths(root, target)?;
+    let (_, previous_files, previous_links) = paths(root, previous)?;
+    if target_links != previous_links {
+        return Err("Restore cannot change a submodule's checked-out commit.".into());
+    }
     for relative in target_files.union(&previous_files) {
         check_parent_symlinks(root, relative, &previous_files, &target_files)?;
     }
     for relative in &target_files {
+        if target_links.contains_key(relative) {
+            continue;
+        }
         let path = safe_path(root, relative)?;
         if previous_files.contains(relative) && path.is_dir() {
             return Err(format!(
@@ -397,6 +424,56 @@ mod tests {
         );
         apply(&root, &file.id, &directory.id).unwrap();
         assert_eq!(fs::read_to_string(root.join("shape")).unwrap(), "file");
+
+        let child = root.with_extension("child");
+        fs::create_dir(&child).unwrap();
+        git(&child, &["init", "--quiet"], None).unwrap();
+        fs::write(child.join("file"), "submodule").unwrap();
+        git(&child, &["add", "file"], None).unwrap();
+        git(
+            &child,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "initial",
+            ],
+            None,
+        )
+        .unwrap();
+        git(
+            &root,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--quiet",
+                child.to_str().unwrap(),
+                "sub",
+            ],
+            None,
+        )
+        .unwrap();
+        let before_submodule = snapshot(&root, "test", "turn").unwrap();
+        fs::write(root.join("edited.txt"), "submodule turn").unwrap();
+        let after_submodule = snapshot(&root, "test", "turn").unwrap();
+        apply(&root, &before_submodule.id, &after_submodule.id).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("edited.txt")).unwrap(),
+            "after"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("sub/file")).unwrap(),
+            "submodule"
+        );
         fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(child).unwrap();
     }
 }
