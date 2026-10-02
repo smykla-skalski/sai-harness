@@ -822,23 +822,30 @@ pub async fn acp_prompt(
                 .and_then(|value| value.get("stopReason"))
                 .and_then(Value::as_str)
                 != Some("cancelled");
-        if let Ok(mut prompts) = runtime.prompt_state.lock() {
+        let latest = if let Ok(mut prompts) = runtime.prompt_state.lock() {
             if prompts.active.get(&session_id) == Some(&turn_id) {
                 prompts.active.remove(&session_id);
+                prompts
+                    .finished
+                    .insert(session_id.clone(), PromptOutcome { status, notify });
+                true
+            } else {
+                false
             }
-            prompts
-                .finished
-                .insert(session_id.clone(), PromptOutcome { status, notify });
+        } else {
+            false
+        };
+        if latest {
+            let _ = app.emit(
+                "acp-event",
+                AgentEvent {
+                    agent,
+                    message: json!({"method":"sail/prompt_finished","params":{
+                        "sessionId":session_id,"status":status,"notify":notify
+                    }}),
+                },
+            );
         }
-        let _ = app.emit(
-            "acp-event",
-            AgentEvent {
-                agent,
-                message: json!({"method":"sail/prompt_finished","params":{
-                    "sessionId":session_id,"status":status,"notify":notify
-                }}),
-            },
-        );
         result
     })
     .await

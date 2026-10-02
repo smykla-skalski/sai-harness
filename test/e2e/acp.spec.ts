@@ -176,7 +176,7 @@ describe('ACP agent threads', () => {
     await expect($('.agent-tool')).toHaveText(expect.stringContaining('stopping'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
-      expect.stringContaining('Running'),
+      expect.stringContaining('working'),
     );
     await expect($('.agent-tool')).toHaveText(expect.stringContaining('cancelled'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
