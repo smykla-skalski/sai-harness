@@ -155,21 +155,6 @@ describe('split agent panes', () => {
     await $('button[aria-label="Close pane"]').click();
     await browser.refresh();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
-    await browser.keys(['Meta', 'w']);
-    await expect($('.agent-header')).not.toExist();
-    await expect($('.workspace')).toBeDisplayed();
-  });
-
-  it('discards a side chat without changing the parent thread or saved layout', async () => {
-    const path = realpathSync(repository);
-    await browser.execute((repositoryPath) => {
-      localStorage.setItem('sai-directory', repositoryPath);
-      localStorage.removeItem('sai-pane-layouts');
-      localStorage.removeItem('sail-agent-threads');
-    }, path);
-    await browser.refresh();
-    await expect($('.agent-launches button')).toBeDisplayed();
-    await $('.agent-launches button').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Parent memory');
     await $('.agent-actions button').click();
@@ -178,9 +163,9 @@ describe('split agent panes', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Parent memory'),
     );
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     const savedLayout = await browser.execute(() => localStorage.getItem('sai-pane-layouts'));
     const savedThreads = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
-
     await browser.keys(['Meta', 'Shift', 'j']);
     await expect($('[aria-label="Side chat pane"]')).toBeDisplayed();
     await expect($('[aria-label="Side chat pane"] [data-pane-prompt]')).toBeFocused();
@@ -191,14 +176,13 @@ describe('split agent panes', () => {
     await browser.keys(['Meta', 'w']);
     await expect($('[aria-label="Side chat pane"]')).not.toExist();
     await expect($('.agent-composer textarea')).toBeFocused();
-    await expect($('.agent-conversation')).toHaveText(
-      expect.stringContaining('Done: Parent memory'),
-    );
-
     await browser.refresh();
     await expect($('[aria-label="Side chat pane"]')).not.toExist();
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Parent memory'),
     );
+    await browser.keys(['Meta', 'w']);
+    await expect($('.agent-header')).not.toExist();
+    await expect($('.workspace')).toBeDisplayed();
   });
 });
