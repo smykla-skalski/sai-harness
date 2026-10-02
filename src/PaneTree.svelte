@@ -159,6 +159,7 @@
   let nativeTab = $state<'plan' | 'changes' | 'history'>('changes');
   let nativeDetailsGeneration = 0;
   const nativeDetailsVisible = $derived(nativeDetailsOpen || changesPanes.includes(pane.id));
+  let previousChangesOpen = false;
 
   async function refreshNativeDetails() {
     if (!client || 'direction' in pane || !pane.thread || pane.agent !== 'opencode') return;
@@ -199,16 +200,26 @@
 
   $effect(() => {
     if ('direction' in pane) return;
-    const id = pane.thread?.sessionId;
-    const source = client;
-    const rpc = setup?.rpc.state;
-    if (pane.agent !== 'opencode' || !id || !source || !rpc) return;
+    ++nativeDetailsGeneration;
     nativeSnapshot = { plan: null, questions: null };
     nativeHistory = [];
     nativeSession = undefined;
     nativeDetailsOpen = false;
     nativeTab = 'changes';
+    const id = pane.thread?.sessionId;
+    const source = client;
+    const rpc = setup?.rpc.state;
+    if (pane.agent !== 'opencode' || !id || !source || !rpc) return;
     void refreshNativeDetails();
+  });
+
+  $effect(() => {
+    if ('direction' in pane || pane.agent !== 'opencode') return;
+    const changesOpen = changesPanes.includes(pane.id);
+    if (changesOpen === previousChangesOpen) return;
+    previousChangesOpen = changesOpen;
+    nativeDetailsOpen = changesOpen;
+    if (changesOpen) nativeTab = 'changes';
   });
 
   $effect(() => {
@@ -259,7 +270,13 @@
   }
 
   $effect(() => {
-    if ('direction' in pane || pane.id === 'main' || !changesPanes.includes(pane.id)) return;
+    if ('direction' in pane || pane.id === 'main') return;
+    if (
+      pane.agent === 'opencode'
+        ? !nativeDetailsVisible || nativeTab !== 'changes'
+        : !changesPanes.includes(pane.id)
+    )
+      return;
     void refreshDiff();
     const timer = setInterval(() => void refreshDiff(true), 5000);
     return () => clearInterval(timer);

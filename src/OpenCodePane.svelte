@@ -182,6 +182,7 @@
   async function activate(id: string | null) {
     const current = ++generation;
     clearTimeout(refreshTimer);
+    refreshTimer = undefined;
     if (!sending) {
       for (const path of pickedImages) void invoke('browser_remove_capture', { path });
       pickedImages.clear();
@@ -196,6 +197,7 @@
     pendingPermissions = [];
     pendingForms = [];
     error = '';
+    loading = false;
     sending = false;
     running = false;
     following = true;
@@ -336,7 +338,7 @@
   async function send(externalText?: string) {
     const external = externalText !== undefined;
     const text = (externalText ?? draft).trim();
-    if (!client || !text || !inputReady || busy) {
+    if (!client || (!text && (external || !files.length)) || !inputReady || busy) {
       if (external) throw new Error('Wait for the current OpenCode turn.');
       return;
     }
@@ -365,7 +367,7 @@
             : undefined,
           location: { directory },
           metadata: { saiHarness: true },
-          title: text.length > 60 ? `${text.slice(0, 57)}…` : text,
+          title: text ? (text.length > 60 ? `${text.slice(0, 57)}…` : text) : 'New work',
         });
         if (current !== generation || disposed) return;
         id = info.id;
@@ -388,10 +390,12 @@
       await source.session.wait({ sessionID: id });
       if (current === generation && id === activeID) {
         const latest = await source.session.get({ sessionID: id });
+        if (current !== generation || id !== activeID || disposed) return;
         session = latest;
         running = false;
         onstatus(summary(latest), latest.outcome === 'failed' ? 'failed' : 'done', !stopRequested);
         await refreshMessages(id, current);
+        if (current !== generation || id !== activeID || disposed) return;
         onactivity(summary(latest));
       }
     } catch (cause) {
@@ -650,8 +654,9 @@
           <Button variant="ghost" size="sm" onclick={attachFiles} disabled={busy || !inputReady}
             >Attach files</Button
           >
-          <Button onclick={() => void send()} disabled={busy || !draft.trim() || !inputReady}
-            >Send ↗</Button
+          <Button
+            onclick={() => void send()}
+            disabled={busy || (!draft.trim() && !files.length) || !inputReady}>Send ↗</Button
           >
         </div>
       </div>

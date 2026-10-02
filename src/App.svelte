@@ -682,6 +682,7 @@
   let pendingForms = $state<FormInfo[]>([]);
   let selection = 0;
   const paneSelections = new SvelteMap<string, number>();
+  let nativeActivityGeneration = 0;
   let projectLoadGeneration = 0;
   let sessionRefresh = 0;
   let promptRefresh = 0;
@@ -1245,10 +1246,12 @@
     const current = selection;
     await refreshSetup(directory);
     if (current !== selection) return;
-    if (!workReady && !planReady) return;
     const path = directory;
     await refreshSessions();
     if (current !== selection || path !== directory) return;
+    await reconcileNativeActivity();
+    if (current !== selection || path !== directory) return;
+    if (!workReady && !planReady) return;
     if (acpAgent) return;
     const saved = getSetting(`sai-session:${path}`);
     const initial = sessionID ?? saved ?? sessions[0]?.id;
@@ -3621,6 +3624,53 @@
     void invoke('set_attention_badge', { count }).catch(() => undefined);
   }
 
+  async function reconcileNativeActivity() {
+    if (!client || !directory) return;
+    const source = client;
+    const path = directory;
+    const generation = ++nativeActivityGeneration;
+    try {
+      const [active, permissions, forms] = await Promise.all([
+        source.session.active(),
+        source.permission.request.list({ location: { directory: path } }),
+        source.form.list({ location: { directory: path } }),
+      ]);
+      if (generation !== nativeActivityGeneration || path !== directory) return;
+      activeSessionIDs = Object.keys(active);
+      const waiting = new Set([
+        ...permissions.data.map((request) => request.sessionID),
+        ...forms.data.map((form) => form.sessionID),
+      ]);
+      const stale = nativeThreads.filter(
+        (thread) =>
+          thread.directory === path &&
+          !waiting.has(thread.sessionId) &&
+          !active[thread.sessionId] &&
+          ['working', 'waiting'].includes(threadAttention[threadKey(thread)]?.status ?? ''),
+      );
+      const outcomes = await Promise.allSettled(
+        stale.map((thread) => source.session.get({ sessionID: thread.sessionId })),
+      );
+      if (generation !== nativeActivityGeneration || path !== directory) return;
+      const ended = new Map(stale.map((thread, index) => [thread.sessionId, outcomes[index]]));
+      for (const thread of nativeThreads.filter((item) => item.directory === path)) {
+        const result = ended.get(thread.sessionId);
+        const status = waiting.has(thread.sessionId)
+          ? 'waiting'
+          : active[thread.sessionId]
+            ? 'working'
+            : result
+              ? result.status === 'rejected' || result.value.outcome === 'failed'
+                ? 'failed'
+                : 'done'
+              : null;
+        if (status) updateAgentThreadStatus(thread, status);
+      }
+    } catch {
+      return;
+    }
+  }
+
   async function restoreAgentActivity(attempt = 0) {
     const revision = attentionRevision;
     try {
@@ -3779,7 +3829,7 @@
     if (targetPane && paneSelection !== undefined) paneSelections.set(targetPane.id, paneSelection);
     const path = directory;
     const valid = () =>
-      current === selection &&
+      (targetPane || current === selection) &&
       path === directory &&
       (!targetPane ||
         (paneSelections.get(targetPane.id) === paneSelection &&
@@ -3928,7 +3978,7 @@
       await refreshSessions();
       if (current !== selection || path !== directory) return;
       selectedSession = session;
-      await selectSession(session.id);
+      await selectSession(session.id, true);
     } catch (cause) {
       error = describe(cause);
     }
@@ -4503,6 +4553,7 @@
             event.type === 'session.execution.failed' ||
             event.type === 'session.execution.interrupted')
         ) {
+          ++nativeActivityGeneration;
           for (const thread of nativeThreads.filter(
             (item) => item.sessionId === eventSession && item.directory === directory,
           ))
@@ -4623,6 +4674,7 @@
             forgetInboxTime(`opencode:form:${event.data.id}`);
           scheduleRefresh();
           scheduleInboxRefresh();
+          void reconcileNativeActivity();
         }
       }
     } catch {
@@ -4677,7 +4729,7 @@
           await refreshSessions();
           if (current === selection && path === directory) {
             selectedSession = session;
-            await selectSession(id);
+            await selectSession(id, true);
             if (sessionID === id && path === directory) current = selection;
           }
         }
@@ -5087,9 +5139,12 @@
               {@const session = row.session}
               {@const attention =
                 threadAttention[JSON.stringify(['opencode', directory, session.id])]}
-              {@const status = activeSessionIDs.includes(session.id)
-                ? 'working'
-                : (attention?.status ?? 'done')}
+              {@const status =
+                attention?.status === 'waiting'
+                  ? 'waiting'
+                  : activeSessionIDs.includes(session.id)
+                    ? 'working'
+                    : (attention?.status ?? 'done')}
               {@const active =
                 (!acpAgent && session.id === sessionID && focusedPane === 'main') ||
                 (focusedPane !== 'main' &&

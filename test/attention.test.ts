@@ -27,6 +27,9 @@ void test('background input and completion become unread once', () => {
   result = updateAttention(state, 'thread', 'done', false);
   assert.equal(result.notify, true);
   assert.equal(result.next.thread?.unread, true);
+  result = updateAttention(result.next, 'thread', 'done', false);
+  assert.equal(result.notify, false);
+  assert.equal(result.next.thread?.unread, true);
   assert.equal(markAttentionRead(result.next, 'thread').thread?.unread, false);
 });
 

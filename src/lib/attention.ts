@@ -77,7 +77,7 @@ export function updateAttention(
   const changed = previous?.status !== status;
   const notify =
     changed && !viewed && (status === 'waiting' || (status === 'done' && notifyOnDone));
-  const unread = viewed ? false : notify || (status === 'waiting' && (previous?.unread ?? false));
+  const unread = viewed ? false : notify || (previous?.status === status && previous.unread);
   return { next: { ...current, [key]: { status, unread } }, notify };
 }
 
