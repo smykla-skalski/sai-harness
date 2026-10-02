@@ -1,5 +1,5 @@
 import { browser, $, expect } from '@wdio/globals';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,44 @@ function callMcp(config: McpConfig, sessionId: string, name: string, args: objec
     })
     .parse(JSON.parse(raw.trim())).result;
   return result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text);
+}
+
+function callMcpAsync(config: McpConfig, sessionId: string, name: string, args: object) {
+  const child = spawn(config.command, config.args, {
+    env: { ...process.env, ...config.env },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
+  child.stdin.end(
+    `${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, arguments: args, _meta: { sessionID: sessionId } },
+    })}\n`,
+  );
+  return new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => child.kill(), 40_000);
+    child.once('error', reject);
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`MCP process exited ${code}: ${stderr}`));
+      const result = z
+        .object({
+          result: z.object({
+            isError: z.boolean().optional(),
+            content: z.array(z.object({ text: z.string() })),
+          }),
+        })
+        .parse(JSON.parse(stdout.trim())).result;
+      resolve(
+        result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text),
+      );
+    });
+  });
 }
 
 describe('owned MCP terminals', () => {
@@ -108,11 +146,14 @@ describe('owned MCP terminals', () => {
     await browser.execute(() => localStorage.setItem('sai-agent-terminals-enabled', 'true'));
     await browser.refresh();
     await expect($('.agent-launches button')).toBeEnabled();
-    const first = created.parse(
-      callMcp(config, firstOwner, 'terminal_create', {
+    const [firstResponse, secondResponse] = await Promise.all([
+      callMcpAsync(config, firstOwner, 'terminal_create', {
         command: 'printf SAIL144_START; read value; printf "%s" "$value"; exit 7',
       }),
-    );
+      callMcpAsync(secondConfig, secondOwner, 'terminal_create', { command: 'sleep 30' }),
+    ]);
+    const first = created.parse(firstResponse);
+    const second = created.parse(secondResponse);
     const sharedConfig = await browser.tauri.execute(
       async ({ core }, directory) => core.invoke<McpConfig>('browser_mcp_config', { directory }),
       path,
@@ -122,14 +163,10 @@ describe('owned MCP terminals', () => {
         callMcp(sharedConfig, firstOwner, 'terminal_stop', { terminalId: first.terminalId }),
       ).error,
     ).toContain('session-bound');
-    const second = created.parse(
-      callMcp(secondConfig, secondOwner, 'terminal_create', {
-        command: 'sleep 30',
-      }),
-    );
     expect(second.terminalId).not.toBe(first.terminalId);
     expect(first.worktree).toBe(path);
     await expect($(`[data-pane-id="${first.paneId}"]`)).toBeDisplayed();
+    await expect($(`[data-pane-id="${second.paneId}"]`)).toBeDisplayed();
     await expect($(`[data-pane-id="${first.paneId}"] .pane-heading`)).toHaveText(
       expect.stringContaining('Owner 1'),
     );

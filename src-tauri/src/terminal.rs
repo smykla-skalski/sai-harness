@@ -760,10 +760,7 @@ pub async fn terminal_owned_write(
         session.write_busy.store(false, Ordering::Release);
         result
     });
-    tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .map_err(|_| "Terminal input timed out.".to_string())?
-        .map_err(|error| error.to_string())?
+    task.await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

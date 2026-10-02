@@ -1828,16 +1828,23 @@
         const prior = new Set(leaves(layout).map((pane) => pane.id));
         const created = leaves(split).find((pane) => !prior.has(pane.id));
         if (!created) throw new Error('Could not create a terminal pane.');
-        const terminalId = await invoke<string>('terminal_owned_create', {
-          paneId: created.id,
-          directory: request.directory,
-          command,
-          owner,
-        });
+        paneLayouts = { ...paneLayouts, [request.directory]: split };
+        persistPaneLayouts();
+        let terminalId: string | null = null;
         try {
+          terminalId = await invoke<string>('terminal_owned_create', {
+            paneId: created.id,
+            directory: request.directory,
+            command,
+            owner,
+          });
+          const current = paneLayouts[request.directory] ?? mainPane();
+          const reserved = leaves(current).find((pane) => pane.id === created.id);
+          if (!reserved || reserved.kind)
+            throw new Error('The terminal pane changed before creation finished.');
           paneLayouts = {
             ...paneLayouts,
-            [request.directory]: updatePane(split, created.id, {
+            [request.directory]: updatePane(current, created.id, {
               kind: 'terminal',
               owner: `${source.agent}: ${source.title}`,
             }),
@@ -1846,7 +1853,12 @@
           if (directory !== request.directory) await loadProject(request.directory);
           focusPaneForTyping(created.id);
         } catch (cause) {
-          await invoke('terminal_close', { id: created.id });
+          if (terminalId) await invoke('terminal_close', { id: created.id });
+          const current = paneLayouts[request.directory];
+          if (current && leaves(current).some((pane) => pane.id === created.id)) {
+            paneLayouts = { ...paneLayouts, [request.directory]: closePane(current, created.id) };
+            persistPaneLayouts();
+          }
           throw cause;
         }
         return { terminalId, paneId: created.id, worktree: request.directory };
