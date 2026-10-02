@@ -415,7 +415,7 @@
   $effect(() => {
     const active = new Set(
       leaves(paneLayout)
-        .filter((leaf) => leaf.agent)
+        .filter((leaf) => leaf.agent && leaf.agent !== 'opencode')
         .map((leaf) => leaf.id),
     );
     const retained = Object.entries(agentEntrySnapshots).filter(([id]) => active.has(id));
