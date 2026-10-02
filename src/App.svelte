@@ -5686,6 +5686,7 @@
                     }}
                     onkeydown={keydown}
                     rows="3"
+                    wrap="soft"
                     placeholder={inputReady
                       ? 'Describe the work or ask a question…'
                       : 'OpenCode needs a connected model…'}

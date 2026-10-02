@@ -1526,6 +1526,9 @@ button:disabled {
   width: 100%;
   min-height: 80px;
   resize: vertical;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   padding: 15px 16px;
   border: 0;
   outline: 0;
