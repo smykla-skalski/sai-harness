@@ -41,20 +41,20 @@ fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     }
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
-        if event.id() == "close-worktree" {
-            let _ = app.emit_to("main", "worktree:close", ());
-            return;
-        }
-        if event.id() != "close-pane" {
-            return;
-        }
+        let event_name = match event.id().as_ref() {
+            "close-pane" => "pane:close",
+            "close-worktree" => "worktree:close",
+            _ => return,
+        };
         if let Some(settings) = app.get_webview_window("settings") {
             if settings.is_focused().unwrap_or(false) {
-                let _ = settings.close();
+                if event_name == "pane:close" {
+                    let _ = settings.close();
+                }
                 return;
             }
         }
-        let _ = app.emit_to("main", "pane:close", ());
+        let _ = app.emit_to("main", event_name, ());
     });
     Ok(())
 }

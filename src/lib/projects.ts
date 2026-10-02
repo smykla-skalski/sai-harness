@@ -213,6 +213,17 @@ export function removeWorktree(
   };
 }
 
+export function worktreeAt(
+  catalog: ProjectCatalog,
+  directory: string,
+): { repository: string; worktree: ProjectWorktree } | null {
+  for (const [repository, worktrees] of Object.entries(catalog.worktrees)) {
+    const worktree = worktrees.find((item) => item.path === directory);
+    if (worktree) return { repository, worktree };
+  }
+  return null;
+}
+
 export function setWorktreePullRequest(
   catalog: ProjectCatalog,
   repository: string,

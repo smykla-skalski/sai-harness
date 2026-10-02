@@ -9,6 +9,7 @@ import {
   setWorktreePullRequest,
   setWorktreeStatus,
   ungroupedRepositories,
+  worktreeAt,
 } from '../src/lib/projects.ts';
 
 await test('restores the current repository and ignores malformed saved groups', () => {
@@ -149,4 +150,24 @@ await test('keeps the worktree PR link after restart and rejects unsafe links', 
     loadProjectCatalog(JSON.stringify(malformed), '/repo-pr').worktrees['/repo'][0].pullRequest,
     undefined,
   );
+});
+
+await test('finds the worktree for a directory and skips main checkouts', () => {
+  const catalog = loadProjectCatalog(
+    JSON.stringify({
+      repositories: ['/repo', '/other'],
+      groups: [],
+      worktrees: {
+        '/repo': [{ path: '/wt/one', branch: 'one' }],
+        '/other': [{ path: '/wt/two', branch: 'two' }],
+      },
+    }),
+    '/repo',
+  );
+  assert.deepEqual(worktreeAt(catalog, '/wt/two'), {
+    repository: '/other',
+    worktree: { path: '/wt/two', branch: 'two' },
+  });
+  assert.equal(worktreeAt(catalog, '/repo'), null);
+  assert.equal(worktreeAt(catalog, '/missing'), null);
 });

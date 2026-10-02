@@ -136,6 +136,7 @@
     loadProjectCatalog,
     removeRepository,
     removeWorktree,
+    worktreeAt,
     replaceRepositoryPath,
     setWorktreePullRequest,
     setWorktreeStatus,
@@ -2099,16 +2100,23 @@
     }
   }
 
+  let closingWorktree: string | null = null;
+
   function closeCurrentWorktree() {
-    const repository = selectedRepository(projectCatalog, directory);
-    const worktree = repository
-      ? projectCatalog.worktrees[repository]?.find((item) => item.path === directory)
-      : undefined;
-    if (!repository || !worktree) {
-      error = 'Select a worktree to close it.';
+    const target = worktreeAt(projectCatalog, directory);
+    if (!target) {
+      error = projectCatalog.repositories.includes(directory)
+        ? 'The main checkout cannot be deleted. Select a worktree to close it.'
+        : 'Select a worktree to close it.';
       return;
     }
-    void deleteProjectWorktree(repository, worktree.path, worktree.branch);
+    if (closingWorktree) return;
+    closingWorktree = target.worktree.path;
+    void deleteProjectWorktree(
+      target.repository,
+      target.worktree.path,
+      target.worktree.branch,
+    ).finally(() => (closingWorktree = null));
   }
 
   async function createProjectPullRequest(

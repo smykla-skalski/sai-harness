@@ -16,7 +16,7 @@ A desktop workspace for coding-agent work. Sail hosts OpenCode planning sessions
 
 - Install Claude Code or Codex and Node.js with `npx` (Node.js 22 or newer for Claude). Sail detects the installed binaries and shows them in **Agent settings**.
 - Choose a repository, then use **+ Claude** or **+ Codex** in the sidebar. They use the same conversation and resizable Changes workspace as OpenCode; messages, tool activity, permissions, and model or mode choices stay in Sail.
-- Press ⇧⌘W to close the current session and delete its worktree after confirming. On a repository's main checkout it shows an error instead.
+- Press ⇧⌘W (Ctrl+Shift+W on Windows and Linux) to close the current session and delete its worktree after confirming. On a repository's main checkout it shows an error instead.
 - Open **Changes** or press ⌘L to inspect the repository working tree while an agent runs.
 - In **Changes**, click a diff line or Shift-click a range, write a comment, and add it to the draft list. Press ⌘Enter to send all pending comments to that agent in one message. Comments follow matching lines after a refresh; removed lines appear as outdated.
 - Switch a changed file between **All**, **Staged**, and **Unstaged** to stage or unstage a file or hunk. Revert unstaged changes after confirming; Sail rejects actions when the diff has changed since it loaded.
