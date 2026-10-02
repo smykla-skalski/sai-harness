@@ -1116,7 +1116,20 @@ fn repository_namespace(repository: &Path) -> String {
 }
 
 #[tauri::command]
-fn create_worktree(
+async fn create_worktree(
+    repository: String,
+    name: String,
+    destination_parent: Option<String>,
+    base_ref: Option<String>,
+) -> Result<CreatedWorktree, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        add_worktree(repository, name, destination_parent, base_ref)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn add_worktree(
     repository: String,
     name: String,
     destination_parent: Option<String>,
@@ -1185,6 +1198,7 @@ fn create_worktree(
         worktree_base(repository)
     };
     let output = Command::new("git")
+        .args(["-c", "checkout.workers=8"])
         .arg("-C")
         .arg(repository)
         .args(["worktree", "add", "-b", name])
@@ -1273,26 +1287,29 @@ fn remove_worktree(
         return Err("This folder is not a worktree of the selected repository.".to_string());
     }
     let force = force == Some(true);
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(&worktree)
-        .args([
-            "status",
-            "--porcelain=v1",
-            "--ignored",
-            "--untracked-files=all",
-        ])
-        .output()
-        .map_err(|error| format!("Cannot start Git: {error}"))?;
-    if !status.status.success() {
-        return Err("Cannot inspect worktree files before deletion.".to_string());
-    }
-    if !force
-        && String::from_utf8_lossy(&status.stdout)
+    if !force {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&worktree)
+            .args([
+                "status",
+                "--porcelain=v1",
+                "--ignored",
+                "--untracked-files=normal",
+            ])
+            .output()
+            .map_err(|error| format!("Cannot start Git: {error}"))?;
+        if !status.status.success() {
+            return Err("Cannot inspect worktree files before deletion.".to_string());
+        }
+        if String::from_utf8_lossy(&status.stdout)
             .lines()
             .any(|line| line.starts_with("!! "))
-    {
-        return Err("Worktree has ignored files. Move or remove them before deleting.".to_string());
+        {
+            return Err(
+                "Worktree has ignored files. Move or remove them before deleting.".to_string(),
+            );
+        }
     }
     let mut command = Command::new("git");
     command
@@ -1441,8 +1458,9 @@ mod tests {
     #[cfg(unix)]
     use super::working_tree_revision;
     use super::{
-        git_change_action, git_patch, normalize_picker_path, parse_registered_worktrees,
-        registered_worktrees, repository_namespace, server_args, version_number, working_tree_diff,
+        add_worktree, git_change_action, git_patch, normalize_picker_path,
+        parse_registered_worktrees, registered_worktrees, remove_worktree, repository_namespace,
+        server_args, version_number, working_tree_diff,
     };
     use std::fs;
     use std::path::Path;
@@ -1502,6 +1520,50 @@ mod tests {
         assert_eq!(matched[0].path, alias);
         assert_eq!(matched[0].branch.as_deref(), Some("child"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worktree_removal_detects_ignored_directories_and_force_removes_them() {
+        let root = std::env::temp_dir().join(format!("sail-delete-test-{}", uuid::Uuid::new_v4()));
+        let repository = root.join("repository");
+        let parent = root.join("worktrees");
+        fs::create_dir_all(&repository).unwrap();
+        fs::create_dir_all(&parent).unwrap();
+        let repository = repository.canonicalize().unwrap();
+        let repository_path = repository.to_str().unwrap();
+        git(repository_path, &["init", "-q"]);
+        fs::write(repository.join(".gitignore"), "node_modules/\n").unwrap();
+        git(repository_path, &["add", ".gitignore"]);
+        git(
+            repository_path,
+            &[
+                "-c",
+                "user.name=Sail Test",
+                "-c",
+                "user.email=sail@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "seed",
+            ],
+        );
+        let created = add_worktree(
+            repository_path.into(),
+            "child".into(),
+            Some(parent.to_string_lossy().into_owned()),
+            Some("HEAD".into()),
+        )
+        .unwrap();
+        let ignored = Path::new(&created.path).join("node_modules/package/file.js");
+        fs::create_dir_all(ignored.parent().unwrap()).unwrap();
+        fs::write(&ignored, "content").unwrap();
+        let result = remove_worktree(repository_path.into(), created.path.clone(), None);
+        assert!(result.unwrap_err().contains("ignored files"));
+        assert!(ignored.exists());
+        remove_worktree(repository_path.into(), created.path.clone(), Some(true)).unwrap();
+        assert!(!Path::new(&created.path).exists());
         fs::remove_dir_all(root).unwrap();
     }
 

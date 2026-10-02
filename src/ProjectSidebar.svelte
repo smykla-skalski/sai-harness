@@ -4,7 +4,7 @@
   import PathPicker from './PathPicker.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import type { AgentAvailability } from './lib/acp';
-  import type { ProjectCatalog, ProjectWorktree } from './lib/projects';
+  import type { ProjectCatalog, ProjectWorktree, WorktreeCreation } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
   import { getSetting, setSetting } from './lib/settings';
   import { issueBranch } from './lib/github-issues';
@@ -24,6 +24,10 @@
     agents: AgentAvailability[];
     openCodeAvailable: boolean;
     worktreeDialogRequest: { id: string; path: string; fromPalette: boolean } | null;
+    worktreeCreations: WorktreeCreation[];
+    worktreeDeletions: Record<string, string>;
+    onretryworktree: (id: string) => void;
+    ondismissworktree: (id: string) => void;
     onworktreecreated: (repository: string, path: string) => void;
     onworktreecancelled: (repository: string) => void;
     onselect: (path: string) => void;
@@ -43,7 +47,7 @@
       baseRef: string | null,
       agent: string | null,
       issue: GitHubIssue | null,
-    ) => Promise<void>;
+    ) => Promise<string>;
     ondeleteworktree: (repository: string, path: string, branch: string) => Promise<void>;
     oncreatepullrequest: (
       repository: string,
@@ -72,6 +76,10 @@
     agents,
     openCodeAvailable,
     worktreeDialogRequest,
+    worktreeCreations,
+    worktreeDeletions,
+    onretryworktree,
+    ondismissworktree,
     onworktreecreated,
     onworktreecancelled,
     onselect,
@@ -112,7 +120,6 @@
   let worktreeAgent = $state('');
   let worktreeAgentTouched = $state(false);
   let agentPickerOpen = $state(false);
-  let worktreeBusy = $state(false);
   let worktreeError = $state('');
   let issueQuery = $state('');
   let issueResults = $state<GitHubIssue[]>([]);
@@ -398,44 +405,46 @@
     choosingDestination = true;
   }
 
-  async function createWorktree(path: string) {
-    if (!worktreeName.trim() || worktreeBusy) return;
+  function createWorktree(path: string) {
+    if (!worktreeName.trim()) return;
+    if (
+      worktreeCreations.some(
+        (creation) =>
+          creation.repository === path && creation.name === worktreeName.trim() && !creation.error,
+      )
+    ) {
+      worktreeError = 'This worktree is already being created.';
+      return;
+    }
     if (selectedIssue && !worktreeAgent) {
       worktreeError = 'Choose an available agent to start this issue.';
       return;
     }
-    worktreeBusy = true;
     worktreeError = '';
-    try {
-      const fromPalette = worktreeFromPalette;
-      await oncreateworktree(
-        path,
-        worktreeName.trim(),
-        worktreeDestination,
-        worktreeBase.trim() || null,
-        fromPalette ? null : worktreeAgent || null,
-        fromPalette ? null : selectedIssue,
-      );
-      if (!fromPalette) setSetting('sai-worktree-agent', worktreeAgent);
-      worktreeCreated = true;
-      worktreeDialog.close();
-      if (fromPalette) {
-        await tick();
-        onworktreecreated(path, directory);
-      }
-    } catch (cause) {
-      worktreeError = cause instanceof Error ? cause.message : String(cause);
-    } finally {
-      worktreeBusy = false;
-    }
+    const fromPalette = worktreeFromPalette;
+    const pending = oncreateworktree(
+      path,
+      worktreeName.trim(),
+      worktreeDestination,
+      worktreeBase.trim() || null,
+      fromPalette ? null : worktreeAgent || null,
+      fromPalette ? null : selectedIssue,
+    );
+    if (!fromPalette) setSetting('sai-worktree-agent', worktreeAgent);
+    worktreeCreated = true;
+    worktreeDialog.close();
+    void pending
+      .then((createdPath) => {
+        if (fromPalette) onworktreecreated(path, createdPath);
+        return undefined;
+      })
+      .catch(() => undefined);
   }
 
   function closeWorktreeDialog() {
-    if (!worktreeBusy) {
-      clearTimeout(issueSearchTimer);
-      ++issueSearchGeneration;
-      worktreeDialog.close();
-    }
+    clearTimeout(issueSearchTimer);
+    ++issueSearchGeneration;
+    worktreeDialog.close();
   }
 
   async function startPullRequest(repository: string, worktree: ProjectWorktree) {
@@ -549,6 +558,35 @@
   {#if checkErrors[worktree.path] && pr}
     <p class="project-check-error" role="status">{checkErrors[worktree.path]}</p>
   {/if}
+{/snippet}
+
+{#snippet creationRows(repository: string)}
+  {#each worktreeCreations.filter((creation) => creation.repository === repository) as creation (creation.id)}
+    <div class="project-worktree-row project-worktree-pending" role="status">
+      <span class="project-worktree-select"
+        ><span aria-hidden="true">⑂</span><span>{creation.name}</span></span
+      >
+      {#if creation.error}
+        <button
+          class="project-worktree-retry"
+          aria-label={`Retry creating worktree ${creation.name}`}
+          onclick={() => onretryworktree(creation.id)}>Retry</button
+        >
+        <button
+          class="project-worktree-retry"
+          aria-label={`Dismiss failed worktree ${creation.name}`}
+          onclick={() => ondismissworktree(creation.id)}>×</button
+        >
+      {:else}<span class="project-worktree-spinner" aria-hidden="true"></span>{/if}
+    </div>
+    <p
+      class:failed={!!creation.error}
+      class="project-worktree-status"
+      role={creation.error ? 'alert' : 'status'}
+    >
+      {creation.error ?? creation.stage}
+    </p>
+  {/each}
 {/snippet}
 
 <section class="projects" aria-label="Projects and repositories">
@@ -715,28 +753,34 @@
                     class:active={worktree.path === directory}
                     class="project-worktree-row"
                     role="group"
-                    oncontextmenu={(event) =>
-                      openMenu({ kind: 'worktree', repository: path, worktree }, event)}
+                    oncontextmenu={(event) => {
+                      if (!worktreeDeletions[worktree.path])
+                        openMenu({ kind: 'worktree', repository: path, worktree }, event);
+                    }}
                   >
                     <button
                       class="project-worktree-select"
                       aria-current={worktree.path === directory ? 'page' : undefined}
                       title={worktree.path}
-                      {disabled}
+                      disabled={disabled || !!worktreeDeletions[worktree.path]}
                       onmousedown={(event) => {
-                        if (event.button === 2)
+                        if (event.button === 2 && !worktreeDeletions[worktree.path])
                           void openMenu({ kind: 'worktree', repository: path, worktree }, event);
                       }}
                       onclick={() => onselect(worktree.path)}
                       ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                     >
-                    {@render checkBadge(worktree)}
+                    {#if worktreeDeletions[worktree.path]}<span
+                        class="project-worktree-spinner"
+                        aria-hidden="true"
+                      ></span>{:else}{@render checkBadge(worktree)}{/if}
                     <button
                       class="project-icon-button"
                       aria-label={`Manage worktree ${worktree.branch}`}
                       aria-haspopup="menu"
                       aria-expanded={menu?.kind === 'worktree' &&
                         menu.worktree.path === worktree.path}
+                      disabled={!!worktreeDeletions[worktree.path]}
                       onclick={(event) =>
                         openMenu(
                           { kind: 'worktree', repository: path, worktree },
@@ -745,11 +789,17 @@
                         )}>⋯</button
                     >
                   </div>
-                  {#if worktree.statusComment}<p class="project-worktree-status">
+                  {#if worktreeDeletions[worktree.path]}<p
+                      class="project-worktree-status"
+                      role="status"
+                    >
+                      {worktreeDeletions[worktree.path]}
+                    </p>{:else if worktree.statusComment}<p class="project-worktree-status">
                       {worktree.statusComment}
                     </p>{/if}
                   {@render checkFailures(path, worktree)}
                 {/each}
+                {@render creationRows(path)}
               </div>
             </div>
           {:else}<p class="project-empty">No repositories</p>{/each}
@@ -818,28 +868,34 @@
                   class:active={worktree.path === directory}
                   class="project-worktree-row"
                   role="group"
-                  oncontextmenu={(event) =>
-                    openMenu({ kind: 'worktree', repository: path, worktree }, event)}
+                  oncontextmenu={(event) => {
+                    if (!worktreeDeletions[worktree.path])
+                      openMenu({ kind: 'worktree', repository: path, worktree }, event);
+                  }}
                 >
                   <button
                     class="project-worktree-select"
                     aria-current={worktree.path === directory ? 'page' : undefined}
                     title={worktree.path}
-                    {disabled}
+                    disabled={disabled || !!worktreeDeletions[worktree.path]}
                     onmousedown={(event) => {
-                      if (event.button === 2)
+                      if (event.button === 2 && !worktreeDeletions[worktree.path])
                         void openMenu({ kind: 'worktree', repository: path, worktree }, event);
                     }}
                     onclick={() => onselect(worktree.path)}
                     ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                   >
-                  {@render checkBadge(worktree)}
+                  {#if worktreeDeletions[worktree.path]}<span
+                      class="project-worktree-spinner"
+                      aria-hidden="true"
+                    ></span>{:else}{@render checkBadge(worktree)}{/if}
                   <button
                     class="project-icon-button"
                     aria-label={`Manage worktree ${worktree.branch}`}
                     aria-haspopup="menu"
                     aria-expanded={menu?.kind === 'worktree' &&
                       menu.worktree.path === worktree.path}
+                    disabled={!!worktreeDeletions[worktree.path]}
                     onclick={(event) =>
                       openMenu(
                         { kind: 'worktree', repository: path, worktree },
@@ -848,11 +904,17 @@
                       )}>⋯</button
                   >
                 </div>
-                {#if worktree.statusComment}<p class="project-worktree-status">
+                {#if worktreeDeletions[worktree.path]}<p
+                    class="project-worktree-status"
+                    role="status"
+                  >
+                    {worktreeDeletions[worktree.path]}
+                  </p>{:else if worktree.statusComment}<p class="project-worktree-status">
                     {worktree.statusComment}
                   </p>{/if}
                 {@render checkFailures(path, worktree)}
               {/each}
+              {@render creationRows(path)}
             </div>
           </div>
         {:else}<p class="project-empty">Add a repository to switch between projects.</p>{/each}
@@ -965,9 +1027,6 @@
   class="worktree-dialog"
   aria-labelledby="worktree-dialog-title"
   bind:this={worktreeDialog}
-  oncancel={(event) => {
-    if (worktreeBusy) event.preventDefault();
-  }}
   onclose={() => {
     const repository = creatingWorktreeFor;
     const returnToPalette = worktreeFromPalette && !worktreeCreated;
@@ -998,8 +1057,7 @@
           type="button"
           class="worktree-dialog-close"
           aria-label="Close worktree dialog"
-          onclick={closeWorktreeDialog}
-          disabled={worktreeBusy}>×</button
+          onclick={closeWorktreeDialog}>×</button
         >
       </div>
       {#if !worktreeFromPalette}<label
@@ -1016,7 +1074,6 @@
                 void loadIssues(creatingWorktreeFor!);
               }
             }}
-            disabled={worktreeBusy}
           />
         </label>{/if}
       {#if issueLoading && !worktreeFromPalette}<p class="worktree-issue-note" role="status">
@@ -1039,15 +1096,12 @@
               type="button"
               class:selected={selectedIssue?.number === issue.number}
               aria-pressed={selectedIssue?.number === issue.number}
-              onclick={() => chooseIssue(issue)}
-              disabled={worktreeBusy}>#{issue.number} {issue.title}</button
+              onclick={() => chooseIssue(issue)}>#{issue.number} {issue.title}</button
             >{/each}
         </div>{/if}
       {#if !worktreeFromPalette && selectedIssue}<p class="worktree-issue-note">
           Selected #{selectedIssue.number}: {selectedIssue.title}
-          <button type="button" onclick={() => (selectedIssue = null)} disabled={worktreeBusy}
-            >Clear</button
-          >
+          <button type="button" onclick={() => (selectedIssue = null)}>Clear</button>
         </p>{/if}
       <label
         >New branch name
@@ -1056,7 +1110,6 @@
           placeholder="e.g. my-feature"
           bind:value={worktreeName}
           bind:this={worktreeNameInput}
-          disabled={worktreeBusy}
         />
       </label>
       <label
@@ -1065,7 +1118,6 @@
           aria-label={`Base branch for ${repositoryName(creatingWorktreeFor)}`}
           placeholder="Auto-detect"
           bind:value={worktreeBase}
-          disabled={worktreeBusy}
         />
       </label>
       {#if !worktreeFromPalette}<label
@@ -1083,7 +1135,6 @@
               })),
             ]}
             open={agentPickerOpen}
-            disabled={worktreeBusy}
             onopen={() => (agentPickerOpen = true)}
             onclose={() => (agentPickerOpen = false)}
             onchoose={(value) => {
@@ -1103,23 +1154,16 @@
             >{worktreeDestination ?? 'Sail worktrees folder'}</span
           >
         </div>
-        <button type="button" onclick={chooseWorktreeDestination} disabled={worktreeBusy}
-          >Choose folder…</button
-        >
+        <button type="button" onclick={chooseWorktreeDestination}>Choose folder…</button>
       </div>
       {#if worktreeError}<p class="worktree-error" role="alert">{worktreeError}</p>{/if}
       <div class="worktree-form-actions">
-        <button
-          type="button"
-          class="worktree-cancel"
-          disabled={worktreeBusy}
-          onclick={closeWorktreeDialog}>Cancel</button
-        >
+        <button type="button" class="worktree-cancel" onclick={closeWorktreeDialog}>Cancel</button>
         <button
           type="submit"
           class="worktree-create"
-          disabled={worktreeBusy || !worktreeName.trim() || (!!selectedIssue && !worktreeAgent)}
-          >{worktreeBusy ? 'Creating…' : 'Create worktree'}</button
+          disabled={!worktreeName.trim() || (!!selectedIssue && !worktreeAgent)}
+          >Create worktree</button
         >
       </div>
     </form>{/if}

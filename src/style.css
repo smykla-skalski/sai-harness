@@ -258,6 +258,36 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.project-worktree-status.failed {
+  color: var(--sui-danger);
+  white-space: normal;
+}
+.project-worktree-pending {
+  color: var(--sui-muted);
+}
+.project-worktree-pending .project-worktree-select {
+  cursor: default;
+}
+.project-worktree-retry {
+  padding: 3px 6px;
+  color: var(--sui-primary);
+  font-size: 11px;
+}
+.project-worktree-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  margin: 0 7px;
+  border: 2px solid var(--sui-muted);
+  border-top-color: var(--sui-primary);
+  border-radius: 50%;
+  animation: worktree-spin 0.8s linear infinite;
+}
+@keyframes worktree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .project-worktree-pr {
   padding: 3px 4px;
   color: var(--sui-primary);
