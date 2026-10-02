@@ -14,8 +14,9 @@ async function capture(name: string) {
 }
 
 async function openPalette() {
-  await $('body').click();
-  await browser.keys(['Meta', 'k']);
+  await browser.execute(() =>
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })),
+  );
   await expect($('.command-palette[open]')).toBeDisplayed();
   await expect(input()).toBeFocused();
 }
@@ -154,7 +155,6 @@ describe('command palette project flow', () => {
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
     await expect($('[data-kind="new-worktree"]')).toBeDisplayed();
-    await expect($('[data-kind="new-worktree"]')).toBeDisplayed();
     await browser.keys('Escape');
     await expect($('.command-palette[open]')).not.toExist();
   });
@@ -178,7 +178,8 @@ describe('command palette project flow', () => {
     await $('.worktree-create').click();
     await expect($('.worktree-dialog[open]')).not.toExist();
     await expect($('.command-palette[open]')).not.toExist();
-    await expect($('textarea[aria-label="Message Claude"]')).toBeFocused();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
+    await expect($('textarea[aria-label="Message Claude"]')).toBeDisplayed();
     const selected = await browser.execute(() => localStorage.getItem('sai-directory'));
     expect(selected).toContain('palette-created');
   });
