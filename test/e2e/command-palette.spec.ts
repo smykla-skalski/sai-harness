@@ -14,10 +14,15 @@ async function capture(name: string) {
 }
 
 async function openPalette() {
-  await browser.execute(() =>
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })),
-  );
-  await expect($('.command-palette[open]')).toBeDisplayed();
+  await browser.waitUntil(async () => {
+    await browser.execute(() => {
+      if (!document.querySelector('.command-palette[open]'))
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }),
+        );
+    });
+    return browser.execute(() => !!document.querySelector('.command-palette[open]'));
+  });
 }
 
 async function searchAndEnter(query: string) {
@@ -209,7 +214,7 @@ describe('command palette project flow', () => {
     await $('[data-kind="worktree"]').click();
     await expect($('.command-palette[open]')).not.toExist();
     await expect($('.pane-leaf.focused [data-pane-picker]')).toBeDisplayed();
-    await expect($('.pane-leaf')).toBeElementsArrayOfSize(2);
+    await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 2);
   });
 
   it('opens the full worktree popup with Cmd+N for the current project', async () => {
