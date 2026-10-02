@@ -3447,6 +3447,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "block2",
+ "cairo-rs 0.18.5",
  "cairo-rs 0.22.9",
  "netstat2",
  "nix 0.31.3",
