@@ -187,7 +187,6 @@
       }
       inboxID = inbox.id;
       await client.session.wait({ sessionID: forkID });
-      files.forEach((item) => void removeClipboardFile(item.path));
       inboxID = null;
       await refresh();
     } catch (cause) {
@@ -199,6 +198,7 @@
         }
       }
     } finally {
+      if (accepted || disposed) files.forEach((item) => void removeClipboardFile(item.path));
       if (!disposed) busy = false;
     }
   }

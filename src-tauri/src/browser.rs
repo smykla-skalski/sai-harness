@@ -3,7 +3,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, Window};
@@ -123,6 +124,26 @@ impl Default for CaptureStore {
     }
 }
 
+fn write_private_file(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut directory = std::fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    directory.create(root).map_err(|error| error.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn clipboard_save_file(
     store: State<'_, CaptureStore>,
@@ -139,9 +160,8 @@ pub fn clipboard_save_file(
         .ok_or("Invalid clipboard file name")?;
     let name = name.replace(['/', '\\', ':'], "_");
     let root = store.root.join("clipboard");
-    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let path = root.join(format!("{}-{name}", uuid::Uuid::new_v4()));
-    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    write_private_file(&root, &path, &bytes)?;
     store
         .attachments
         .lock()
@@ -194,7 +214,14 @@ const SHORTCUT_SCRIPT: &str = r#"
     const node = selection.anchorNode;
     const element = node instanceof Element ? node : node?.parentElement;
     if (element?.closest('textarea, input, [contenteditable]')) return;
-    navigator.clipboard?.writeText(text).catch(() => {});
+    try {
+      const write = navigator.clipboard?.writeText(text);
+      if (write) {
+        write.catch(() => document.execCommand('copy'));
+        return;
+      }
+    } catch (_) {}
+    document.execCommand('copy');
   };
   document.addEventListener('pointerup', copySelection);
   document.addEventListener('keyup', copySelection);
@@ -616,11 +643,10 @@ pub fn browser_save_capture(store: State<'_, CaptureStore>, png: String) -> Resu
     if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err("Invalid browser capture".to_string());
     }
-    std::fs::create_dir_all(&store.root).map_err(|error| error.to_string())?;
     let path = store
         .root
         .join(format!("picked-{}.png", uuid::Uuid::new_v4()));
-    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    write_private_file(&store.root, &path, &bytes)?;
     store
         .files
         .lock()
@@ -670,6 +696,26 @@ pub fn browser_route(webview: tauri::Webview, mode: String, url: String) -> Resu
 #[cfg(test)]
 mod picker_tests {
     use super::{CaptureStore, PickedElement};
+
+    #[cfg(unix)]
+    #[test]
+    fn clipboard_staging_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("sail-private-{}", uuid::Uuid::new_v4()));
+        let path = root.join("clipboard").join("image.png");
+        super::write_private_file(path.parent().unwrap(), &path, b"private").unwrap();
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"private");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rejects_untracked_local_image() {

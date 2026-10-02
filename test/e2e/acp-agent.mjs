@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline';
 import process from 'node:process';
+import { readFileSync } from 'node:fs';
 
 const sessions = new Map();
 const permissions = new Map();
@@ -186,6 +187,22 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
     const text = message.params.prompt[0].text;
+    if (text.startsWith('Clipboard fixture')) {
+      const image = message.params.prompt.find((part) => part.type === 'image');
+      const paths = text.split('Attached files (read these paths):\n')[1]?.split('\n') ?? [];
+      const files = paths.map((path) => readFileSync(path, 'utf8')).join('|');
+      const reply = {
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: `Clipboard received: ${text}; file contents: ${files}; image: ${image?.mimeType ?? 'none'}`,
+        },
+      };
+      sessions.get(sessionId).history.push(reply);
+      update(sessionId, reply);
+      send({ id: message.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (text === 'Disable effort') {
       sessions.get(sessionId).noEffort = true;
       update(sessionId, {
