@@ -239,7 +239,7 @@
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
   let agentUsage = $state<Record<string, AgentUsage>>({});
   let agentRates = $state<Record<string, RateWindow[]>>({});
-  let replayingAgentSessions = $state<Record<string, boolean>>({});
+  let replayingAgentSessions = $state<Record<string, number>>({});
   $effect(() => {
     const resets = Object.values(agentRates)
       .flat()
@@ -3621,7 +3621,8 @@
     if (!sessionId) return;
     const key = JSON.stringify([agent, sessionId]);
     const next = { ...replayingAgentSessions };
-    if (replaying) next[key] = true;
+    const count = (next[key] ?? 0) + (replaying ? 1 : -1);
+    if (count > 0) next[key] = count;
     else delete next[key];
     replayingAgentSessions = next;
   }
