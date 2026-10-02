@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { openSettings, returnToWorkspace } from './settings-window';
 
 async function sendCommand(command: string) {
   await browser.execute(async (value) => {
@@ -29,6 +30,17 @@ async function sendCommand(command: string) {
   }, command);
 }
 
+const colors = () =>
+  browser.execute(() => {
+    const pane = document.querySelector('.terminal-pane')!;
+    const viewport = document.querySelector('.terminal-screen .xterm-viewport')!;
+    return {
+      theme: document.documentElement.dataset.suiTheme,
+      pane: getComputedStyle(pane).backgroundColor,
+      viewport: getComputedStyle(viewport).backgroundColor,
+    };
+  });
+
 describe('shell terminal panes', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sail-terminal-repo-'));
   const other = mkdtempSync(join(tmpdir(), 'sail-terminal-other-'));
@@ -40,6 +52,45 @@ describe('shell terminal panes', () => {
   after(() => {
     rmSync(repository, { recursive: true, force: true });
     rmSync(other, { recursive: true, force: true });
+  });
+
+  it('matches both app themes and updates an open terminal', async () => {
+    const path = realpathSync(repository);
+    await browser.execute((selected) => {
+      sessionStorage.removeItem('sail-e2e-settings');
+      localStorage.removeItem('sai-pane-layouts');
+      localStorage.setItem('sai-directory', selected);
+      localStorage.setItem('sai-theme', 'light');
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [selected], groups: [], worktrees: {} }),
+      );
+    }, path);
+    await browser.refresh();
+    await expect($('.agent-launches button')).toBeEnabled();
+    await browser.keys(['Meta', 't']);
+    await expect($('.terminal-screen .xterm')).toBeDisplayed();
+
+    expect(await colors()).toEqual({
+      theme: 'light',
+      pane: 'rgb(255, 255, 255)',
+      viewport: 'rgb(255, 255, 255)',
+    });
+
+    await openSettings();
+    await browser.execute(() => {
+      const select = document.querySelector<HTMLSelectElement>('#theme-select')!;
+      select.value = 'dark';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await returnToWorkspace();
+    await browser.waitUntil(async () => (await colors()).theme === 'dark');
+    expect(await colors()).toEqual({
+      theme: 'dark',
+      pane: 'rgb(21, 26, 33)',
+      viewport: 'rgb(21, 26, 33)',
+    });
+    await expect($('.terminal-screen .xterm')).toBeDisplayed();
   });
 
   it('starts in the project, retains scrollback across project switches, and restarts after exit', async () => {

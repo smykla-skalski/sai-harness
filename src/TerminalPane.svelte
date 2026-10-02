@@ -5,6 +5,7 @@
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
   import { terminalFileLinks } from './lib/terminal-links';
+  import { terminalTheme } from './lib/terminal-theme';
 
   type TerminalEvent = { kind: 'output'; data: number[] } | { kind: 'exit'; code: number };
 
@@ -12,6 +13,7 @@
     id,
     directory,
     focused,
+    dark,
     onshortcut,
     command,
     oncommandstarted,
@@ -20,6 +22,7 @@
     id: string;
     directory: string;
     focused: boolean;
+    dark: boolean;
     onshortcut: (event: KeyboardEvent) => void;
     command?: string;
     oncommandstarted: (id: string) => void;
@@ -104,6 +107,7 @@
       scrollback: 5000,
       allowProposedApi: true,
       screenReaderMode: true,
+      theme: terminalTheme(dark),
     });
     fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -195,6 +199,10 @@
 
   $effect(() => {
     if (focused && terminal) terminal.focus();
+  });
+
+  $effect(() => {
+    if (terminal) terminal.options.theme = terminalTheme(dark);
   });
 </script>
 

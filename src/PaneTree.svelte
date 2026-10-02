@@ -19,6 +19,7 @@
     pane: Pane;
     focused: string;
     directory: string;
+    dark: boolean;
     agents: AgentAvailability[];
     changesPanes: string[];
     main: Snippet;
@@ -57,6 +58,7 @@
     pane,
     focused,
     directory,
+    dark,
     agents,
     changesPanes,
     main,
@@ -178,6 +180,7 @@
       pane={pane.first}
       {focused}
       {directory}
+      {dark}
       {agents}
       {changesPanes}
       {main}
@@ -243,6 +246,7 @@
       pane={pane.second}
       {focused}
       {directory}
+      {dark}
       {agents}
       {changesPanes}
       {main}
@@ -346,6 +350,7 @@
         <TerminalPane
           id={pane.id}
           {directory}
+          {dark}
           focused={focused === pane.id}
           {onshortcut}
           command={pendingCommands[pane.id]}
@@ -354,7 +359,7 @@
         />
       {/key}
     {:else if pane.kind === 'agent-terminal'}
-      <AgentTerminalPane id={pane.terminalId} />
+      <AgentTerminalPane id={pane.terminalId} {dark} />
     {:else if pane.kind === 'browser'}
       {#key `${directory}:${pane.id}`}
         <BrowserPane

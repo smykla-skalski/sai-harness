@@ -4181,6 +4181,7 @@
       pane={paneLayout}
       focused={focusedPane}
       {directory}
+      {dark}
       agents={agentAvailability}
       {changesPanes}
       main={mainPaneContent}

@@ -4,6 +4,7 @@
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
+  import { terminalTheme } from './lib/terminal-theme';
 
   type Snapshot = {
     output: string;
@@ -12,7 +13,7 @@
     released: boolean;
   };
 
-  let { id }: { id: string } = $props();
+  let { id, dark }: { id: string; dark: boolean } = $props();
   let container: HTMLDivElement;
   let terminal: Terminal;
   let fit: FitAddon;
@@ -53,7 +54,11 @@
   }
 
   onMount(() => {
-    terminal = new Terminal({ scrollback: 5000, screenReaderMode: true });
+    terminal = new Terminal({
+      scrollback: 5000,
+      screenReaderMode: true,
+      theme: terminalTheme(dark),
+    });
     fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(container);
@@ -68,6 +73,10 @@
       observer.disconnect();
       terminal.dispose();
     };
+  });
+
+  $effect(() => {
+    if (terminal) terminal.options.theme = terminalTheme(dark);
   });
 </script>
 
