@@ -15,6 +15,7 @@
     onshortcut,
     command,
     oncommandstarted,
+    onexit,
   }: {
     id: string;
     directory: string;
@@ -22,6 +23,7 @@
     onshortcut: (event: KeyboardEvent) => void;
     command?: string;
     oncommandstarted: (id: string) => void;
+    onexit: (id: string, code: number) => void;
   } = $props();
   let container: HTMLDivElement;
   let terminal: Terminal;
@@ -35,7 +37,7 @@
   const attachment = crypto.randomUUID();
   let initialCommand = $state<string | undefined>();
 
-  function channel(onexit: (code: number) => void): Channel<TerminalEvent> {
+  function channel(reportExit: (code: number) => void): Channel<TerminalEvent> {
     const current = ++generation;
     const receiver = new Channel<TerminalEvent>();
     Object.assign(receiver, {
@@ -44,7 +46,8 @@
         if (event.kind === 'output') terminal.write(new Uint8Array(event.data));
         else {
           exitCode = event.code;
-          onexit(event.code);
+          onexit(id, event.code);
+          reportExit(event.code);
         }
       },
     });
@@ -69,6 +72,7 @@
       if (focused) terminal.focus();
     } catch (cause) {
       error = String(cause);
+      onexit(id, 1);
     }
   }
 

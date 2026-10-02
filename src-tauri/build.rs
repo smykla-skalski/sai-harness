@@ -9,6 +9,7 @@ fn main() {
             "working_tree_diff",
             "create_worktree",
             "delete_worktree",
+            "worktree_config",
             "create_pull_request",
             "open_pull_request",
             "acp_terminal_snapshot",

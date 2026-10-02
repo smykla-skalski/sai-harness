@@ -52,6 +52,7 @@ mod browser;
 mod github;
 mod settings;
 mod terminal;
+mod worktree_config;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -480,6 +481,13 @@ struct CreatedWorktree {
     path: String,
     branch: String,
     base: String,
+    setup: String,
+}
+
+#[tauri::command]
+fn worktree_config(worktree: String) -> Result<Option<worktree_config::WorktreeConfig>, String> {
+    let root = validate_repository(worktree)?;
+    worktree_config::read(Path::new(&root))
 }
 
 fn git_reference(repository: &Path, args: &[&str]) -> Option<String> {
@@ -616,15 +624,46 @@ fn create_worktree(
     let path = path
         .canonicalize()
         .map_err(|error| format!("Cannot resolve new worktree: {error}"))?;
+    let config = (|| -> Result<Option<worktree_config::WorktreeConfig>, String> {
+        let config = worktree_config::read(&path)?;
+        if let Some(config) = &config {
+            worktree_config::copy_ignored(repository, &path, config)?;
+        }
+        Ok(config)
+    })();
+    let config = match config {
+        Ok(config) => config,
+        Err(error) => {
+            let removed = Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(["worktree", "remove", "--force"])
+                .arg(&path)
+                .output();
+            if removed.is_ok_and(|output| output.status.success()) {
+                let _ = Command::new("git")
+                    .arg("-C")
+                    .arg(repository)
+                    .args(["branch", "-D", name])
+                    .output();
+            }
+            return Err(error);
+        }
+    };
     Ok(CreatedWorktree {
         path: path.to_string_lossy().into_owned(),
         branch: name.to_string(),
         base,
+        setup: config.map(|config| config.setup).unwrap_or_default(),
     })
 }
 
 #[tauri::command]
-fn delete_worktree(repository: String, worktree: String) -> Result<(), String> {
+fn delete_worktree(
+    repository: String,
+    worktree: String,
+    force: Option<bool>,
+) -> Result<(), String> {
     let repository = PathBuf::from(validate_repository(repository)?)
         .canonicalize()
         .map_err(|_| "Repository folder no longer exists.".to_string())?;
@@ -646,6 +685,7 @@ fn delete_worktree(repository: String, worktree: String) -> Result<(), String> {
     }) {
         return Err("This folder is not a worktree of the selected repository.".to_string());
     }
+    let force = force == Some(true) && worktree_config::read(&worktree)?.is_some();
     let status = Command::new("git")
         .arg("-C")
         .arg(&worktree)
@@ -660,16 +700,22 @@ fn delete_worktree(repository: String, worktree: String) -> Result<(), String> {
     if !status.status.success() {
         return Err("Cannot inspect worktree files before deletion.".to_string());
     }
-    if String::from_utf8_lossy(&status.stdout)
-        .lines()
-        .any(|line| line.starts_with("!! "))
+    if !force
+        && String::from_utf8_lossy(&status.stdout)
+            .lines()
+            .any(|line| line.starts_with("!! "))
     {
         return Err("Worktree has ignored files. Move or remove them before deleting.".to_string());
     }
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(&repository)
-        .args(["worktree", "remove"])
+        .args(["worktree", "remove"]);
+    if force {
+        command.arg("--force");
+    }
+    let output = command
         .arg(&worktree)
         .output()
         .map_err(|error| format!("Cannot start Git: {error}"))?;
@@ -725,6 +771,7 @@ pub fn run() {
             working_tree_diff,
             create_worktree,
             delete_worktree,
+            worktree_config,
             github::create_pull_request,
             github::open_pull_request,
             acp_terminal::acp_terminal_snapshot,

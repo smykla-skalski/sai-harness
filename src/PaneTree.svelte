@@ -38,6 +38,7 @@
     onchanges: (id: string) => void;
     pendingCommands: Record<string, string>;
     oncommandstarted: (id: string) => void;
+    onterminalexit: (id: string, code: number) => void;
     onagentterminal: (id: string) => void;
   };
 
@@ -66,6 +67,7 @@
     onchanges,
     pendingCommands,
     oncommandstarted,
+    onterminalexit,
     onagentterminal,
   }: Props = $props();
   let container = $state<HTMLDivElement>();
@@ -175,6 +177,7 @@
       {onchanges}
       {pendingCommands}
       {oncommandstarted}
+      {onterminalexit}
       {onagentterminal}
     />
     <div
@@ -230,6 +233,7 @@
       {onchanges}
       {pendingCommands}
       {oncommandstarted}
+      {onterminalexit}
       {onagentterminal}
     />
   </div>
@@ -306,6 +310,7 @@
           {onshortcut}
           command={pendingCommands[pane.id]}
           {oncommandstarted}
+          onexit={onterminalexit}
         />
       {/key}
     {:else if pane.kind === 'agent-terminal'}

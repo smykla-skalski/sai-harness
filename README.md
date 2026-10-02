@@ -46,6 +46,19 @@ Select the repository in the app and complete the repository setup checks, then 
 
 Use **+ Group** and **+ Repo** in the sidebar to organize saved repositories. Each repository row has a **+** control to create a worktree. Sail uses the remote default branch when Git records one, then `main` or `master`, then the main checkout branch. Enter a base branch in the form to choose another starting point. By default, new worktrees live in `~/sail/worktrees/<repository>-<id>/<name>` so repositories with the same name stay separate; choose a different parent folder in the form when needed. `SAIL_WORKTREE_ROOT` overrides the default root.
 
+To customize worktrees, commit `.sail/worktree.json` in the repository:
+
+```json
+{
+  "setup": "mise install",
+  "run": "mise run dev",
+  "archive": "mise run cleanup",
+  "copy": [".env", "config/local"]
+}
+```
+
+Sail copies listed Git-ignored files and folders into each new worktree, then opens `setup` in a visible terminal. It waits for setup to succeed before starting a selected agent. **Run project** starts `run` in a terminal. On deletion, Sail opens `archive` in a terminal and asks before proceeding if it fails. Deleting a configured worktree also removes its local uncommitted and ignored files after confirmation. Without this config, worktree creation and deletion retain their normal behavior.
+
 Sail saves repositories, groups, selected sessions, drafts, and preferences to `sail/settings.json` in the OS config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, `%APPDATA%` on Windows). `mise run dev` and packaged Sail use the same file. Existing WebView settings migrate on first launch from each origin.
 
 Other tasks:

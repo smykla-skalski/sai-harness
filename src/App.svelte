@@ -119,6 +119,25 @@
   );
   let savedCommands = $state<SavedCommand[]>(loadSavedCommands(getSetting('sai-saved-commands')));
   let pendingCommands = $state<Record<string, string>>({});
+  type WorktreeConfig = { setup: string; run: string; archive: string; copy: string[] };
+  let selectedWorktreeConfig = $state<WorktreeConfig | null>(null);
+  let configGeneration = 0;
+  const terminalExitWaiters = new SvelteMap<string, (code: number) => void>();
+  $effect(() => {
+    const path = directory;
+    const generation = ++configGeneration;
+    selectedWorktreeConfig = null;
+    if (!path || !isTauri()) return;
+    void invoke<WorktreeConfig | null>('worktree_config', { worktree: path })
+      .then((config) => {
+        if (generation === configGeneration) selectedWorktreeConfig = config;
+        return config;
+      })
+      .catch((cause) => {
+        if (generation === configGeneration) error = describe(cause);
+        return null;
+      });
+  });
   let agentTerminals = $state<
     {
       agent: string;
@@ -1129,7 +1148,7 @@
     baseRef: string | null,
     agent: string | null,
   ) {
-    const created = await invoke<{ path: string; branch: string; base: string }>(
+    const created = await invoke<{ path: string; branch: string; base: string; setup: string }>(
       'create_worktree',
       {
         repository: path,
@@ -1140,15 +1159,35 @@
     );
     saveProjectCatalog(addWorktree(projectCatalog, path, created));
     await loadProject(created.path);
-    if (agent === 'opencode') {
-      if (workReady) newWork();
-      else error = 'Complete OpenCode setup in this worktree before starting an agent.';
-    } else if (agent) {
-      openAgent(agent);
+    const startAgent = () => {
+      if (directory !== created.path) return;
+      if (agent === 'opencode') {
+        if (workReady) newWork();
+        else error = 'Complete OpenCode setup in this worktree before starting an agent.';
+      } else if (agent) {
+        openAgent(agent);
+      }
+    };
+    if (created.setup) {
+      const paneId = splitFocusedPane('row', 'terminal', created.setup);
+      if (!paneId) return;
+      terminalExitWaiters.set(paneId, (code) => {
+        if (code === 0) startAgent();
+        else if (code >= 0) error = `Worktree setup exited with code ${code}.`;
+      });
+      return;
     }
+    startAgent();
   }
 
   async function deleteProjectWorktree(repository: string, path: string, branch: string) {
+    let config: WorktreeConfig | null;
+    try {
+      config = await invoke<WorktreeConfig | null>('worktree_config', { worktree: path });
+    } catch (cause) {
+      error = describe(cause);
+      return;
+    }
     const e2eAnswer =
       import.meta.env.MODE === 'e2e' ? sessionStorage.getItem('sai-e2e-delete-worktree') : null;
     if (e2eAnswer) sessionStorage.removeItem('sai-e2e-delete-worktree');
@@ -1158,19 +1197,37 @@
         : e2eAnswer === 'No'
           ? false
           : await ask(
-              `Delete worktree “${branch}” at ${path}? Uncommitted and ignored files block deletion. The branch will remain.`,
+              config
+                ? `Delete worktree “${branch}” at ${path}? This removes uncommitted and ignored files, including copied files. The branch will remain.`
+                : `Delete worktree “${branch}” at ${path}? Uncommitted and ignored files block deletion. The branch will remain.`,
               { title: 'Delete worktree', kind: 'warning' },
             );
     if (!confirmed) return;
     const wasSelected = directory === path;
     try {
-      if (wasSelected) await loadProject(repository);
+      if (config?.archive) {
+        if (!wasSelected) await loadProject(path);
+        const paneId = splitFocusedPane('row', 'terminal', config.archive);
+        if (!paneId) return;
+        const code = await new Promise<number>((resolve) =>
+          terminalExitWaiters.set(paneId, resolve),
+        );
+        if (code < 0) return;
+        if (code !== 0) {
+          const deleteAnyway = await ask(
+            `Archive script exited with code ${code}. Delete “${branch}” anyway?`,
+            { title: 'Archive failed', kind: 'warning' },
+          );
+          if (!deleteAnyway) return;
+        }
+      }
+      if (directory === path) await loadProject(repository);
       await Promise.all(
         leaves(paneLayouts[path] ?? mainPane())
           .filter((pane) => pane.kind === 'terminal')
           .map((pane) => invoke('terminal_close', { id: pane.id })),
       );
-      await invoke('delete_worktree', { repository, worktree: path });
+      await invoke('delete_worktree', { repository, worktree: path, force: !!config });
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
       const removedThreads = agentThreads.filter((thread) => thread.directory === path);
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
@@ -1181,7 +1238,7 @@
       persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
     } catch (cause) {
-      if (wasSelected) await loadProject(path);
+      if (directory !== path) await loadProject(path);
       error = describe(cause);
     }
   }
@@ -1227,6 +1284,10 @@
   }
 
   async function loadProject(path: string, recordRestoredThread = true) {
+    if (directory !== path) {
+      for (const resolve of terminalExitWaiters.values()) resolve(-1);
+      terminalExitWaiters.clear();
+    }
     ++projectLoadGeneration;
     saveViewState();
     error = '';
@@ -1951,6 +2012,7 @@
             : layout,
     );
     focusPaneForTyping(created.id);
+    return created.id;
   }
 
   function focusPaneForTyping(id: string) {
@@ -2007,6 +2069,8 @@
 
   function closeFocusedPane(id: string) {
     ++recentJumpGeneration;
+    terminalExitWaiters.get(id)?.(1);
+    terminalExitWaiters.delete(id);
     if (leaves(paneLayout).find((leaf) => leaf.id === id)?.kind === 'terminal')
       void invoke('terminal_close', { id });
     let layout = closePane(paneLayout, id);
@@ -3470,6 +3534,12 @@
         >
       </div>
       <div class="topbar-actions">
+        {#if selectedWorktreeConfig?.run}<Button
+            variant="ghost"
+            size="sm"
+            onclick={() => splitFocusedPane('row', 'terminal', selectedWorktreeConfig?.run)}
+            >Run project</Button
+          >{/if}
         {#if agentTerminals.length}<Button
             variant="ghost"
             size="sm"
@@ -3823,6 +3893,10 @@
         const next = { ...pendingCommands };
         delete next[id];
         pendingCommands = next;
+      }}
+      onterminalexit={(id, code) => {
+        terminalExitWaiters.get(id)?.(code);
+        terminalExitWaiters.delete(id);
       }}
       onagentterminal={(id) => void openAgentTerminal(id)}
     />

@@ -12,6 +12,7 @@
     "allow-working-tree-diff",
     "allow-create-worktree",
     "allow-delete-worktree",
+    "allow-worktree-config",
     "allow-create-pull-request",
     "allow-open-pull-request",
     "allow-acp-terminal-snapshot",
