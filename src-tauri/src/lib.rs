@@ -595,13 +595,12 @@ async fn git_change_action(
             return Err("Invalid change action.".to_string());
         }
         let pathspec = format!(":(literal){file}");
-        let untracked = Command::new("git")
+        let untracked = !Command::new("git")
             .args(["-C", &root, "ls-files", "--error-unmatch", "--", &pathspec])
             .output()
             .map_err(|error| error.to_string())?
             .status
-            .success()
-            == false;
+            .success();
         let current = git_patch(&root, &file, &area, untracked && area == "unstaged")?;
         if current.is_empty() || current != expected_patch {
             return Err("The diff changed. Refresh before applying this action.".into());
