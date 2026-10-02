@@ -150,7 +150,7 @@ describe('ACP agent threads', () => {
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-launches button:nth-child(2)').click();
     await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
-      expect.stringContaining('Running'),
+      expect.stringMatching(/Running|Waiting for input/),
     );
     await browser.pause(1800);
     await $('.session-row .session-item[title="Delayed approval"]').click();

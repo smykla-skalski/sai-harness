@@ -75,7 +75,7 @@ function runTerminal(sessionId, text, promptId) {
 
 function configOptions(sessionId) {
   const config = sessions.get(sessionId)?.config ?? { model: 'test', effort: 'medium' };
-  return [
+  const options = [
     {
       id: 'model',
       name: 'Model',
@@ -98,6 +98,7 @@ function configOptions(sessionId) {
       ],
     },
   ];
+  return process.env.SAIL_ACP_NO_EFFORT === '1' ? options.slice(0, 1) : options;
 }
 
 function requestPermission(sessionId, text, promptId) {
