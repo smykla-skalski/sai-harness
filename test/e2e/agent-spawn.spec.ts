@@ -109,9 +109,15 @@ describe('provider selected agent spawn', () => {
     const sessionId = z.array(agentThread).parse(JSON.parse(saved ?? '[]'))[0].sessionId;
 
     await $('.agent-launches button:nth-child(2)').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Clipboard fixture authenticate Codex');
+    await $('.agent-actions button').click();
     await expect($('.agent-auth button')).toBeDisplayed();
     await $('.agent-auth button').click();
-    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-actions button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Clipboard received:'),
+    );
 
     const config = await browser.tauri.execute(
       async ({ core }, directory) => core.invoke<McpConfig>('browser_mcp_config', { directory }),
@@ -128,7 +134,7 @@ describe('provider selected agent spawn', () => {
       prompt: 'Clipboard fixture delegate',
     });
     await expect($('.worktree-approval-dialog')).toBeDisplayed();
-    await expect($('.worktree-approval-dialog')).toHaveText(expect.stringContaining('Codex'));
+    await expect($('.worktree-approval-dialog')).toHaveText(expect.stringContaining('codex'));
     await $('.worktree-approval-actions button:last-child').click();
     const newResult = await spawnNew;
     expect(newResult.isError).not.toBe(true);
@@ -158,6 +164,61 @@ describe('provider selected agent spawn', () => {
     const denied = await spawnShared;
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain('User declined');
+
+    const approvedShared = callMcp(config, sessionId, {
+      provider: 'claude',
+      prompt: 'Clipboard fixture approved shared',
+      target: { kind: 'existing', path },
+    });
+    await expect($('.worktree-approval-dialog')).toBeDisplayed();
+    await $('.worktree-approval-actions button:last-child').click();
+    const sharedResult = await approvedShared;
+    expect(sharedResult.isError).not.toBe(true);
+    const shared = z
+      .object({
+        status: z.string(),
+        threadId: z.string(),
+        worktreeId: z.string(),
+        path: z.string(),
+      })
+      .parse(JSON.parse(sharedResult.content[0].text));
+    expect(shared.status).toBe('started');
+    expect(shared.threadId).toMatch(/^acp:claude:/);
+    expect(shared.worktreeId).toBe(path);
+    expect(shared.path).toBe(path);
+
+    let openCodeFinished = false;
+    const spawnOpenCode = callMcp(config, sessionId, {
+      provider: 'opencode',
+      prompt: 'Clipboard fixture OpenCode',
+      target: { kind: 'existing', path },
+    }).then((result) => {
+      openCodeFinished = true;
+      return result;
+    });
+    await browser.waitUntil(
+      async () => openCodeFinished || (await $('.worktree-approval-dialog').isDisplayed()),
+      { timeout: 15_000 },
+    );
+    if (await $('.worktree-approval-dialog').isDisplayed()) {
+      await $('.worktree-approval-actions button:last-child').click();
+    }
+    const openCodeResult = await spawnOpenCode;
+    if (openCodeResult.isError) {
+      expect(openCodeResult.content[0].text).toContain(
+        'Complete OpenCode setup in the target worktree before spawning',
+      );
+      console.log(
+        `OpenCode spawn unavailable in isolated fixture: ${openCodeResult.content[0].text}`,
+      );
+    } else {
+      const openCode = z
+        .object({ status: z.string(), threadId: z.string(), worktreeId: z.string() })
+        .parse(JSON.parse(openCodeResult.content[0].text));
+      expect(openCode.status).toBe('started');
+      expect(openCode.threadId).toMatch(/^opencode:/);
+      expect(openCode.worktreeId).toBe(path);
+    }
 
     await browser.refresh();
     const rawRestored = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
