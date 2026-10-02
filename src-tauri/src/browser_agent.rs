@@ -726,7 +726,7 @@ fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
                 let callback_sender = sender.clone();
                 let handler = CapturePreviewCompletedHandler::create(Box::new(move |status| {
                     let result = (|| -> Result<Vec<u8>, String> {
-                        status.ok().map_err(|error| error.to_string())?;
+                        status.map_err(|error| error.to_string())?;
                         let mut length = 0u64;
                         unsafe { capture.Seek(0, STREAM_SEEK_END, Some(&mut length)) }
                             .map_err(|error| error.to_string())?;
