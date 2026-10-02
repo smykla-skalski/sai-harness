@@ -67,6 +67,20 @@ await test('canonicalizes a saved repository without losing its group', () => {
   assert.deepEqual(normalized.groups[0].repositories, ['/private/var/repo']);
 });
 
+await test('restores collapsed projects and follows repository path changes', () => {
+  const catalog = loadProjectCatalog(
+    JSON.stringify({
+      repositories: ['/repo'],
+      collapsedRepositories: ['/repo', '/missing', '/repo'],
+    }),
+    '',
+  );
+  assert.deepEqual(catalog.collapsedRepositories, ['/repo']);
+  const renamed = replaceRepositoryPath(catalog, '/repo', '/canonical/repo');
+  assert.deepEqual(renamed.collapsedRepositories, ['/canonical/repo']);
+  assert.deepEqual(removeRepository(renamed, '/canonical/repo').collapsedRepositories, []);
+});
+
 await test('keeps a created worktree beneath its repository after restart', () => {
   const catalog = addWorktree(loadProjectCatalog(null, '/repo'), '/repo', {
     path: '/sail/worktrees/repo/task',

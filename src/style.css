@@ -189,7 +189,6 @@ button:disabled {
   border-radius: 7px;
 }
 .project-repository-row:hover,
-.project-repository-row.active,
 .project-worktree-row:hover,
 .project-worktree-row.active {
   background: var(--shell-selected);
@@ -225,6 +224,7 @@ button:disabled {
   text-align: left;
   font: inherit;
   font-size: 11px;
+  cursor: pointer;
 }
 .project-worktree-row {
   display: flex;
@@ -294,10 +294,6 @@ button:disabled {
   white-space: nowrap;
 }
 .project-worktree-row.active .project-worktree-select {
-  color: var(--shell-selected-ink);
-  font-weight: 700;
-}
-.project-repository-row.active .project-repository-select {
   color: var(--shell-selected-ink);
   font-weight: 700;
 }

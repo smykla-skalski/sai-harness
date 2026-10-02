@@ -9,6 +9,7 @@ export type ProjectCatalog = {
   repositories: string[];
   groups: ProjectGroup[];
   worktrees: Record<string, ProjectWorktree[]>;
+  collapsedRepositories?: string[];
 };
 
 export type PullRequestLink = { number: number; url: string };
@@ -62,6 +63,15 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
     !Object.values(worktrees).some((entries) => entries.some((entry) => entry.path === current))
   )
     repositories.unshift(current);
+  const collapsedRepositories = Array.isArray(value.collapsedRepositories)
+    ? [
+        ...new Set(
+          value.collapsedRepositories.filter(
+            (path): path is string => typeof path === 'string' && repositories.includes(path),
+          ),
+        ),
+      ]
+    : [];
   const assigned = new Set<string>();
   const groups: ProjectGroup[] = [];
   for (const item of Array.isArray(value.groups) ? value.groups : []) {
@@ -82,7 +92,12 @@ export function loadProjectCatalog(raw: string | null, current: string): Project
       }),
     });
   }
-  return { repositories, groups, worktrees };
+  return {
+    repositories,
+    groups,
+    worktrees,
+    ...(collapsedRepositories.length ? { collapsedRepositories } : {}),
+  };
 }
 
 function validPullRequestLink(number: unknown, value: unknown): value is string {
@@ -128,6 +143,7 @@ export function assignRepository(
 
 export function removeRepository(catalog: ProjectCatalog, path: string): ProjectCatalog {
   return {
+    ...catalog,
     repositories: catalog.repositories.filter((repository) => repository !== path),
     groups: catalog.groups.map((group) => ({
       ...group,
@@ -135,6 +151,9 @@ export function removeRepository(catalog: ProjectCatalog, path: string): Project
     })),
     worktrees: Object.fromEntries(
       Object.entries(catalog.worktrees).filter(([parent]) => parent !== path),
+    ),
+    collapsedRepositories: catalog.collapsedRepositories?.filter(
+      (repository) => repository !== path,
     ),
   };
 }
@@ -212,5 +231,12 @@ export function replaceRepositoryPath(
       })),
     ]),
   );
-  return { repositories, groups, worktrees };
+  return {
+    repositories,
+    groups,
+    worktrees,
+    collapsedRepositories: catalog.collapsedRepositories?.map((path) =>
+      path === oldPath ? canonicalPath : path,
+    ),
+  };
 }

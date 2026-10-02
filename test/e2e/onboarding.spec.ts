@@ -57,8 +57,8 @@ describe('repository setup', () => {
     );
     await browser.refresh();
     await expect($('.project-group-toggle')).toHaveText(expect.stringContaining('Work'));
-    await expect($(`.project-repository-select[title="${secondRepository}"]`)).toBeEnabled();
-    await $(`.project-repository-select[title="${secondRepository}"]`).click();
+    await expect($(`.project-default-worktree-select[title="${secondRepository}"]`)).toBeEnabled();
+    await $(`.project-default-worktree-select[title="${secondRepository}"]`).click();
     await browser.waitUntil(
       async () =>
         (await browser.execute(() => localStorage.getItem('sai-directory'))) ===
@@ -69,7 +69,7 @@ describe('repository setup', () => {
       realpathSync(secondRepository),
     );
     await expect(
-      $(`.project-repository-select[title="${realpathSync(secondRepository)}"]`),
+      $(`.project-default-worktree-select[title="${realpathSync(secondRepository)}"]`),
     ).toHaveAttribute('aria-current', 'page');
     await $('.project-group-toggle').click();
     await expect($('.project-group-toggle')).toHaveAttribute('aria-expanded', 'false');
@@ -101,7 +101,7 @@ describe('repository setup', () => {
 
   it('keeps setup diagnostics in settings for a repository without the plugin', async () => {
     await $(
-      `.project-repository-select[title="${repository}"], .project-repository-select[title="${realpathSync(repository)}"]`,
+      `.project-default-worktree-select[title="${repository}"], .project-default-worktree-select[title="${realpathSync(repository)}"]`,
     ).click();
     const diagnostics = await openDiagnostics();
     try {
@@ -258,7 +258,7 @@ describe('repository setup', () => {
 
   it('opens the selected agent in a newly created worktree', async () => {
     const path = realpathSync(repository);
-    await $(`.project-repository-select[title="${path}"]`).click();
+    await $(`.project-default-worktree-select[title="${path}"]`).click();
     const name = path.split('/').at(-1);
     await $(`[aria-label="Create worktree for ${name}"]`).click();
     await $(`[aria-label="Worktree name for ${name}"]`).setValue('agent-launch');

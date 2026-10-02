@@ -25,7 +25,7 @@ describe('project context menus', () => {
     }, path);
     await browser.refresh();
     await browser.setWindowSize(1280, 850);
-    await expect($('.project-repository-select')).toHaveAttribute('aria-current', 'page');
+    await expect($('.project-default-worktree-select')).toHaveAttribute('aria-current', 'page');
 
     await $('[aria-label="Manage Work"]').click();
     try {
@@ -107,5 +107,64 @@ describe('project context menus', () => {
     await $('.project-menu button:nth-of-type(2)').click();
     await expect($('.project-menu')).not.toExist();
     await expect($('.project-group-label')).toHaveText('Ungrouped');
+  });
+
+  it('toggles worktrees while keeping the default checkout under its project', async () => {
+    const path = realpathSync(repository);
+    const linked = join(path, 'linked');
+    await browser.execute(
+      (selectedPath, linkedPath) => {
+        localStorage.setItem('sai-directory', selectedPath);
+        localStorage.setItem(
+          'sai-project-catalog',
+          JSON.stringify({
+            repositories: [selectedPath],
+            groups: [{ id: 'work', name: 'Work', collapsed: false, repositories: [selectedPath] }],
+            worktrees: { [selectedPath]: [{ path: linkedPath, branch: 'feature' }] },
+          }),
+        );
+      },
+      path,
+      linked,
+    );
+    await browser.refresh();
+    const project = $('.project-repository-select');
+    const defaultWorktree = $('.project-default-worktree-select');
+    const linkedWorktree = $(`.project-worktree-select[title="${linked}"]`);
+    await expect(project).toHaveAttribute('aria-expanded', 'true');
+    await expect(defaultWorktree).toHaveAttribute('aria-current', 'page');
+    await expect(linkedWorktree).toBeDisplayed();
+
+    await project.click();
+    await expect(project).toHaveAttribute('aria-expanded', 'false');
+    await expect(defaultWorktree).not.toExist();
+    await expect(linkedWorktree).not.toExist();
+    expect(
+      await browser.execute(() => JSON.parse(localStorage.getItem('sai-project-catalog') ?? '{}')),
+    ).toHaveProperty('collapsedRepositories', [path]);
+    await browser.refresh();
+    await expect(project).toHaveAttribute('aria-expanded', 'false');
+    await project.click();
+    await expect(defaultWorktree).toHaveAttribute('aria-current', 'page');
+    await expect(linkedWorktree).toBeDisplayed();
+
+    await browser.execute(
+      (selectedPath, linkedPath) =>
+        localStorage.setItem(
+          'sai-project-catalog',
+          JSON.stringify({
+            repositories: [selectedPath],
+            groups: [],
+            worktrees: { [selectedPath]: [{ path: linkedPath, branch: 'feature' }] },
+          }),
+        ),
+      path,
+      linked,
+    );
+    await browser.refresh();
+    await expect($('.project-group-label')).toHaveText('Ungrouped');
+    await project.click();
+    await expect(defaultWorktree).not.toExist();
+    await expect(linkedWorktree).not.toExist();
   });
 });

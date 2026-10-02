@@ -49,7 +49,7 @@ describe('recent thread shortcuts', () => {
     await expect($('.agent-launches button')).toBeEnabled();
 
     await createThread('Thread one');
-    await $(`.project-repository-select[title="${secondPath}"]`).click();
+    await $(`.project-default-worktree-select[title="${secondPath}"]`).click();
     await createThread('Thread two');
     await createThread('Thread three');
     await browser.execute(() => {
