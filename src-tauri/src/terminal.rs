@@ -35,7 +35,6 @@ struct TerminalOutput {
 
 struct TerminalSession {
     directory: PathBuf,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     process_id: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -124,6 +123,26 @@ impl Drop for TerminalManager {
     }
 }
 
+impl TerminalManager {
+    pub fn server_roots(&self) -> Vec<(PathBuf, u32)> {
+        self.0
+            .lock()
+            .ok()
+            .map(|sessions| {
+                sessions
+                    .values()
+                    .filter_map(|session| {
+                        if session.output.lock().ok()?.exit_code.is_some() {
+                            return None;
+                        }
+                        Some((session.directory.clone(), session.process_id?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 fn shell() -> PathBuf {
     #[cfg(windows)]
     return std::env::var_os("COMSPEC")
@@ -189,7 +208,6 @@ fn spawn(
         exit_code: None,
         subscriber: None,
     }));
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let process_id = child.process_id();
     let killer = child.clone_killer();
     let child = Arc::new(Mutex::new(child));
@@ -231,7 +249,6 @@ fn spawn(
     });
     Ok(TerminalSession {
         directory,
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
         process_id,
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),

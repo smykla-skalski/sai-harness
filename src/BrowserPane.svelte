@@ -9,6 +9,7 @@
   type BrowserEvent = { label: string; url: string };
   type BrowserShortcut = { label: string; action: string };
   type BrowserRoute = BrowserEvent & { mode: 'push' | 'replace' | 'pop' };
+  type DetectedServer = { port: number; url: string };
 
   let {
     pane,
@@ -29,6 +30,9 @@
   let error = $state('');
   let loading = $state(false);
   let agentAction = $state('');
+  let servers = $state<DetectedServer[]>([]);
+  let serverRequest = 0;
+  let serverScanRunning = false;
   let agentActionTimer: ReturnType<typeof setTimeout> | null = null;
   let liveLabel = $state<string | null>(null);
   let ready = $state(false);
@@ -38,6 +42,23 @@
   let expectedUrl: string | null = null;
   let popDirection: -1 | 1 = -1;
   let mounted = false;
+
+  async function refreshServers() {
+    if (serverScanRunning) return;
+    serverScanRunning = true;
+    const request = ++serverRequest;
+    const path = directory;
+    try {
+      const detected = await invoke<DetectedServer[]>('browser_detected_servers', {
+        directory: path,
+      });
+      if (mounted && request === serverRequest && path === directory) servers = detected;
+    } catch {
+      if (mounted && request === serverRequest) servers = [];
+    } finally {
+      serverScanRunning = false;
+    }
+  }
 
   const current = $derived(pane.tabs.find((tab) => tab.id === pane.activeTab));
   const currentUrl = $derived(current?.history[current.index] ?? '');
@@ -259,6 +280,8 @@
 
   onMount(() => {
     mounted = true;
+    void refreshServers();
+    const serverInterval = setInterval(() => void refreshServers(), 5000);
     const observer = new ResizeObserver(() => void resize());
     observer.observe(viewport);
     const overlayObserver = new MutationObserver(() => {
@@ -324,6 +347,8 @@
     window.addEventListener('resize', resize);
     return () => {
       mounted = false;
+      ++serverRequest;
+      clearInterval(serverInterval);
       if (agentActionTimer) clearTimeout(agentActionTimer);
       ++generation;
       observer.disconnect();
@@ -340,6 +365,10 @@
 
   $effect(() => {
     if (mounted && pane.activeTab !== mountedTab) void mountCurrent();
+  });
+
+  $effect(() => {
+    if (mounted && directory) void refreshServers();
   });
 
   $effect(() => {
@@ -403,6 +432,17 @@
       onclick={() => void invoke('browser_devtools', { label: liveLabel })}>⌘⌥I</button
     >
   </form>
+  {#if servers.length}
+    <div class="browser-servers" aria-label="Dev servers in this worktree">
+      {#each servers as server (server.port)}
+        <button
+          type="button"
+          aria-label={`Open dev server on port ${server.port}`}
+          onclick={() => void navigate(server.url)}>:{server.port}</button
+        >
+      {/each}
+    </div>
+  {/if}
   {#if loading}<p class="browser-loading" role="status">Loading…</p>{/if}
   {#if agentAction}<p class="browser-agent-action" role="status">{agentAction}</p>{/if}
   {#if error}<div class="browser-error" role="alert">

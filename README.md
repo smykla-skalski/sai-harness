@@ -61,6 +61,8 @@ Sail copies listed Git-ignored files and folders into each new worktree, then op
 
 Agents can use the browser pane in their own worktree to navigate, read, click, type, run JavaScript, and capture screenshots. Open a browser pane first; an agent can navigate its blank tab. Sail asks before a thread first controls the pane and before it accesses external sites. Use **Agent browser on/off** in the top bar to disable or restore access for the selected project.
 
+The browser pane lists HTTP ports started by Sail terminals and agents for its worktree. Select a port to open that server; stopped servers disappear automatically.
+
 Sail saves repositories, groups, selected sessions, drafts, and preferences to `sail/settings.json` in the OS config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, `%APPDATA%` on Windows). `mise run dev` and packaged Sail use the same file. Existing WebView settings migrate on first launch from each origin.
 
 Other tasks:

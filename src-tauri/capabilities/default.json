@@ -50,6 +50,7 @@
     "allow-browser-project-access",
     "allow-browser-mcp-config",
     "allow-browser-pane-register",
+    "allow-browser-detected-servers",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:event:allow-emit-to",

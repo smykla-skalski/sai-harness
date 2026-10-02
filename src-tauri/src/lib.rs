@@ -50,6 +50,7 @@ mod acp_terminal;
 mod attention;
 mod browser;
 pub mod browser_agent;
+mod dev_servers;
 mod github;
 mod settings;
 mod terminal;
@@ -95,6 +96,45 @@ impl Drop for OwnedRuntime {
 
 #[derive(Default)]
 struct RuntimeManager(Mutex<Option<OwnedRuntime>>);
+
+#[tauri::command]
+async fn browser_detected_servers(
+    directory: String,
+    terminals: State<'_, terminal::TerminalManager>,
+    acp_terminals: State<'_, acp_terminal::AcpTerminalManager>,
+    agents: State<'_, acp::AgentManager>,
+    runtime: State<'_, RuntimeManager>,
+) -> Result<Vec<dev_servers::DetectedServer>, String> {
+    let mut roots = terminals
+        .server_roots()
+        .into_iter()
+        .chain(acp_terminals.server_roots())
+        .map(|(directory, pid)| dev_servers::ServerRoot::Owned { directory, pid })
+        .collect::<Vec<_>>();
+    roots.extend(
+        agents
+            .server_roots()
+            .into_iter()
+            .map(|pid| dev_servers::ServerRoot::Shared { pid }),
+    );
+    if let Ok(mut runtime) = runtime.0.lock() {
+        if let Some(owned) = runtime.as_mut() {
+            if owned
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                roots.push(dev_servers::ServerRoot::Shared {
+                    pid: owned.child.id(),
+                });
+            }
+        }
+    }
+    tauri::async_runtime::spawn_blocking(move || dev_servers::detect(Path::new(&directory), &roots))
+        .await
+        .map_err(|error| error.to_string())?
+}
 
 fn candidate_paths() -> Vec<PathBuf> {
     let names: &[&str] = if cfg!(windows) {
@@ -813,7 +853,8 @@ pub fn run() {
             browser_agent::browser_access_reply,
             browser_agent::browser_project_access,
             browser_agent::browser_mcp_config,
-            browser_agent::browser_pane_register
+            browser_agent::browser_pane_register,
+            browser_detected_servers
         ]);
     #[cfg(feature = "e2e")]
     let builder = builder

@@ -20,6 +20,22 @@ pub struct AcpTerminalManager {
 }
 
 impl AcpTerminalManager {
+    pub fn server_roots(&self) -> Vec<(PathBuf, u32)> {
+        self.active
+            .lock()
+            .ok()
+            .map(|active| {
+                active
+                    .values()
+                    .filter_map(|terminal| {
+                        let child = terminal.child.lock().ok()?;
+                        Some((terminal.directory.clone(), child.id()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn stop_agent(&self, agent: &str) {
         let terminals = self
             .active
@@ -90,6 +106,7 @@ impl Drop for AcpTerminalManager {
 struct AcpTerminal {
     agent: String,
     session_id: String,
+    directory: PathBuf,
     child: Mutex<Child>,
     output: Mutex<TerminalOutput>,
     changed: Condvar,
@@ -252,7 +269,10 @@ pub fn handle(
         {
             return Err("Command arguments or environment are invalid.".to_string());
         }
-        let fallback = session_directory.ok_or("Unknown agent session.")?;
+        let fallback = session_directory
+            .ok_or("Unknown agent session.")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         let directory = params.cwd.as_deref().map(Path::new).unwrap_or(&fallback);
         if !directory.is_absolute() || !directory.is_dir() {
             return Err(
@@ -287,6 +307,7 @@ pub fn handle(
         let terminal = Arc::new(AcpTerminal {
             agent: agent.to_string(),
             session_id: params.session_id.clone(),
+            directory: fallback.clone(),
             child: Mutex::new(child),
             output: Mutex::new(TerminalOutput {
                 bytes: VecDeque::new(),

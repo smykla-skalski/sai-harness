@@ -49,6 +49,7 @@ fn main() {
             "browser_pane_register",
             "browser_shortcut",
             "browser_route",
+            "browser_detected_servers",
         ]),
     ))
     .expect("failed to build Tauri permissions")

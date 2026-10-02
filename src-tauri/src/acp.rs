@@ -162,6 +162,26 @@ impl Connection {
 #[derive(Clone, Default)]
 pub struct AgentManager(Arc<Mutex<HashMap<String, Arc<Connection>>>>);
 
+impl AgentManager {
+    pub fn server_roots(&self) -> Vec<u32> {
+        self.0
+            .lock()
+            .ok()
+            .map(|agents| {
+                agents
+                    .values()
+                    .filter_map(|connection| {
+                        if !connection.alive.load(Ordering::Acquire) {
+                            return None;
+                        }
+                        connection.child.lock().ok().map(|child| child.id())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Serialize)]
 pub struct AgentActivity {
     alive: bool,
