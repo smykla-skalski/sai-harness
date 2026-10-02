@@ -760,6 +760,10 @@ button:disabled {
   gap: 10px;
   white-space: nowrap;
 }
+.session-usage {
+  color: var(--sui-muted);
+  font-size: 11px;
+}
 .runtime-diagnostic {
   color: var(--sui-danger);
 }

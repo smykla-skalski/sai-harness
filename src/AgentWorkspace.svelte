@@ -19,6 +19,7 @@
     type AgentThread,
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
+  import type { AgentUsage } from './lib/agent-usage';
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     coordinationMessageForText,
@@ -31,6 +32,7 @@
     agentName: string;
     directory: string;
     thread: AgentThread | null;
+    usage?: AgentUsage;
     running: boolean;
     focused?: boolean;
     focusPrompt?: boolean;
@@ -55,6 +57,7 @@
     agentName,
     directory,
     thread,
+    usage,
     running,
     focused = true,
     focusPrompt = false,
@@ -710,6 +713,10 @@
     <div class="agent-heading">
       <strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span>
     </div>
+    {#if usage?.context !== undefined}<span class="agent-usage">Context {usage.context}%</span>{/if}
+    {#each usage?.rates ?? [] as rate (rate.label)}<span class="agent-usage"
+        >{rate.label} {rate.remaining}% left</span
+      >{/each}
     <div class="agent-config">
       {#each configOptions.filter((option) => option.type === 'select' && Array.isArray(option.options) && option.id !== modelOption?.id && option.id !== effortOption?.id) as option (option.id)}
         <label
@@ -947,6 +954,11 @@
   }
   .agent-heading strong {
     flex: none;
+  }
+  .agent-header .agent-usage {
+    flex: none;
+    font-size: 11px;
+    white-space: nowrap;
   }
   .agent-header span {
     opacity: 0.65;

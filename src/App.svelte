@@ -109,6 +109,12 @@
   import type { DiffComment } from './lib/diff-comments';
   import { inspectRepository, type SetupReport } from './lib/onboarding';
   import {
+    acpUsage,
+    openCodeContextUsage,
+    type AgentUsage,
+    type RateWindow,
+  } from './lib/agent-usage';
+  import {
     settingsAction,
     settingsRequest,
     settingsState,
@@ -231,6 +237,25 @@
   let agentAvailability = $state<AgentAvailability[]>([]);
   let agentDetectionError = $state('');
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
+  let agentUsage = $state<Record<string, AgentUsage>>({});
+  let agentRates = $state<Record<string, RateWindow[]>>({});
+  $effect(() => {
+    const resets = Object.values(agentRates)
+      .flat()
+      .flatMap((rate) => (rate.resetsAt === undefined ? [] : [rate.resetsAt]));
+    if (resets.length === 0) return;
+    const delay = Math.max(0, Math.min(Math.min(...resets) - Date.now(), 2_147_483_647));
+    const timer = setTimeout(() => {
+      agentRates = Object.fromEntries(
+        Object.entries(agentRates).map(([agent, rates]) => [
+          agent,
+          rates.filter((rate) => rate.resetsAt === undefined || rate.resetsAt > Date.now()),
+        ]),
+      );
+    }, delay);
+    return () => clearTimeout(timer);
+  });
+  let openCodeUsage = $state<Record<string, number>>({});
   let threadAttention = $state<AttentionMap>(loadAttention(getSetting('sai-thread-attention')));
   let attentionRevision = 0;
   let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
@@ -648,6 +673,16 @@
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
   );
+  $effect(() => {
+    if (!sessionID || timelineSession !== sessionID || !setup) return;
+    const context = openCodeContextUsage(messages, setup.models);
+    const key = `${directory}:${sessionID}`;
+    if (context === openCodeUsage[key]) return;
+    const next = { ...openCodeUsage };
+    if (context === undefined) delete next[key];
+    else next[key] = context;
+    openCodeUsage = next;
+  });
   let liveOnly = $derived(
     Object.entries(liveText).filter(([id]) => !messages.some((message) => message.id === id)),
   );
@@ -3289,6 +3324,9 @@
   }
 
   function removeAgentThread(thread: AgentThread) {
+    const usage = { ...agentUsage };
+    delete usage[threadKey(thread)];
+    agentUsage = usage;
     agentThreads = agentThreads.filter(
       (item) =>
         item.agent !== thread.agent ||
@@ -3532,6 +3570,20 @@
   }
 
   function handleAgentEvent(event: AgentEvent) {
+    if (event.message.method === 'session/update') {
+      const params = event.message.params;
+      const sessionId = params?.sessionId;
+      if (typeof sessionId === 'string') {
+        const usage = acpUsage(params?.update);
+        if (usage?.rates) agentRates = { ...agentRates, [event.agent]: usage.rates };
+        for (const thread of agentThreads.filter(
+          (item) => item.agent === event.agent && item.sessionId === sessionId,
+        )) {
+          const key = threadKey(thread);
+          if (usage) agentUsage = { ...agentUsage, [key]: { context: usage.context } };
+        }
+      }
+    }
     if (
       event.message.method === 'session/request_permission' ||
       event.message.method === 'sail/permission_resolved' ||
@@ -3849,6 +3901,9 @@
     if (!confirmed) return;
     try {
       await client.session.remove({ sessionID: session.id });
+      const usage = { ...openCodeUsage };
+      delete usage[`${directory}:${session.id}`];
+      openCodeUsage = usage;
       if (session.id === sessionID) clearSelectedSession();
       await refreshSessions();
       if (!sessions.length && sessionPageHistory.length) previousPage();
@@ -4733,8 +4788,15 @@
                     class:waiting={attention.status === 'waiting'}
                     class:failed={attention.status === 'failed'}
                   ></span>{thread.agent}
-                  · {attention.status === 'waiting' ? 'Waiting for input' : attention.status}</small
-                ></span
+                  · {attention.status === 'waiting' ? 'Waiting for input' : attention.status}
+                  {#if agentUsage[threadKey(thread)]?.context !== undefined}
+                    · Context {agentUsage[threadKey(thread)].context}%
+                  {/if}</small
+                >{#if agentRates[thread.agent]?.length}<small
+                    >{agentRates[thread.agent]
+                      .map((rate) => `${rate.label} ${rate.remaining}% left`)
+                      .join(' · ')}</small
+                  >{/if}</span
               >
               {#if attention.unread}<span
                   class="thread-unread"
@@ -4787,7 +4849,10 @@
                       >{session.agent ?? 'Unknown'} · {activeSessionIDs.includes(session.id)
                         ? 'Running'
                         : (session.outcome ?? 'Idle')}</small
-                    ><small>Updated {new Date(session.time.updated).toLocaleString()}</small></span
+                    ><small>Updated {new Date(session.time.updated).toLocaleString()}</small>
+                    {#if openCodeUsage[`${directory}:${session.id}`] !== undefined}<small
+                        >Context {openCodeUsage[`${directory}:${session.id}`]}%</small
+                      >{/if}</span
                   ></button
                 ><button
                   class="session-action"
@@ -4872,6 +4937,9 @@
         >
       </div>
       <div class="topbar-actions">
+        {#if !acpAgent && sessionID && openCodeUsage[`${directory}:${sessionID}`] !== undefined}<span
+            class="session-usage">Context {openCodeUsage[`${directory}:${sessionID}`]}%</span
+          >{/if}
         {#if directory}<Button
             variant="ghost"
             size="sm"
@@ -4950,6 +5018,9 @@
                   acpAgent}
                 {directory}
                 thread={acpThread}
+                usage={acpThread
+                  ? { ...agentUsage[threadKey(acpThread)], rates: agentRates[acpThread.agent] }
+                  : undefined}
                 coordinationMessages={coordinationMessages.filter(
                   (message) =>
                     acpThread &&
@@ -5282,6 +5353,8 @@
       {sideChat}
       {client}
       {coordinationMessages}
+      {agentUsage}
+      {agentRates}
       onentries={(id, entries, sessionId, ready) =>
         (agentEntrySnapshots = { ...agentEntrySnapshots, [id]: { entries, sessionId, ready } })}
       {changesPanes}

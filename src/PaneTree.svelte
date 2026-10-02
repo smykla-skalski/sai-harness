@@ -16,6 +16,8 @@
   import type { DiffComment } from './lib/diff-comments';
   import { coordinationKey, type CoordinationMessage } from './lib/coordination';
   import type { ThreadStatus } from './lib/attention';
+  import type { AgentUsage, RateWindow } from './lib/agent-usage';
+  import { threadKey } from './lib/recent-threads';
   import {
     clampPaneRatio,
     paneRatioBounds,
@@ -33,6 +35,8 @@
     sideChat: SideChatState | null;
     client: OpenCodeClient | null;
     coordinationMessages: CoordinationMessage[];
+    agentUsage: Record<string, AgentUsage>;
+    agentRates: Record<string, RateWindow[]>;
     onentries: (
       id: string,
       entries: AgentEntry[],
@@ -81,6 +85,8 @@
     sideChat,
     client,
     coordinationMessages,
+    agentUsage,
+    agentRates,
     onentries,
     changesPanes,
     main,
@@ -208,6 +214,8 @@
   >
     <PaneTree
       {coordinationMessages}
+      {agentUsage}
+      {agentRates}
       pane={pane.first}
       {focused}
       {directory}
@@ -278,6 +286,8 @@
     ></div>
     <PaneTree
       {coordinationMessages}
+      {agentUsage}
+      {agentRates}
       pane={pane.second}
       {focused}
       {directory}
@@ -418,6 +428,9 @@
               agentName={agents.find((agent) => agent.id === pane.agent)?.name ?? pane.agent}
               {directory}
               thread={pane.thread}
+              usage={pane.thread
+                ? { ...agentUsage[threadKey(pane.thread)], rates: agentRates[pane.thread.agent] }
+                : undefined}
               coordinationMessages={coordinationMessages.filter(
                 (message) =>
                   pane.thread &&
