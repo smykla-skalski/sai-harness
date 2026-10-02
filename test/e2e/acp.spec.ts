@@ -49,6 +49,13 @@ describe('ACP agent threads', () => {
     }
     await expect($('.agent-picker-controls')).toHaveText(expect.stringContaining('Model'));
     await expect($('.agent-picker-controls')).toHaveText(expect.stringContaining('Effort'));
+    await $('.agent-composer textarea').setValue('/');
+    await expect($('.skill-menu')).toHaveText(
+      expect.stringContaining('Implement and ship a GitHub issue'),
+    );
+    await browser.keys('ArrowDown');
+    await browser.keys('Enter');
+    expect(await $('.agent-composer textarea').getValue()).toBe('/review ');
     await $('.agent-composer textarea').setValue('/model');
     await browser.keys('Enter');
     await expect($('.option-menu[role="listbox"]')).toBeDisplayed();
@@ -267,6 +274,28 @@ describe('ACP agent threads', () => {
     await expect($('.option-menu')).toHaveText(
       expect.stringContaining('No choices available for this model or agent.'),
     );
+  });
+
+  it('queues a typed message until the current ACP turn finishes', async () => {
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Delayed approval');
+    await $('.agent-actions button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
+    await $('.agent-composer textarea').setValue('Queued follow-up');
+    await $('.agent-actions button').click();
+    await expect($('.queued-messages')).toHaveText(expect.stringContaining('Queued follow-up'));
+    await expect($('.agent-permission')).toBeDisplayed();
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Delayed approval'),
+    );
+    await expect($('.agent-permission')).toBeDisplayed();
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Queued follow-up'),
+    );
+    await expect($('.queued-messages')).not.toExist();
   });
 
   it('keeps agent messages and failures visible around grouped tool activity', async () => {

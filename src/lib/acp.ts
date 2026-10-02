@@ -82,6 +82,11 @@ export interface AgentAuthMethod {
   type?: string;
 }
 
+export interface AgentCommand {
+  name: string;
+  description?: string;
+}
+
 export interface AgentEvent {
   agent: AgentId;
   message: {
@@ -326,7 +331,11 @@ export const acp = {
   agents: () => invoke<AgentAvailability[]>('acp_agents'),
   connect: (agent: AgentId) => invoke<Record<string, unknown>>('acp_connect', { agent }),
   create: (agent: AgentId, cwd: string) =>
-    invoke<{ sessionId: string; configOptions?: AgentConfigOption[] }>('acp_new_session', {
+    invoke<{
+      sessionId: string;
+      configOptions?: AgentConfigOption[];
+      availableCommands?: AgentCommand[];
+    }>('acp_new_session', {
       agent,
       cwd,
     }),

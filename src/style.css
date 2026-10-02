@@ -1527,6 +1527,7 @@ button:disabled {
   padding-inline: 20px;
 }
 .composer {
+  position: relative;
   border: 1px solid var(--sui-border);
   border-radius: 12px;
   background: var(--sui-surface);

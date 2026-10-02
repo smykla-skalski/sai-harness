@@ -103,6 +103,11 @@ function configOptions(sessionId) {
   return session?.noEffort ? options.slice(0, 1) : options;
 }
 
+const availableCommands = [
+  { name: 'ship-issue', description: 'Implement and ship a GitHub issue' },
+  { name: 'review', description: 'Review a change' },
+];
+
 function requestPermission(sessionId, text, promptId) {
   const id = ++nextPermission;
   permissions.set(id, { sessionId, text, promptId });
@@ -147,9 +152,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     const sessionId = `test-${++nextSession}`;
     sessions.set(sessionId, { history: [], config: { model: 'test', effort: 'medium' } });
+    update(sessionId, { sessionUpdate: 'available_commands_update', availableCommands });
     setTimeout(
       () =>
-        send({ id: message.id, result: { sessionId, configOptions: configOptions(sessionId) } }),
+        send({
+          id: message.id,
+          result: { sessionId, configOptions: configOptions(sessionId), availableCommands },
+        }),
       1000,
     );
   } else if (message.method === 'session/resume') {
@@ -161,6 +170,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         result: {
           sessionId: message.params.sessionId,
           configOptions: configOptions(message.params.sessionId),
+          availableCommands,
         },
       });
   } else if (message.method === 'session/load') {
@@ -173,6 +183,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         result: {
           sessionId: message.params.sessionId,
           configOptions: configOptions(message.params.sessionId),
+          availableCommands,
         },
       });
     }
