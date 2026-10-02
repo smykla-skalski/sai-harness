@@ -477,6 +477,8 @@
       try {
         const result = await acp.setConfig(agent, sessionId, configId, value);
         if (activeSessionId !== sessionId) return;
+        configFailure = '';
+        error = '';
         configOptions =
           result.configOptions ??
           configOptions.map((option) =>
