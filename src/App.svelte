@@ -2129,7 +2129,18 @@
     focusPaneForTyping('main');
   });
 
-  async function deleteProjectWorktree(repository: string, path: string, branch: string) {
+  let forceDeleteWorktree = $state<{
+    repository: string;
+    path: string;
+    branch: string;
+  } | null>(null);
+
+  async function deleteProjectWorktree(
+    repository: string,
+    path: string,
+    branch: string,
+    force = false,
+  ) {
     let config: WorktreeConfig | null;
     try {
       config = await invoke<WorktreeConfig | null>('worktree_config', { worktree: path });
@@ -2146,11 +2157,11 @@
         : e2eAnswer === 'No'
           ? false
           : await confirmInApp(
-              'Delete worktree',
-              config
-                ? `Delete worktree “${branch}” at ${path}? This removes uncommitted and ignored files, including copied files. The branch will remain.`
+              force ? 'Force delete worktree' : 'Delete worktree',
+              force || config
+                ? `Delete worktree “${branch}” at ${path}? This permanently removes uncommitted and ignored files, including copied files. The branch will remain.`
                 : `Delete worktree “${branch}” at ${path}? Uncommitted and ignored files block deletion. The branch will remain.`,
-              'Delete worktree',
+              force ? 'Force delete' : 'Delete worktree',
             );
     if (!confirmed) return;
     const wasSelected = directory === path;
@@ -2178,7 +2189,8 @@
           .filter((pane) => pane.kind === 'terminal')
           .map((pane) => invoke('terminal_close', { id: terminalRuntimeId(path, pane.id) })),
       );
-      await invoke('delete_worktree', { repository, worktree: path, force: !!config });
+      forceDeleteWorktree = null;
+      await invoke('delete_worktree', { repository, worktree: path, force: force || !!config });
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
       const removedThreads = agentThreads.filter((thread) => thread.directory === path);
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
@@ -2191,9 +2203,13 @@
       delete paneLayouts[path];
       persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
+      error = '';
     } catch (cause) {
       if (directory !== path) await loadProject(path);
       error = describe(cause);
+      if (!force && error === 'Worktree has ignored files. Move or remove them before deleting.') {
+        forceDeleteWorktree = { repository, path, branch };
+      }
     }
   }
 
@@ -5688,7 +5704,18 @@
     </header>
     {#if $settingsError}<p class="notice error" role="alert">{$settingsError}</p>{/if}
     {#if setupError}<p class="notice error" role="alert">{setupError}</p>{/if}
-    {#if error}<p class="notice error" role="alert">{error}</p>{/if}
+    {#if error}<div class="notice error" role="alert">
+        {error}
+        {#if forceDeleteWorktree && error === 'Worktree has ignored files. Move or remove them before deleting.'}<Button
+            variant="ghost"
+            size="sm"
+            onclick={() => {
+              const target = forceDeleteWorktree;
+              if (target)
+                void deleteProjectWorktree(target.repository, target.path, target.branch, true);
+            }}>Force delete</Button
+          >{/if}
+      </div>{/if}
     {#snippet mainPaneContent()}
       <div
         class:single={acpAgent ? !agentChangesOpen : !sessionID || !detailsOpen}

@@ -1272,7 +1272,7 @@ fn remove_worktree(
     }) {
         return Err("This folder is not a worktree of the selected repository.".to_string());
     }
-    let force = force == Some(true) && worktree_config::read(&worktree)?.is_some();
+    let force = force == Some(true);
     let status = Command::new("git")
         .arg("-C")
         .arg(&worktree)

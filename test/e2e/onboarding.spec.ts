@@ -199,7 +199,7 @@ describe('repository setup', () => {
     ).toBe(baseCommit);
   });
 
-  it('deletes a worktree from its right-click menu and protects dirty files', async () => {
+  it('deletes a worktree from its right-click menu and confirms force deletion', async () => {
     const worktree = await browser.execute(() => localStorage.getItem('sai-directory'));
     if (!worktree) throw new Error('Expected the created worktree to remain selected');
     const row = $(`.project-worktree-select[title="${worktree}"]`);
@@ -248,10 +248,16 @@ describe('repository setup', () => {
     expect(existsSync(ignored)).toBe(true);
     await expect(row).toHaveAttribute('aria-current', 'page');
 
-    rmSync(ignored);
-    await row.click({ button: 'right' });
-    await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
-    await $(deleteMenuItem).click();
+    await $('.app-shell [role="alert"] button').click();
+    await expect($('.confirmation-dialog')).toHaveText(
+      expect.stringContaining('permanently removes uncommitted and ignored files'),
+    );
+    await $('.confirmation-dialog button:first-child').click();
+    expect(existsSync(ignored)).toBe(true);
+    await expect(row).toBeDisplayed();
+
+    await $('.app-shell [role="alert"] button').click();
+    await $('.confirmation-dialog .confirmation-primary').click();
     await expect(row).not.toExist();
     expect(existsSync(worktree)).toBe(false);
     expect(
