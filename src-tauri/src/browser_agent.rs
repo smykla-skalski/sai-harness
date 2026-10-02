@@ -491,6 +491,24 @@ impl BrowserManager {
                     },
                 );
                 webview.navigate(url).map_err(|error| error.to_string())?;
+                self.0
+                    .targets
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .insert(target_key, pane_id.clone());
+                if let Err(error) = self.wait_loaded(&pane_id) {
+                    if let Some(previous) = page.loaded_url {
+                        if let Ok(previous) = tauri::Url::parse(&previous) {
+                            self.guard(&pane_id, previous.origin().ascii_serialization())?;
+                            webview
+                                .navigate(previous)
+                                .map_err(|cause| cause.to_string())?;
+                            self.wait_loaded(&pane_id)?;
+                        }
+                    }
+                    return Err(error);
+                }
+                return Ok(json!({"url":target}));
             } else {
                 let pane = self
                     .0
@@ -549,11 +567,11 @@ impl BrowserManager {
         let webview = app
             .get_webview(&page.label)
             .ok_or("Browser pane is closed. Open a browser pane first.")?;
-        let target = webview
-            .url()
-            .map_err(|error| error.to_string())?
-            .to_string();
-        let url = tauri::Url::parse(&target).map_err(|error| error.to_string())?;
+        let target = page
+            .loaded_url
+            .as_deref()
+            .ok_or("Browser page has not loaded. Navigate to an approved URL first.")?;
+        let url = tauri::Url::parse(target).map_err(|error| error.to_string())?;
         if !["http", "https"].contains(&url.scheme()) {
             return Err("Browser URL must use HTTP or HTTPS.".into());
         }
