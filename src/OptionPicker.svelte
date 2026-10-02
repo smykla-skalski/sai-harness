@@ -32,6 +32,7 @@
   let menu = $state<HTMLDivElement>();
   let trigger = $state<HTMLButtonElement>();
   let active = $state(0);
+  const optionId = `picker-${crypto.randomUUID()}`;
 
   $effect(() => {
     if (!open) return;
@@ -88,6 +89,7 @@
       class="option-menu"
       role="listbox"
       aria-label={label}
+      aria-activedescendant={options[active] ? `${optionId}-${active}` : undefined}
       tabindex="-1"
       bind:this={menu}
       onkeydown={keydown}
@@ -99,6 +101,7 @@
       {:else}
         {#each options as option, index (option.value)}
           <button
+            id={`${optionId}-${index}`}
             type="button"
             role="option"
             aria-selected={option.value === value}

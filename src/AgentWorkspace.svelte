@@ -485,6 +485,7 @@
             option.id === configId ? Object.assign({}, option, { currentValue: value }) : option,
           );
       } catch (cause) {
+        if (activeSessionId !== sessionId) return;
         configFailure = describe(cause);
         error = configFailure;
       }

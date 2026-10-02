@@ -74,7 +74,8 @@ function runTerminal(sessionId, text, promptId) {
 }
 
 function configOptions(sessionId) {
-  const config = sessions.get(sessionId)?.config ?? { model: 'test', effort: 'medium' };
+  const session = sessions.get(sessionId);
+  const config = session?.config ?? { model: 'test', effort: 'medium' };
   const options = [
     {
       id: 'model',
@@ -98,7 +99,7 @@ function configOptions(sessionId) {
       ],
     },
   ];
-  return process.env.SAIL_ACP_NO_EFFORT === '1' ? options.slice(0, 1) : options;
+  return session?.noEffort ? options.slice(0, 1) : options;
 }
 
 function requestPermission(sessionId, text, promptId) {
@@ -174,6 +175,15 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
     const text = message.params.prompt[0].text;
+    if (text === 'Disable effort') {
+      sessions.get(sessionId).noEffort = true;
+      update(sessionId, {
+        sessionUpdate: 'config_option_update',
+        configOptions: configOptions(sessionId),
+      });
+      send({ id: message.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (text.startsWith('Terminal:')) {
       runTerminal(sessionId, text, message.id);
       continue;

@@ -1454,6 +1454,7 @@
     setup = null;
     selectedAgentID = '';
     selectedModelKey = '';
+    selectedVariant = '';
     clearDraftAttachments();
     sessionID = null;
     mobileView = 'chat';
@@ -1568,8 +1569,13 @@
       if (!selectedAgentID || !report.agents.some((agent) => agent.id === selectedAgentID))
         selectedAgentID =
           report.agents.find((agent) => agent.id !== 'architect')?.id ?? report.agents[0]?.id ?? '';
-      if (!selectedModelKey || !report.models.some((model) => modelKey(model) === selectedModelKey))
+      const selectedModel = report.models.find((model) => modelKey(model) === selectedModelKey);
+      if (!selectedModel) {
         selectedModelKey = report.defaultModel ? modelKey(report.defaultModel) : '';
+        selectedVariant = report.defaultModel?.variant ?? '';
+      } else if (!selectedModel.variants.some((variant) => variant.id === selectedVariant)) {
+        selectedVariant = '';
+      }
       return true;
     } catch (cause) {
       if (current !== selection) return false;
