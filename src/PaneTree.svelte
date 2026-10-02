@@ -14,7 +14,7 @@
   import BrowserPane from './BrowserPane.svelte';
   import SideChat from './SideChat.svelte';
   import type { AgentThread, AgentAvailability, AgentEntry } from './lib/acp';
-  import type { OpenCodeClient } from './lib/opencode';
+  import type { OpenCodeClient, SessionInfo } from './lib/opencode';
   import type { SetupReport } from './lib/onboarding';
   import type { BrowserAttachment } from './lib/browser-pick';
   import type { DiffComment } from './lib/diff-comments';
@@ -151,6 +151,7 @@
   let diffRevisionPath = '';
   let nativeSnapshot = $state<PlanSnapshot>({ plan: null, questions: null });
   let nativeHistory = $state<HistoryEntry[]>([]);
+  let nativeSession = $state<SessionInfo>();
   let nativeHistoryError = $state('');
   let nativeDetailsOpen = $state(false);
   let nativeTab = $state<'plan' | 'changes' | 'history'>('changes');
@@ -168,9 +169,10 @@
       nativeHistoryError = 'Install the plan-review plugin to record plan history.';
       return;
     }
-    const [plan, history] = await Promise.allSettled([
+    const [plan, history, session] = await Promise.allSettled([
       getPlan(client, path, id),
       getHistory(client, path, id),
+      client.session.get({ sessionID: id }),
     ]);
     if (
       generation !== nativeDetailsGeneration ||
@@ -190,6 +192,7 @@
       nativeHistory = history.value;
       nativeHistoryError = '';
     } else nativeHistoryError = String(history.reason);
+    if (session.status === 'fulfilled') nativeSession = session.value;
   }
 
   $effect(() => {
@@ -200,9 +203,34 @@
     if (pane.agent !== 'opencode' || !id || !source || !rpc) return;
     nativeSnapshot = { plan: null, questions: null };
     nativeHistory = [];
+    nativeSession = undefined;
     nativeDetailsOpen = false;
     nativeTab = 'changes';
     void refreshNativeDetails();
+  });
+
+  $effect(() => {
+    if ('direction' in pane || pane.agent !== 'opencode' || !pane.thread || !client) return;
+    const source = client;
+    const id = pane.thread.sessionId;
+    const path = directory;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        for await (const event of source.event.subscribe({ signal: controller.signal })) {
+          if (controller.signal.aborted) return;
+          if (
+            event.type === 'rpc.planreview.changed' &&
+            event.location?.directory === path &&
+            id === pane.thread?.sessionId
+          )
+            void refreshNativeDetails();
+        }
+      } catch {
+        return;
+      }
+    })();
+    return () => controller.abort();
   });
 
   async function refreshDiff(quiet = false) {
@@ -553,7 +581,7 @@
                 {:else if nativeTab === 'history'}
                   <HistoryPanel
                     events={nativeHistory}
-                    session={undefined}
+                    session={nativeSession}
                     loading={false}
                     error={nativeHistoryError}
                     onrefresh={refreshNativeDetails}

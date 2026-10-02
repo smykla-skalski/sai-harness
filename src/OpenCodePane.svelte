@@ -403,8 +403,8 @@
     } finally {
       if (current === generation) sending = false;
       if (disposed || current !== generation)
-        for (const path of pickedImages) void invoke('browser_remove_capture', { path });
-      if (current !== generation) pickedImages.clear();
+        for (const path of paths)
+          if (pickedImages.delete(path)) void invoke('browser_remove_capture', { path });
     }
   }
 
@@ -423,6 +423,7 @@
   async function chooseConfig(kind: 'agent' | 'model' | 'effort', value: string) {
     if (!client || busy) return;
     const id = activeID;
+    const current = generation;
     const previous = { selectedAgent, selectedModel, selectedVariant };
     if (kind === 'agent') selectedAgent = value;
     if (kind === 'model') {
@@ -447,8 +448,10 @@
           },
         });
       }
-      session = await client.session.get({ sessionID: id });
+      const info = await client.session.get({ sessionID: id });
+      if (current === generation && id === activeID) session = info;
     } catch (cause) {
+      if (current !== generation || id !== activeID) return;
       selectedAgent = previous.selectedAgent;
       selectedModel = previous.selectedModel;
       selectedVariant = previous.selectedVariant;

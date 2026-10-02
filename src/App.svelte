@@ -3794,6 +3794,9 @@
     rememberRecentThread(nativeThread);
     markThreadRead(nativeThread);
     if (targetPane) {
+      const batch = pendingAgentBatches[targetPane.id];
+      if (batch && targetPane.thread?.sessionId !== info.id)
+        completeAgentBatch(batch.id, 'Thread changed before comments were sent.');
       savePaneLayout(
         updatePane(paneLayout, targetPane.id, {
           agent: 'opencode',
