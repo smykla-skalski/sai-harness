@@ -10,6 +10,7 @@
     "allow-start-runtime",
     "allow-validate-repository",
     "allow-working-tree-diff",
+    "allow-git-change-action",
     "allow-diff-file-contents",
     "allow-create-worktree",
     "allow-delete-worktree",

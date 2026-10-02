@@ -2,8 +2,12 @@
   import { onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { Button } from '@smykla-skalski/sui';
-  import type { FileDiffInfo } from '@opencode/client';
-  import { parsePatch, patchUnavailableReason, type DiffAnnotation } from './lib/diff';
+  import {
+    parsePatch,
+    patchUnavailableReason,
+    type DiffAnnotation,
+    type WorkingDiffInfo,
+  } from './lib/diff';
   import {
     commentRange,
     formatComments,
@@ -13,14 +17,14 @@
   } from './lib/diff-comments';
 
   interface Props {
-    files: FileDiffInfo[];
+    files: WorkingDiffInfo[];
     directory: string;
     annotations: Record<string, DiffAnnotation>;
     selected: string | null;
     loading: boolean;
     error: string;
     onselect: (file: string) => void;
-    onrefresh: () => void;
+    onrefresh: () => void | Promise<void>;
     onclose: () => void;
     comments: DiffComment[];
     scope: string;
@@ -46,8 +50,21 @@
     onsendcomments,
   }: Props = $props();
   let current = $derived(files.find((file) => file.file === selected));
-  let lines = $derived(current ? parsePatch(current.patch) : null);
-  let unavailable = $derived(current ? patchUnavailableReason(current.patch) : null);
+  let area = $state<'all' | 'staged' | 'unstaged'>('all');
+  let displayPatch = $derived(
+    current
+      ? area === 'staged'
+        ? current.stagedPatch
+        : area === 'unstaged'
+          ? current.unstagedPatch
+          : current.patch
+      : '',
+  );
+  let lines = $derived(parsePatch(displayPatch));
+  let unavailable = $derived(patchUnavailableReason(displayPatch));
+  let actionError = $state('');
+  let actionBusy = $state(false);
+  let confirmRevert = $state<{ patch: string; hunk: number | null } | null>(null);
   let patchScroll = $state<HTMLDivElement>();
   let previousFile: string | null = null;
   let previousScope = '';
@@ -60,17 +77,64 @@
   let commentInput = $state<HTMLTextAreaElement>();
   let panel = $state<HTMLElement>();
   let selectedRange = $derived(
-    anchorIndex === null || selectedIndex === null || !lines
+    area !== 'all' || anchorIndex === null || selectedIndex === null || !lines
       ? null
       : commentRange(selected ?? '', lines, anchorIndex, selectedIndex, commentText),
   );
 
   function selectLine(index: number, extend: boolean) {
+    if (area !== 'all') return;
     if (!extend || anchorIndex === null) anchorIndex = index;
     selectedIndex = index;
-    selectedPatch = current?.patch ?? null;
+    selectedPatch = displayPatch;
     commentError = '';
     void tick().then(() => commentInput?.focus());
+  }
+
+  function selectArea(next: typeof area) {
+    area = next;
+    anchorIndex = null;
+    selectedIndex = null;
+    selectedPatch = null;
+    commentText = '';
+    confirmRevert = null;
+    actionError = '';
+    if (patchScroll) patchScroll.scrollTop = 0;
+  }
+
+  function hunkOrdinal(index: number): number {
+    return lines?.slice(0, index).filter((line) => line.kind === 'hunk').length ?? 0;
+  }
+
+  async function applyAction(action: 'stage' | 'unstage' | 'revert', hunk: number | null) {
+    if (!current || area === 'all' || actionBusy) return;
+    const patch = displayPatch;
+    if (
+      action === 'revert' &&
+      (!confirmRevert || confirmRevert.patch !== patch || confirmRevert.hunk !== hunk)
+    ) {
+      confirmRevert = { patch, hunk };
+      return;
+    }
+    actionBusy = true;
+    actionError = '';
+    try {
+      await invoke('git_change_action', {
+        path: directory,
+        file: current.file,
+        area,
+        action,
+        expectedPatch: patch,
+        hunk,
+      });
+      confirmRevert = null;
+      await onrefresh();
+    } catch (cause) {
+      actionError = String(cause);
+      confirmRevert = null;
+    } finally {
+      actionBusy = false;
+    }
   }
 
   async function readCommentFile(comment: DiffComment): Promise<string | null> {
@@ -96,7 +160,7 @@
       if (contents === null) throw new Error('The selected file is no longer available.');
       if (
         currentScope !== scope ||
-        selectedPatch !== current?.patch ||
+        selectedPatch !== displayPatch ||
         currentAnchor !== anchorIndex ||
         currentIndex !== selectedIndex ||
         currentText !== commentText
@@ -181,16 +245,26 @@
     selectedIndex = null;
     selectedPatch = null;
     commentText = '';
+    area = 'all';
+    confirmRevert = null;
     const file = selected;
     void resetScroll(file);
   });
 
   $effect(() => {
-    if (anchorIndex === null || selectedPatch === current?.patch) return;
+    if (anchorIndex === null || selectedPatch === displayPatch) return;
     anchorIndex = null;
     selectedIndex = null;
     selectedPatch = null;
     commentError = 'The diff changed. Select the line again before adding your comment.';
+  });
+
+  $effect(() => {
+    if (!current) return;
+    if (area === 'staged' && !current.stagedPatch)
+      selectArea(current.unstagedPatch ? 'unstaged' : 'all');
+    else if (area === 'unstaged' && !current.unstagedPatch)
+      selectArea(current.stagedPatch ? 'staged' : 'all');
   });
 
   let reconcileGeneration = 0;
@@ -249,7 +323,11 @@
   <div class="diff-files" aria-label="Changed files">
     {#each files as file (file.file)}
       <button class:active={file.file === selected} onclick={() => onselect(file.file)}>
-        <strong>{file.file}</strong><span>{file.status} · +{file.additions} −{file.deletions}</span>
+        <strong>{file.file}</strong><span
+          >{file.status} · +{file.additions} −{file.deletions}{file.stagedPatch
+            ? ' · Staged'
+            : ''}{file.unstagedPatch ? ' · Unstaged' : ''}</span
+        >
         {#if annotations[file.file]?.drift.length}<small class="drift"
             >Outside {annotations[file.file].drift.join(', ')} step files</small
           >{/if}
@@ -271,6 +349,52 @@
           >{current.status} · +{current.additions} −{current.deletions}</span
         >
       </div>
+      <div class="diff-area-tabs" aria-label="Diff area">
+        <Button
+          size="sm"
+          variant={area === 'all' ? 'primary' : 'ghost'}
+          onclick={() => selectArea('all')}>All</Button
+        >
+        {#if current.stagedPatch}<Button
+            size="sm"
+            variant={area === 'staged' ? 'primary' : 'ghost'}
+            onclick={() => selectArea('staged')}>Staged</Button
+          >{/if}
+        {#if current.unstagedPatch}<Button
+            size="sm"
+            variant={area === 'unstaged' ? 'primary' : 'ghost'}
+            onclick={() => selectArea('unstaged')}>Unstaged</Button
+          >{/if}
+      </div>
+      {#if area !== 'all' && displayPatch}<div class="diff-file-actions">
+          {#if area === 'unstaged'}
+            <Button size="sm" onclick={() => void applyAction('stage', null)} disabled={actionBusy}
+              >Stage file</Button
+            >
+            <Button
+              size="sm"
+              variant="ghost"
+              onclick={() => void applyAction('revert', null)}
+              disabled={actionBusy}>Revert file</Button
+            >
+          {:else}<Button
+              size="sm"
+              onclick={() => void applyAction('unstage', null)}
+              disabled={actionBusy}>Unstage file</Button
+            >{/if}
+        </div>{/if}
+      {#if confirmRevert}<div class="diff-confirm" role="alertdialog" aria-label="Confirm revert">
+          <span
+            >Discard {confirmRevert.hunk === null
+              ? 'all unstaged changes in this file'
+              : 'this hunk'}?</span
+          >
+          <Button size="sm" variant="ghost" onclick={() => (confirmRevert = null)}>Cancel</Button>
+          <Button size="sm" onclick={() => void applyAction('revert', confirmRevert?.hunk ?? null)}
+            >Discard changes</Button
+          >
+        </div>{/if}
+      {#if actionError}<p class="diff-error" role="alert">{actionError}</p>{/if}
       {#if lines}
         <div
           class="patch-scroll"
@@ -290,6 +414,7 @@
                   index >= Math.min(anchorIndex, selectedIndex) &&
                   index <= Math.max(anchorIndex, selectedIndex)}
                 aria-label={`Comment on ${line.kind === 'deleted' ? 'old' : 'new'} line ${line.kind === 'deleted' ? line.oldLine : line.newLine}`}
+                disabled={area !== 'all'}
                 onclick={(event) => selectLine(index, event.shiftKey)}
                 ><span class="line-number">{line.oldLine ?? ''}</span><span class="line-number"
                   >{line.newLine ?? ''}</span
@@ -297,6 +422,25 @@
               >
             {:else}<div class="diff-line" class:hunk={line.kind === 'hunk'}>
                 <code>{line.text || ' '}</code>
+                {#if line.kind === 'hunk' && area !== 'all'}<span class="hunk-actions">
+                    {#if area === 'unstaged'}
+                      <Button
+                        size="sm"
+                        onclick={() => void applyAction('stage', hunkOrdinal(index))}
+                        disabled={actionBusy}>Stage hunk</Button
+                      >
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onclick={() => void applyAction('revert', hunkOrdinal(index))}
+                        disabled={actionBusy}>Revert hunk</Button
+                      >
+                    {:else}<Button
+                        size="sm"
+                        onclick={() => void applyAction('unstage', hunkOrdinal(index))}
+                        disabled={actionBusy}>Unstage hunk</Button
+                      >{/if}
+                  </span>{/if}
               </div>{/if}
           {/each}
         </div>
@@ -445,6 +589,31 @@
     flex: 0 0 auto;
     color: var(--sui-muted);
   }
+  .diff-area-tabs,
+  .diff-file-actions,
+  .diff-confirm,
+  .hunk-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .diff-area-tabs,
+  .diff-file-actions,
+  .diff-confirm {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--shell-divider);
+  }
+  .diff-confirm {
+    flex-wrap: wrap;
+    font-size: 12px;
+  }
+  .diff-confirm span {
+    flex: 1;
+  }
+  .hunk-actions {
+    margin-left: auto;
+    padding-left: 16px;
+  }
   .patch-scroll {
     flex: 1;
     min-height: 0;
@@ -472,6 +641,9 @@
     text-align: right;
     color: var(--sui-muted);
     user-select: none;
+  }
+  .diff-line:disabled {
+    cursor: default;
   }
   .diff-line.selected {
     outline: 1px solid var(--sui-primary);

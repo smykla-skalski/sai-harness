@@ -7,6 +7,7 @@ fn main() {
             "start_runtime",
             "validate_repository",
             "working_tree_diff",
+            "git_change_action",
             "diff_file_contents",
             "create_worktree",
             "delete_worktree",

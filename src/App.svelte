@@ -8,7 +8,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { ask } from '@tauri-apps/plugin-dialog';
   import { isPermissionNotFoundError, isSessionNotFoundError } from '@opencode/client';
-  import type { FileDiffInfo, FormInfo, PermissionRequest } from '@opencode/client';
+  import type { FormInfo, PermissionRequest } from '@opencode/client';
   import type { ModelRef } from '@opencode/client';
   import type { BrowserAttachment } from './lib/browser-pick';
   import { Badge, Button } from '@smykla-skalski/sui';
@@ -90,7 +90,7 @@
     selectedRepository,
     type SavedCommand,
   } from './lib/saved-commands';
-  import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
+  import { annotateDiffs, repoPath, selectedDiffFile, type WorkingDiffInfo } from './lib/diff';
   import type { DiffComment } from './lib/diff-comments';
   import { inspectRepository, type SetupReport } from './lib/onboarding';
   import {
@@ -265,7 +265,7 @@
   >();
   let messageGeneration = new SvelteMap<string, number>();
   let snapshot = $state<PlanSnapshot>({ plan: null, questions: null });
-  let diffs = $state<FileDiffInfo[]>([]);
+  let diffs = $state<WorkingDiffInfo[]>([]);
   let diffLoading = $state(false);
   let diffError = $state('');
   let historyEvents = $state<HistoryEntry[]>([]);
@@ -381,7 +381,7 @@
     const generation = ++diffRefresh;
     diffLoading = true;
     try {
-      const next = await invoke<FileDiffInfo[]>('working_tree_diff', { path });
+      const next = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path });
       if (generation !== diffRefresh || path !== directory) return;
       diffs = next;
       diffError = '';
@@ -2990,13 +2990,12 @@
   }
 
   async function refreshDiff(id = sessionID, current = selection, quiet = false) {
-    if (acpAgent || !client || !id || !directory) return;
-    const source = client;
+    if (acpAgent || !directory) return;
     const path = directory;
     const generation = ++diffRefresh;
     if (!quiet) diffLoading = true;
     try {
-      const next = (await source.vcs.diff({ location: { directory: path }, mode: 'working' })).data;
+      const next = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path });
       if (
         acpAgent ||
         generation !== diffRefresh ||

@@ -8,6 +8,11 @@ export type DiffLine = {
   newLine?: number;
 };
 export type DiffAnnotation = { steps: string[]; drift: string[]; unattributed: boolean };
+export type WorkingDiffInfo = FileDiffInfo & {
+  stagedPatch: string;
+  unstagedPatch: string;
+  untracked: boolean;
+};
 
 export function repoPath(file: string, directory: string): string | null {
   const target = file.replaceAll('\\', '/').replaceAll(/\/+/g, '/');

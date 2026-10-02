@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { FileDiffInfo } from '@opencode/client';
+  import type { WorkingDiffInfo } from './lib/diff';
   import PaneTree from './PaneTree.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import DiffPanel from './DiffPanel.svelte';
@@ -102,7 +102,7 @@
   const visibleRatio = $derived(
     clampPaneRatio(previewRatio ?? ('direction' in pane ? pane.ratio : 0.5), splitSpan),
   );
-  let diffs = $state<FileDiffInfo[]>([]);
+  let diffs = $state<WorkingDiffInfo[]>([]);
   let diffLoading = $state(false);
   let diffError = $state('');
   let selectedFile = $state<string | null>(null);
@@ -112,7 +112,7 @@
     const current = ++diffGeneration;
     diffLoading = true;
     try {
-      const files = await invoke<FileDiffInfo[]>('working_tree_diff', { path: directory });
+      const files = await invoke<WorkingDiffInfo[]>('working_tree_diff', { path: directory });
       if (current !== diffGeneration) return;
       diffs = files;
       selectedFile =
