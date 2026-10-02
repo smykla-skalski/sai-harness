@@ -2461,6 +2461,7 @@
       markThreadRead(thread);
     }
     if (focusedPane !== 'main' && leaves(paneLayout).some((leaf) => leaf.id === focusedPane)) {
+      invalidatePaneSelection(focusedPane);
       savePaneLayout(updatePane(paneLayout, focusedPane, { agent, thread }));
       return;
     }
@@ -3240,6 +3241,7 @@
       return;
     }
     if (id === sideChat?.parentId) sideChat = null;
+    invalidatePaneSelection(id);
     const batch = pendingAgentBatches[id];
     if (batch) completeAgentBatch(batch.id, 'Agent pane closed before comments were sent.');
     ++recentJumpGeneration;
@@ -3285,6 +3287,7 @@
   }
 
   function createPaneThread(id: string, thread: AgentThread) {
+    invalidatePaneSelection(id);
     const sessionKey =
       thread.agent === 'opencode'
         ? `opencode:${thread.sessionId}`
@@ -3314,6 +3317,7 @@
   }
 
   function choosePaneAgent(id: string, agent: AgentId) {
+    invalidatePaneSelection(id);
     const batch = pendingAgentBatches[id];
     if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
     savePaneLayout(updatePane(paneLayout, id, { agent, thread: null, kind: undefined }));
@@ -3321,6 +3325,7 @@
   }
 
   function choosePaneTerminal(id: string) {
+    invalidatePaneSelection(id);
     const batch = pendingAgentBatches[id];
     if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
     savePaneLayout(updatePane(paneLayout, id, { agent: null, thread: null, kind: 'terminal' }));
@@ -3328,6 +3333,7 @@
   }
 
   function choosePaneBrowser(id: string) {
+    invalidatePaneSelection(id);
     const batch = pendingAgentBatches[id];
     if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
     const tab = newBrowserTab();
@@ -3748,6 +3754,10 @@
     if (count > 0) next[key] = count;
     else delete next[key];
     replayingAgentSessions = next;
+  }
+
+  function invalidatePaneSelection(id: string) {
+    paneSelections.set(id, (paneSelections.get(id) ?? 0) + 1);
   }
 
   async function selectSession(id: string, automatic = false) {
