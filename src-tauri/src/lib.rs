@@ -993,14 +993,37 @@ struct RegisteredWorktree {
 }
 
 #[tauri::command]
-fn registered_worktrees(repository: String) -> Result<Vec<RegisteredWorktree>, String> {
+fn registered_worktrees(
+    repository: String,
+    paths: Vec<String>,
+) -> Result<Vec<RegisteredWorktree>, String> {
     let repository = validate_repository(repository)?;
     let listed = git_reference(
         Path::new(&repository),
         &["worktree", "list", "--porcelain", "-z"],
     )
     .ok_or("Cannot inspect repository worktrees.")?;
-    Ok(parse_registered_worktrees(&listed))
+    let registered = parse_registered_worktrees(&listed)
+        .into_iter()
+        .filter(|entry| entry.present)
+        .filter_map(|entry| {
+            Path::new(&entry.path)
+                .canonicalize()
+                .ok()
+                .map(|path| (path, entry.branch))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let branch = registered.get(&Path::new(&path).canonicalize().ok()?)?;
+            Some(RegisteredWorktree {
+                path,
+                branch: branch.clone(),
+                present: true,
+            })
+        })
+        .collect())
 }
 
 fn parse_registered_worktrees(listed: &str) -> Vec<RegisteredWorktree> {
@@ -1397,7 +1420,7 @@ mod tests {
     use super::working_tree_revision;
     use super::{
         git_change_action, git_patch, normalize_picker_path, parse_registered_worktrees,
-        repository_namespace, server_args, version_number, working_tree_diff,
+        registered_worktrees, repository_namespace, server_args, version_number, working_tree_diff,
     };
     use std::fs;
     use std::path::Path;
@@ -1419,6 +1442,45 @@ mod tests {
         assert_eq!(worktrees[1].branch, None);
         assert_eq!(worktrees[1].path, missing.to_string_lossy());
         assert!(!worktrees[1].present);
+    }
+
+    #[test]
+    fn registered_worktrees_match_canonical_path_aliases() {
+        let root =
+            std::env::temp_dir().join(format!("sail-worktree-test-{}", uuid::Uuid::new_v4()));
+        let repository = root.join("repository");
+        let child = root.join("child");
+        fs::create_dir_all(&repository).unwrap();
+        let repository = repository.canonicalize().unwrap();
+        let repository_path = repository.to_str().unwrap();
+        git(repository_path, &["init", "-q"]);
+        git(
+            repository_path,
+            &[
+                "-c",
+                "user.name=Sail Test",
+                "-c",
+                "user.email=sail@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "seed",
+            ],
+        );
+        git(
+            repository_path,
+            &["worktree", "add", "-qb", "child", child.to_str().unwrap()],
+        );
+
+        let alias = child.join(".").to_string_lossy().into_owned();
+        let matched = registered_worktrees(repository_path.into(), vec![alias.clone()]).unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].path, alias);
+        assert_eq!(matched[0].branch.as_deref(), Some("child"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

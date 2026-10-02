@@ -1549,6 +1549,7 @@
       if (!agentWorktreesEnabled) throw new Error('Agent worktree access is disabled in settings.');
       const registered = await invoke<RegisteredWorktree[]>('registered_worktrees', {
         repository: project,
+        paths: [project, ...(projectCatalog.worktrees[project] ?? []).map((item) => item.path)],
       });
       const worktrees = projectWorktreeInfo(
         projectCatalog,
