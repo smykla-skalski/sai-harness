@@ -198,9 +198,13 @@ describe('ACP agent threads', () => {
     await $('.agent-composer textarea').setValue('Long answer');
     await $('.agent-actions button').click();
     await expect($('.agent-permission')).toBeDisplayed();
-    const beforeReply = await browser.execute(
-      () => document.querySelector('.agent-conversation')?.scrollTop ?? -1,
-    );
+    const beforeReply = await browser.execute(() => {
+      const conversation = document.querySelector('.agent-conversation');
+      if (!conversation) return -1;
+      conversation.scrollTop = conversation.scrollHeight;
+      conversation.dispatchEvent(new Event('scroll'));
+      return conversation.scrollTop;
+    });
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Answer line 99'));
     expect(
@@ -218,7 +222,10 @@ describe('ACP agent threads', () => {
     await expect($('.agent-tool-current')).toBeDisplayed();
     await browser.execute(() => {
       const conversation = document.querySelector('.agent-conversation');
-      if (conversation) conversation.scrollTop = 0;
+      if (conversation) {
+        conversation.scrollTop = 0;
+        conversation.dispatchEvent(new Event('scroll'));
+      }
     });
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('The checks passed. The tool details are available above.'),
