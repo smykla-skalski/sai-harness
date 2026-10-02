@@ -25,10 +25,7 @@ describe('project context menus', () => {
     }, path);
     await browser.refresh();
     await browser.setWindowSize(1280, 850);
-    await expect($(`.project-repository-select[title="${path}"]`)).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    await expect($('.project-repository-select')).toHaveAttribute('aria-current', 'page');
 
     await $('[aria-label="Manage Work"]').click();
     try {
@@ -62,11 +59,29 @@ describe('project context menus', () => {
     await expect($('[aria-label="Rename Work"]')).toBeFocused();
     await browser.keys('Escape');
 
-    const repoName = path.split('/').at(-1)!;
-    await $(`[aria-label="Manage ${repoName}"]`).click();
+    await $('.project-repository-row .project-icon-button:last-child').click();
     await expect($('.project-menu')).toHaveText(expect.stringContaining('Move to'));
     await expect($('.project-menu')).toHaveText(expect.stringContaining('Remove from sidebar'));
+    await expect($('.project-menu button:nth-of-type(2)')).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining(' to Ungrouped'),
+    );
     await expect($('.project-menu button.danger')).toBeDisabled();
+    await $('.brand').click();
+    await expect($('.project-menu')).not.toExist();
+
+    await browser.execute(() => {
+      document.querySelector('.project-repository-row')?.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: innerWidth - 2,
+          clientY: innerHeight - 2,
+        }),
+      );
+    });
+    await expect($('.project-menu')).toBeDisplayed();
     const bounds = await browser.execute(() => {
       const rect = document.querySelector('.project-menu')!.getBoundingClientRect();
       return {
@@ -82,10 +97,12 @@ describe('project context menus', () => {
     expect(bounds.top).toBeGreaterThanOrEqual(0);
     expect(bounds.right).toBeLessThanOrEqual(bounds.width);
     expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
+    expect(bounds.right).toBeGreaterThan(bounds.width - 40);
+    expect(bounds.bottom).toBeGreaterThan(bounds.height - 40);
     await $('.brand').click();
     await expect($('.project-menu')).not.toExist();
 
-    await $(`.project-repository-select[title="${path}"]`).click({ button: 'right' });
+    await $('.project-repository-select').click({ button: 'right' });
     await expect($('.project-menu')).toBeDisplayed();
     await $('.project-menu button:nth-of-type(2)').click();
     await expect($('.project-menu')).not.toExist();

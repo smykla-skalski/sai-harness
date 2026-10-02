@@ -827,6 +827,7 @@
         <div class="project-menu-label">Move to</div>
         {#if target.groupID}<button
             role="menuitem"
+            aria-label={`Move ${repositoryName(target.path)} to Ungrouped`}
             onclick={() => {
               onmoverepository(target.path, null);
               closeMenu();
@@ -835,6 +836,7 @@
         {#each catalog.groups.filter((group) => group.id !== target.groupID) as destination (destination.id)}
           <button
             role="menuitem"
+            aria-label={`Move ${repositoryName(target.path)} to ${destination.name}`}
             onclick={() => {
               onmoverepository(target.path, destination.id);
               closeMenu();
