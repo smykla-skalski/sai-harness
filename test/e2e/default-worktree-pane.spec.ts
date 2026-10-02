@@ -80,7 +80,7 @@ describe('empty default worktree', () => {
     await $('.agent-launches button').click();
     await expect($('.agent-conversation')).toBeDisplayed();
     await expect($('.browser-pane')).not.toExist();
-    await $('[aria-label="Close main pane"]').click();
+    await browser.keys(['Meta', 'w']);
     await expect($('.pane-picker')).toBeDisplayed();
     await $('[data-pane-picker]').click();
     await $('[data-agent-choice]:not([disabled])').click();
