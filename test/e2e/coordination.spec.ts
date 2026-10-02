@@ -32,6 +32,15 @@ describe('agent coordination bridge', () => {
       );
     }, path);
     await browser.refresh();
+    await browser.waitUntil(
+      () =>
+        browser.execute(() =>
+          document
+            .querySelector('.breadcrumb-project')
+            ?.textContent?.includes('sail-coordination-'),
+        ),
+      { timeout: 15_000, timeoutMsg: 'Test repository did not load' },
+    );
     const config = await browser.tauri.execute(
       async ({ core }, directory) =>
         core.invoke<{ command: string; args: string[]; env: Record<string, string> }>(
@@ -40,21 +49,30 @@ describe('agent coordination bridge', () => {
         ),
       path,
     );
-    const response = execFileSync(config.command, config.args, {
-      env: { ...process.env, ...config.env },
-      input: `${JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: {
-          name: 'worktree_list',
-          arguments: {},
-          _meta: { sessionID: 'test-stale-session' },
-        },
-      })}\n`,
-      timeout: 30_000,
-      encoding: 'utf8',
-    });
+    let response: string;
+    try {
+      response = execFileSync(config.command, config.args, {
+        env: { ...process.env, ...config.env },
+        input: `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name: 'worktree_list',
+            arguments: {},
+            _meta: { sessionID: 'test-stale-session' },
+          },
+        })}\n`,
+        timeout: 30_000,
+        encoding: 'utf8',
+      });
+    } catch (error) {
+      const failure = error as Error & { stdout?: string; stderr?: string };
+      throw new Error(
+        `MCP process failed: ${failure.message}; stdout=${failure.stdout}; stderr=${failure.stderr}`,
+        { cause: error },
+      );
+    }
     const result = JSON.parse(response.trim());
     expect(result.result.isError).toBe(true);
     expect(result.result.content[0].text).toContain('The source agent session is unavailable.');
