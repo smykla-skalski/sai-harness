@@ -83,6 +83,12 @@
   import { mergeMessages, nearBottom } from './lib/timeline';
   import { fileUri } from './lib/attachments';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
+  import {
+    commandsForDirectory,
+    loadSavedCommands,
+    selectedRepository,
+    type SavedCommand,
+  } from './lib/saved-commands';
   import { annotateDiffs, repoPath, selectedDiffFile } from './lib/diff';
   import { inspectRepository, type SetupReport } from './lib/onboarding';
   import {
@@ -111,6 +117,13 @@
   let projectCatalog = $state<ProjectCatalog>(
     loadProjectCatalog(getSetting('sai-project-catalog'), savedDirectory),
   );
+  let savedCommands = $state<SavedCommand[]>(loadSavedCommands(getSetting('sai-saved-commands')));
+  let pendingCommands = $state<Record<string, string>>({});
+  let commandsDialog: HTMLDialogElement;
+  let commandName = $state('');
+  let commandText = $state('');
+  let commandScope = $state<'global' | 'project'>('global');
+  let editingCommand = $state<string | null>(null);
   let binaryPath = $state(getSetting('sai-opencode-bin') ?? '');
   let appliedBinaryPath = getSetting('sai-opencode-bin') ?? '';
   let activeBinary = $state('');
@@ -142,7 +155,14 @@
   let palettePreviousFocus: HTMLElement | null = null;
   let restorePaletteFocus = true;
   const paletteEntries = $derived(
-    searchCommandPalette(projectCatalog, agentThreads, agentAvailability, directory, paletteQuery),
+    searchCommandPalette(
+      projectCatalog,
+      agentThreads,
+      agentAvailability,
+      directory,
+      paletteQuery,
+      savedCommands,
+    ),
   );
   let runningAgentThreads = $state<Record<string, boolean>>({});
   const savedPaneLayouts = loadPaneLayouts(getSetting('sai-pane-layouts'));
@@ -1544,7 +1564,56 @@
     palettePreviousFocus = null;
   }
 
+  function saveCommands(commands: SavedCommand[]) {
+    savedCommands = commands;
+    setSetting('sai-saved-commands', JSON.stringify(commands));
+  }
+
+  function openCommandsDialog() {
+    commandName = '';
+    commandText = '';
+    commandScope = 'global';
+    editingCommand = null;
+    commandsDialog.showModal();
+  }
+
+  function saveCommand() {
+    const name = commandName.trim();
+    const script = commandText.trim();
+    const project =
+      commandScope === 'project' ? selectedRepository(projectCatalog, directory) : null;
+    if (!name || !script || (commandScope === 'project' && !project)) return;
+    const entry: SavedCommand = {
+      id: editingCommand ?? crypto.randomUUID(),
+      name,
+      command: script,
+      project,
+    };
+    saveCommands(
+      editingCommand
+        ? savedCommands.map((item) => (item.id === editingCommand ? entry : item))
+        : [...savedCommands, entry],
+    );
+    commandName = '';
+    commandText = '';
+    commandScope = 'global';
+    editingCommand = null;
+  }
+
+  function runSavedCommand(command: SavedCommand) {
+    if (!directory) {
+      error = 'Select a project or worktree before running a command.';
+      return;
+    }
+    closeCommandPalette(false);
+    splitFocusedPane('row', 'terminal', command.command);
+  }
+
   async function choosePaletteEntry(entry: PaletteEntry | null) {
+    if (entry?.kind === 'command' && entry.command) {
+      runSavedCommand(entry.command);
+      return;
+    }
     const target = entry?.directory ?? directory;
     const thread =
       entry?.kind === 'thread'
@@ -1796,20 +1865,53 @@
     persistPaneLayouts();
   }
 
-  function splitFocusedPane(direction: 'row' | 'column', kind?: 'terminal' | 'browser') {
+  function paneSpan(id: string, axis: 'row' | 'column') {
+    const bounds = document
+      .querySelector<HTMLElement>(`[data-pane-id="${id}"]`)
+      ?.getBoundingClientRect();
+    return axis === 'row' ? bounds?.width : bounds?.height;
+  }
+
+  function splitFocusedPane(
+    direction: 'row' | 'column',
+    kind?: 'terminal' | 'browser',
+    command?: string,
+  ) {
     if (!directory) return;
-    const focusedElement = document.querySelector<HTMLElement>(`[data-pane-id="${focusedPane}"]`);
-    const bounds = focusedElement?.getBoundingClientRect();
-    const span = direction === 'row' ? bounds?.width : bounds?.height;
+    let target = focusedPane;
+    let splitDirection = direction;
+    let span = paneSpan(target, splitDirection);
+    if (command && (!span || span < 2 * minPaneSpan + 8)) {
+      const options = leaves(paneLayout).flatMap((pane) =>
+        (['row', 'column'] as const).map((axis) => ({
+          id: pane.id,
+          axis,
+          span: paneSpan(pane.id, axis) ?? 0,
+        })),
+      );
+      const choice = options
+        .filter((option) => option.span >= 2 * minPaneSpan + 8)
+        .toSorted(
+          (a, b) => Number(b.id === focusedPane) - Number(a.id === focusedPane) || b.span - a.span,
+        )[0];
+      if (choice) {
+        target = choice.id;
+        splitDirection = choice.axis;
+        span = choice.span;
+      }
+    }
     if (!span || span < 2 * minPaneSpan + 8) {
-      error = 'Enlarge the focused pane before splitting it again.';
+      error = command
+        ? 'Enlarge a pane before running this command.'
+        : 'Enlarge the focused pane before splitting it again.';
       return;
     }
     ++recentJumpGeneration;
-    const layout = splitPane(paneLayout, focusedPane, direction);
+    const layout = splitPane(paneLayout, target, splitDirection);
     const old = new Set(leaves(paneLayout).map((leaf) => leaf.id));
     const created = leaves(layout).find((leaf) => !old.has(leaf.id));
     if (!created) return;
+    if (command) pendingCommands = { ...pendingCommands, [created.id]: command };
     const browserTab = kind === 'browser' ? newBrowserTab() : null;
     savePaneLayout(
       browserTab
@@ -3342,6 +3444,7 @@
         >
       </div>
       <div class="topbar-actions">
+        <Button variant="ghost" size="sm" onclick={openCommandsDialog}>Commands</Button>
         {#if sessionID || acpAgent || focusedPane !== 'main'}<Button
             variant="ghost"
             size="sm"
@@ -3682,21 +3785,27 @@
       onchanges={(id) => {
         changesPanes = changesPanes.filter((item) => item !== id);
       }}
+      {pendingCommands}
+      oncommandstarted={(id) => {
+        const next = { ...pendingCommands };
+        delete next[id];
+        pendingCommands = next;
+      }}
     />
   </div>
 </div>
 <dialog
   class="command-palette"
   bind:this={paletteDialog}
-  aria-label="Jump to project or thread"
+  aria-label="Jump to project, thread, or command"
   onclose={commandPaletteClosed}
 >
   <div class="palette-search">
     <input
       bind:this={paletteInput}
       value={paletteQuery}
-      aria-label="Search projects, worktrees, and threads"
-      placeholder="Jump to project, worktree, or thread…"
+      aria-label="Search projects, worktrees, threads, and commands"
+      placeholder="Jump to project, thread, or command…"
       oninput={(event) => {
         paletteQuery = event.currentTarget.value;
         paletteIndex = 0;
@@ -3715,7 +3824,13 @@
         onclick={() => void choosePaletteEntry(entry)}
       >
         <span><strong>{entry.label}</strong><small>{entry.detail}</small></span>
-        <span class="palette-kind">{entry.kind === 'thread' ? 'Thread' : 'Project'}</span>
+        <span class="palette-kind"
+          >{entry.kind === 'thread'
+            ? 'Thread'
+            : entry.kind === 'command'
+              ? 'Command'
+              : 'Project'}</span
+        >
       </button>
     {:else}
       <div class="palette-empty">
@@ -3729,6 +3844,56 @@
       </div>
     {/each}
   </div>
+</dialog>
+<dialog class="commands-dialog" bind:this={commandsDialog} aria-label="Saved commands">
+  <div class="commands-header">
+    <h2>Saved commands</h2>
+    <button aria-label="Close saved commands" onclick={() => commandsDialog.close()}>×</button>
+  </div>
+  <div class="commands-list">
+    {#each commandsForDirectory(savedCommands, projectCatalog, directory) as command (command.id)}
+      <div class="commands-row">
+        <span
+          ><strong>{command.name}</strong><small
+            >{command.project ? command.project.split(/[\\/]/).at(-1) : 'Global'} · {command.command}</small
+          ></span
+        >
+        <button
+          aria-label={`Edit ${command.name}`}
+          onclick={() => {
+            editingCommand = command.id;
+            commandName = command.name;
+            commandText = command.command;
+            commandScope = command.project ? 'project' : 'global';
+          }}>Edit</button
+        ><button
+          aria-label={`Delete ${command.name}`}
+          onclick={() => saveCommands(savedCommands.filter((item) => item.id !== command.id))}
+          >Delete</button
+        >
+      </div>
+    {:else}<p>No commands saved yet.</p>{/each}
+  </div>
+  <form
+    onsubmit={(event) => {
+      event.preventDefault();
+      saveCommand();
+    }}
+  >
+    <label>Name<input bind:value={commandName} required /></label>
+    <label>Command<textarea bind:value={commandText} required rows="3"></textarea></label>
+    <label
+      >Scope<select bind:value={commandScope}>
+        <option value="global">Global</option>
+        <option value="project" disabled={!selectedRepository(projectCatalog, directory)}
+          >Current project</option
+        >
+      </select></label
+    >
+    <button type="submit" disabled={!commandName.trim() || !commandText.trim()}
+      >{editingCommand ? 'Save changes' : 'Save command'}</button
+    >
+  </form>
 </dialog>
 <dialog class="inbox-dialog" bind:this={inboxDialog} aria-label="Pending requests across projects">
   <div class="inbox-dialog-top">

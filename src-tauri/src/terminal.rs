@@ -1,5 +1,5 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +9,12 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+
+#[derive(Deserialize)]
+pub struct TerminalSize {
+    cols: u16,
+    rows: u16,
+}
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -129,7 +135,12 @@ fn shell() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/bin/sh"));
 }
 
-fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, String> {
+fn spawn(
+    directory: PathBuf,
+    cols: u16,
+    rows: u16,
+    script: Option<&str>,
+) -> Result<TerminalSession, String> {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: rows.max(1),
@@ -140,7 +151,17 @@ fn spawn(directory: PathBuf, cols: u16, rows: u16) -> Result<TerminalSession, St
         .map_err(|error| error.to_string())?;
     let mut command = CommandBuilder::new(shell());
     #[cfg(not(windows))]
-    command.arg("-l");
+    if let Some(script) = script {
+        command.arg("-lc");
+        command.arg(script);
+    } else {
+        command.arg("-l");
+    }
+    #[cfg(windows)]
+    if let Some(script) = script {
+        command.arg("/C");
+        command.arg(script);
+    }
     command.cwd(&directory);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
@@ -224,11 +245,12 @@ pub fn terminal_open(
     manager: State<'_, TerminalManager>,
     id: String,
     directory: String,
-    cols: u16,
-    rows: u16,
+    command: Option<String>,
+    size: TerminalSize,
     attachment: String,
     on_event: Channel<TerminalEvent>,
 ) -> Result<(), String> {
+    let TerminalSize { cols, rows } = size;
     if id.is_empty() {
         return Err("Terminal ID is required".to_string());
     }
@@ -245,7 +267,13 @@ pub fn terminal_open(
         }
         Arc::clone(session)
     } else {
-        let session = Arc::new(spawn(directory, cols, rows)?);
+        if command
+            .as_ref()
+            .is_some_and(|script| script.trim().is_empty())
+        {
+            return Err("Command is empty".to_string());
+        }
+        let session = Arc::new(spawn(directory, cols, rows, command.as_deref())?);
         sessions.insert(id, Arc::clone(&session));
         session
     };

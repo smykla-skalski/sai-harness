@@ -13,11 +13,15 @@
     directory,
     focused,
     onshortcut,
+    command,
+    oncommandstarted,
   }: {
     id: string;
     directory: string;
     focused: boolean;
     onshortcut: (event: KeyboardEvent) => void;
+    command?: string;
+    oncommandstarted: (id: string) => void;
   } = $props();
   let container: HTMLDivElement;
   let terminal: Terminal;
@@ -29,6 +33,7 @@
   let started = false;
   let generation = 0;
   const attachment = crypto.randomUUID();
+  let initialCommand = $state<string | undefined>();
 
   function channel(onexit: (code: number) => void): Channel<TerminalEvent> {
     const current = ++generation;
@@ -52,12 +57,13 @@
       await invoke('terminal_open', {
         id,
         directory,
-        cols: terminal.cols,
-        rows: terminal.rows,
+        command: initialCommand,
+        size: { cols: terminal.cols, rows: terminal.rows },
         attachment,
         onEvent: channel((code) => (reportedExit = code)),
       });
       started = true;
+      if (initialCommand) oncommandstarted(id);
       exitCode = reportedExit;
       error = '';
       if (focused) terminal.focus();
@@ -88,6 +94,7 @@
   }
 
   onMount(() => {
+    initialCommand = command;
     terminal = new Terminal({
       cursorBlink: true,
       scrollback: 5000,
@@ -190,7 +197,8 @@
 <div class="terminal-pane" aria-label="Shell terminal">
   <div class="terminal-screen" bind:this={container}></div>
   {#if exitCode !== null}<div class="terminal-exit" role="status">
-      Shell exited with code {exitCode}. <button onclick={restart}>Restart</button>
+      {initialCommand ? 'Command' : 'Shell'} exited with code {exitCode}.
+      <button onclick={restart}>Restart</button>
     </div>{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
 </div>

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { newestAvailableThread, searchCommandPalette } from '../src/lib/command-palette.ts';
 import type { AgentAvailability, AgentThread } from '../src/lib/acp.ts';
 import type { ProjectCatalog } from '../src/lib/projects.ts';
+import { loadSavedCommands, selectedRepository } from '../src/lib/saved-commands.ts';
 
 const catalog: ProjectCatalog = {
   repositories: ['/work/alpha', '/work/bravo'],
@@ -61,4 +62,49 @@ void test('location picks newest thread with an available agent', () => {
   assert.equal(newestAvailableThread(withUnavailable, agents, '/work/bravo', null)?.sessionId, 'b');
   assert.equal(newestAvailableThread(withUnavailable, agents, '/work/alpha-feature', null), null);
   assert.equal(newestAvailableThread(withUnavailable, agents, '/work/bravo', 'claude'), null);
+});
+
+void test('saved commands appear only in their project, even without agents', () => {
+  const commands = loadSavedCommands(
+    JSON.stringify([
+      { id: 'global', name: 'Run tests', command: 'npm test', project: null },
+      { id: 'alpha', name: 'Build alpha', command: 'npm run build', project: '/work/alpha' },
+      { id: 'bravo', name: 'Build bravo', command: 'make build', project: '/work/bravo' },
+    ]),
+  );
+  assert.equal(selectedRepository(catalog, '/work/alpha-feature'), '/work/alpha');
+  const alpha = searchCommandPalette(
+    catalog,
+    threads,
+    [],
+    '/work/alpha-feature',
+    'build',
+    commands,
+  );
+  assert.deepEqual(
+    alpha.map((entry) => entry.command?.id),
+    ['alpha'],
+  );
+  const bravo = searchCommandPalette(catalog, threads, [], '/work/bravo', 'build', commands);
+  assert.deepEqual(
+    bravo.map((entry) => entry.command?.id),
+    ['bravo'],
+  );
+  assert.equal(
+    searchCommandPalette(catalog, threads, [], '/work/bravo', 'tests', commands)[0]?.command?.id,
+    'global',
+  );
+});
+
+void test('saved commands reject malformed and duplicate records', () => {
+  assert.deepEqual(
+    loadSavedCommands(
+      JSON.stringify([
+        { id: 'a', name: ' Test ', command: 'exit 2', project: null },
+        { id: 'a', name: 'Duplicate', command: 'echo hi', project: null },
+        { id: 'b', name: '', command: 'echo hi', project: null },
+      ]),
+    ),
+    [{ id: 'a', name: 'Test', command: 'exit 2', project: null }],
+  );
 });

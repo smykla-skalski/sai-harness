@@ -1,14 +1,16 @@
 import type { AgentAvailability, AgentId, AgentThread } from './acp';
 import type { ProjectCatalog } from './projects';
+import { commandsForDirectory, type SavedCommand } from './saved-commands.ts';
 
 export type PaletteEntry = {
   id: string;
-  kind: 'location' | 'thread';
+  kind: 'location' | 'thread' | 'command';
   directory: string;
   label: string;
   detail: string;
   agent: AgentId | null;
   thread: AgentThread | null;
+  command?: SavedCommand;
 };
 
 export function newestAvailableThread(
@@ -55,6 +57,7 @@ export function searchCommandPalette(
   agents: AgentAvailability[],
   currentDirectory: string,
   query: string,
+  commands: SavedCommand[] = [],
 ): PaletteEntry[] {
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const selectedAgent = agents.find(
@@ -116,6 +119,28 @@ export function searchCommandPalette(
         },
         score: score + (thread.directory === currentDirectory ? -1 : 0),
       });
+  }
+  if (!selectedAgent) {
+    for (const command of commandsForDirectory(commands, catalog, currentDirectory)) {
+      const score = searchTerms.reduce<number | null>((total, term) => {
+        const match = fuzzyScore(`${command.name} ${command.command}`, term);
+        return total === null || match === null ? null : total + match;
+      }, 0);
+      if (score !== null)
+        candidates.push({
+          entry: {
+            id: `command:${command.id}`,
+            kind: 'command',
+            directory: currentDirectory,
+            label: command.name,
+            detail: command.project ? 'Project command' : 'Global command',
+            agent: null,
+            thread: null,
+            command,
+          },
+          score: score - 3,
+        });
+    }
   }
   return candidates
     .toSorted(

@@ -35,6 +35,8 @@
     running: (thread: AgentThread | null) => boolean;
     onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
     onchanges: (id: string) => void;
+    pendingCommands: Record<string, string>;
+    oncommandstarted: (id: string) => void;
   };
 
   let {
@@ -60,6 +62,8 @@
     running,
     onstatus,
     onchanges,
+    pendingCommands,
+    oncommandstarted,
   }: Props = $props();
   let container = $state<HTMLDivElement>();
   let splitWidth = $state(0);
@@ -166,6 +170,8 @@
       {running}
       {onstatus}
       {onchanges}
+      {pendingCommands}
+      {oncommandstarted}
     />
     <div
       class="pane-divider"
@@ -218,6 +224,8 @@
       {running}
       {onstatus}
       {onchanges}
+      {pendingCommands}
+      {oncommandstarted}
     />
   </div>
 {:else}
@@ -281,7 +289,14 @@
       {@render main()}
     {:else if pane.kind === 'terminal'}
       {#key `${directory}:${pane.id}`}
-        <TerminalPane id={pane.id} {directory} focused={focused === pane.id} {onshortcut} />
+        <TerminalPane
+          id={pane.id}
+          {directory}
+          focused={focused === pane.id}
+          {onshortcut}
+          command={pendingCommands[pane.id]}
+          {oncommandstarted}
+        />
       {/key}
     {:else if pane.kind === 'browser'}
       {#key `${directory}:${pane.id}`}
