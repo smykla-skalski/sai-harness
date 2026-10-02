@@ -17,18 +17,28 @@
   } = $props();
   let stage = $state<'kind' | 'agent'>('kind');
   let picker: HTMLElement;
+  let agentFocusPending = false;
+  let pendingAgentSteps = 0;
 
   async function showAgents() {
     stage = 'agent';
+    agentFocusPending = true;
+    pendingAgentSteps = 0;
     await tick();
-    (
-      picker.querySelector<HTMLButtonElement>('[data-agent-choice]:not(:disabled)') ??
-      picker.querySelector<HTMLButtonElement>('.pane-picker-back')
-    )?.focus();
+    if (stage !== 'agent') return;
+    const choices = [
+      ...picker.querySelectorAll<HTMLButtonElement>('[data-agent-choice]:not(:disabled)'),
+    ];
+    const index = choices.length
+      ? ((pendingAgentSteps % choices.length) + choices.length) % choices.length
+      : 0;
+    agentFocusPending = false;
+    (choices[index] ?? picker.querySelector<HTMLButtonElement>('.pane-picker-back'))?.focus();
   }
 
   async function showKinds() {
     stage = 'kind';
+    agentFocusPending = false;
     await tick();
     picker.querySelector<HTMLButtonElement>('[data-pane-picker]')?.focus();
   }
@@ -62,13 +72,18 @@
       event.preventDefault();
       void showKinds();
     } else if (stage === 'agent' && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      if (agentFocusPending) {
+        event.preventDefault();
+        pendingAgentSteps += step;
+        return;
+      }
       const choices = [
         ...picker.querySelectorAll<HTMLButtonElement>('[data-agent-choice]:not(:disabled)'),
       ];
       if (!choices.length) return;
       event.preventDefault();
       const current = choices.indexOf(document.activeElement as HTMLButtonElement);
-      const step = event.key === 'ArrowDown' ? 1 : -1;
       const next =
         current < 0
           ? step > 0

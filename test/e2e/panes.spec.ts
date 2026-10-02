@@ -67,6 +67,23 @@ describe('split agent panes', () => {
     await browser.execute(() => document.querySelector<HTMLElement>('.sidebar')?.focus());
     await browser.keys('a');
     await expect($('.pane-leaf.focused [data-agent-choice]:not([disabled])')).toBeFocused();
+    await browser.keys('ArrowDown');
+    await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
+    await browser.keys('ArrowUp');
+    await expect($('.pane-leaf.focused [data-agent-choice]:first-child')).toBeFocused();
+    await browser.keys('Escape');
+    await browser.execute(() => {
+      const target = document.activeElement!;
+      target.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }),
+      );
+      target.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }),
+      );
+    });
+    await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
+    await browser.keys('ArrowUp');
+    await expect($('.pane-leaf.focused [data-agent-choice]:first-child')).toBeFocused();
     await $('.pane-leaf.focused .pane-picker-intro h2').click();
     await browser.keys('ArrowDown');
     await expect($('.pane-leaf.focused [data-agent-choice]:last-child')).toBeFocused();
