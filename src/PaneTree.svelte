@@ -7,6 +7,7 @@
   import DiffPanel from './DiffPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
   import TerminalPane from './TerminalPane.svelte';
+  import AgentTerminalPane from './AgentTerminalPane.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import type { AgentThread, AgentAvailability } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
@@ -37,6 +38,7 @@
     onchanges: (id: string) => void;
     pendingCommands: Record<string, string>;
     oncommandstarted: (id: string) => void;
+    onagentterminal: (id: string) => void;
   };
 
   let {
@@ -64,6 +66,7 @@
     onchanges,
     pendingCommands,
     oncommandstarted,
+    onagentterminal,
   }: Props = $props();
   let container = $state<HTMLDivElement>();
   let splitWidth = $state(0);
@@ -172,6 +175,7 @@
       {onchanges}
       {pendingCommands}
       {oncommandstarted}
+      {onagentterminal}
     />
     <div
       class="pane-divider"
@@ -226,6 +230,7 @@
       {onchanges}
       {pendingCommands}
       {oncommandstarted}
+      {onagentterminal}
     />
   </div>
 {:else}
@@ -238,11 +243,13 @@
       ? 'Main pane'
       : pane.kind === 'terminal'
         ? 'Terminal pane'
-        : pane.kind === 'browser'
-          ? 'Browser pane'
-          : pane.agent
-            ? `${pane.agent} pane`
-            : 'Empty pane'}
+        : pane.kind === 'agent-terminal'
+          ? 'Agent terminal pane'
+          : pane.kind === 'browser'
+            ? 'Browser pane'
+            : pane.agent
+              ? `${pane.agent} pane`
+              : 'Empty pane'}
     tabindex="-1"
     onfocusin={() => onfocus(pane.id)}
     onpointerdown={(event) => {
@@ -251,6 +258,7 @@
         pane.id === 'main' ||
         pane.agent ||
         pane.kind === 'terminal' ||
+        pane.kind === 'agent-terminal' ||
         pane.kind === 'browser' ||
         !(event.target instanceof Element)
       )
@@ -268,10 +276,12 @@
         <span
           >{pane.kind === 'terminal'
             ? 'Terminal'
-            : pane.kind === 'browser'
-              ? 'Browser'
-              : (pane.thread?.title ??
-                (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
+            : pane.kind === 'agent-terminal'
+              ? 'Agent terminal'
+              : pane.kind === 'browser'
+                ? 'Browser'
+                : (pane.thread?.title ??
+                  (pane.agent ? `New ${pane.agent} thread` : 'Empty pane'))}</span
         ><small>⌘⌥ + arrow to switch</small><button
           aria-label="Close pane"
           onclick={() => onclose(pane.id)}>×</button
@@ -298,6 +308,8 @@
           {oncommandstarted}
         />
       {/key}
+    {:else if pane.kind === 'agent-terminal'}
+      <AgentTerminalPane id={pane.terminalId} />
     {:else if pane.kind === 'browser'}
       {#key `${directory}:${pane.id}`}
         <BrowserPane
@@ -322,6 +334,7 @@
             oncreated={(thread) => oncreated(pane.id, thread)}
             {onactivity}
             {onstatus}
+            onterminal={onagentterminal}
           />
           {#if changesPanes.includes(pane.id)}
             <DiffPanel

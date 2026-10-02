@@ -46,6 +46,7 @@ fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 mod acp;
+mod acp_terminal;
 mod attention;
 mod browser;
 mod github;
@@ -712,6 +713,7 @@ pub fn run() {
         })
         .manage(RuntimeManager::default())
         .manage(acp::AgentManager::default())
+        .manage(acp_terminal::AcpTerminalManager::default())
         .manage(terminal::TerminalManager::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -725,6 +727,8 @@ pub fn run() {
             delete_worktree,
             github::create_pull_request,
             github::open_pull_request,
+            acp_terminal::acp_terminal_snapshot,
+            acp_terminal::acp_terminal_stop,
             local_plugin_version,
             acp::acp_agents,
             acp::acp_connect,

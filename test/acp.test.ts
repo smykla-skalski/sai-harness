@@ -33,5 +33,22 @@ void test('ACP chunks stream into one assistant message and tool updates keep th
     title: 'Read file',
     status: 'completed',
     content: 'Done',
+    terminalIds: [],
   });
+});
+
+void test('ACP tool calls keep terminal references across updates', () => {
+  const created = updateEntries([], {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'run',
+    title: 'Run tests',
+    content: [{ type: 'terminal', terminalId: 'terminal-1' }],
+  });
+  const completed = updateEntries(created, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'run',
+    status: 'completed',
+    content: [{ type: 'content', content: { type: 'text', text: 'Finished' } }],
+  });
+  assert.deepEqual(completed[0]?.type === 'tool' && completed[0].terminalIds, ['terminal-1']);
 });

@@ -11,6 +11,8 @@ fn main() {
             "delete_worktree",
             "create_pull_request",
             "open_pull_request",
+            "acp_terminal_snapshot",
+            "acp_terminal_stop",
             "local_plugin_version",
             "acp_agents",
             "acp_connect",

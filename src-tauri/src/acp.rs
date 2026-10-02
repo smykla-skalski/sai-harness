@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 struct AgentDefinition {
     id: &'static str,
@@ -64,6 +64,9 @@ struct Connection {
     next_id: AtomicU64,
     alive: AtomicBool,
     capabilities: Mutex<Value>,
+    session_directories: Mutex<HashMap<String, PathBuf>>,
+    pending_directory: Mutex<Option<PathBuf>>,
+    session_creation: Mutex<()>,
     ready: Condvar,
 }
 
@@ -486,6 +489,9 @@ fn connect_blocking(
         next_id: AtomicU64::new(1),
         alive: AtomicBool::new(true),
         capabilities: Mutex::new(Value::Null),
+        session_directories: Mutex::new(HashMap::new()),
+        pending_directory: Mutex::new(None),
+        session_creation: Mutex::new(()),
         ready: Condvar::new(),
     });
     let reader = Arc::clone(&runtime);
@@ -497,6 +503,43 @@ fn connect_blocking(
                 continue;
             };
             if message.get("method").is_some() {
+                if let Some(method) = message.get("method").and_then(Value::as_str) {
+                    if method.starts_with("terminal/") {
+                        if let Some(id) = message.get("id").cloned() {
+                            let runtime = Arc::clone(&reader);
+                            let app = app.clone();
+                            let agent = agent_id.clone();
+                            let method = method.to_string();
+                            let params = message.get("params").cloned().unwrap_or(Value::Null);
+                            std::thread::spawn(move || {
+                                let directory = params
+                                    .get("sessionId")
+                                    .and_then(Value::as_str)
+                                    .and_then(|session_id| {
+                                        runtime
+                                            .session_directories
+                                            .lock()
+                                            .ok()?
+                                            .get(session_id)
+                                            .cloned()
+                                    })
+                                    .or_else(|| runtime.pending_directory.lock().ok()?.clone());
+                                let manager =
+                                    app.state::<crate::acp_terminal::AcpTerminalManager>();
+                                let response = match crate::acp_terminal::handle(
+                                    &app, &manager, &agent, &method, params, directory,
+                                ) {
+                                    Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+                                    Err(error) => {
+                                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error}})
+                                    }
+                                };
+                                let _ = runtime.write(&response);
+                            });
+                        }
+                        continue;
+                    }
+                }
                 if message.get("method").and_then(Value::as_str)
                     == Some("session/request_permission")
                 {
@@ -535,6 +578,8 @@ fn connect_blocking(
             }
         }
         reader.alive.store(false, Ordering::Release);
+        app.state::<crate::acp_terminal::AcpTerminalManager>()
+            .stop_agent(&agent_id);
         reader.ready.notify_all();
         if let Ok(mut permissions) = reader.permissions.lock() {
             permissions.clear();
@@ -556,7 +601,7 @@ fn connect_blocking(
     drop(agents);
     let result = runtime.request("initialize", json!({
         "protocolVersion": 1,
-        "clientCapabilities": {"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},
+        "clientCapabilities": {"fs":{"readTextFile":false,"writeTextFile":false},"terminal":true},
         "clientInfo":{"name":"sail","title":"Sail","version":"0.1.0"}
     }), Duration::from_secs(60)).inspect_err(|_| {
         runtime.terminate();
@@ -608,11 +653,32 @@ pub async fn acp_new_session(
     }
     let runtime = connection(&manager, &agent)?;
     tauri::async_runtime::spawn_blocking(move || {
-        runtime.request(
+        let _serial = runtime
+            .session_creation
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *runtime
+            .pending_directory
+            .lock()
+            .map_err(|error| error.to_string())? = Some(PathBuf::from(&cwd));
+        let result = runtime.request(
             "session/new",
             json!({"cwd":cwd,"mcpServers":[]}),
             Duration::from_secs(60),
-        )
+        );
+        *runtime
+            .pending_directory
+            .lock()
+            .map_err(|error| error.to_string())? = None;
+        let result = result?;
+        if let Some(id) = result.get("sessionId").and_then(Value::as_str) {
+            runtime
+                .session_directories
+                .lock()
+                .map_err(|error| error.to_string())?
+                .insert(id.to_string(), PathBuf::from(cwd));
+        }
+        Ok(result)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -627,11 +693,25 @@ pub async fn acp_load_session(
 ) -> Result<Value, String> {
     let runtime = connection(&manager, &agent)?;
     tauri::async_runtime::spawn_blocking(move || {
-        runtime.request(
+        runtime
+            .session_directories
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(session_id.clone(), PathBuf::from(&cwd));
+        let result = runtime.request(
             "session/load",
             json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[]}),
             Duration::from_secs(60),
-        )
+        );
+        if result.is_err() {
+            runtime
+                .session_directories
+                .lock()
+                .map_err(|error| error.to_string())?
+                .remove(&session_id);
+        }
+        let result = result?;
+        Ok(result)
     })
     .await
     .map_err(|error| error.to_string())?

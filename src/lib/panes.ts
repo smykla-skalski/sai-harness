@@ -3,6 +3,7 @@ import type { AgentId, AgentThread } from './acp';
 export type Pane =
   | { id: string; agent: AgentId | null; thread: AgentThread | null; kind?: undefined }
   | { id: string; agent: null; thread: null; kind: 'terminal' }
+  | { id: string; agent: null; thread: null; kind: 'agent-terminal'; terminalId: string }
   | {
       id: string;
       agent: null;
@@ -136,16 +137,24 @@ export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane 
   const next = { ...pane, ...update };
   return next.kind === 'terminal'
     ? { id: next.id, kind: 'terminal', agent: null, thread: null }
-    : next.kind === 'browser'
+    : next.kind === 'agent-terminal'
       ? {
           id: next.id,
-          kind: 'browser',
+          kind: 'agent-terminal',
           agent: null,
           thread: null,
-          tabs: next.tabs ?? [],
-          activeTab: next.activeTab ?? '',
+          terminalId: next.terminalId ?? '',
         }
-      : { id: next.id, agent: next.agent ?? null, thread: next.thread ?? null };
+      : next.kind === 'browser'
+        ? {
+            id: next.id,
+            kind: 'browser',
+            agent: null,
+            thread: null,
+            tabs: next.tabs ?? [],
+            activeTab: next.activeTab ?? '',
+          }
+        : { id: next.id, agent: next.agent ?? null, thread: next.thread ?? null };
 }
 
 export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane {
@@ -155,7 +164,8 @@ export function migratePaneDirectory(pane: Pane, from: string, to: string): Pane
       first: migratePaneDirectory(pane.first, from, to),
       second: migratePaneDirectory(pane.second, from, to),
     };
-  if (pane.kind === 'terminal' || pane.kind === 'browser') return pane;
+  if (pane.kind === 'terminal' || pane.kind === 'agent-terminal' || pane.kind === 'browser')
+    return pane;
   return pane.thread?.directory === from
     ? { ...pane, thread: { ...pane.thread, directory: to } }
     : pane;
@@ -193,6 +203,14 @@ function validPane(value: unknown, ids: Set<string>): value is Pane {
     );
   if (pane.kind === 'terminal')
     return pane.id !== 'main' && pane.agent === null && pane.thread === null;
+  if (pane.kind === 'agent-terminal')
+    return (
+      pane.id !== 'main' &&
+      pane.agent === null &&
+      pane.thread === null &&
+      typeof pane.terminalId === 'string' &&
+      pane.terminalId.length > 0
+    );
   if (pane.kind === 'browser')
     return (
       pane.id !== 'main' &&

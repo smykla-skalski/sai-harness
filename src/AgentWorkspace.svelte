@@ -28,6 +28,7 @@
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
     onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
+    onterminal: (id: string) => void;
   }
   let {
     agent,
@@ -41,6 +42,7 @@
     oncreated,
     onactivity,
     onstatus,
+    onterminal,
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -417,6 +419,9 @@
         <details class="agent-tool tool-card">
           <summary>{entry.title} · {entry.status}</summary
           >{#if entry.content}<pre>{entry.content}</pre>{/if}
+          {#each entry.terminalIds as terminalId (terminalId)}
+            <button onclick={() => onterminal(terminalId)}>Open terminal</button>
+          {/each}
         </details>
       {:else}
         <article

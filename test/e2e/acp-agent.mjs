@@ -3,6 +3,9 @@ import process from 'node:process';
 
 const sessions = new Map();
 const permissions = new Map();
+const terminalRequests = new Map();
+let terminalSupport = false;
+let nextTerminalRequest = 3000;
 const agent = process.argv[2];
 let authenticated = agent !== 'codex';
 let nextSession = 0;
@@ -14,6 +17,60 @@ function send(message) {
 
 function update(sessionId, value) {
   send({ method: 'session/update', params: { sessionId, update: value } });
+}
+
+function terminalRequest(method, params, callback) {
+  const id = ++nextTerminalRequest;
+  terminalRequests.set(id, callback);
+  send({ id, method, params });
+}
+
+function runTerminal(sessionId, text, promptId) {
+  if (!terminalSupport) {
+    send({ id: promptId, error: { code: -1, message: 'Client terminal support missing' } });
+    return;
+  }
+  const stop = text.includes('stop');
+  const script = stop
+    ? 'echo started; sleep 30; echo done'
+    : 'echo started; sleep 1; echo finished; exit 7';
+  terminalRequest(
+    'terminal/create',
+    { sessionId, command: '/bin/sh', args: ['-c', script], outputByteLimit: 1024 },
+    ({ result, error }) => {
+      if (error) {
+        send({ id: promptId, error });
+        return;
+      }
+      const terminalId = result.terminalId;
+      update(sessionId, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `terminal-${terminalId}`,
+        title: 'Run terminal fixture',
+        status: 'in_progress',
+        content: [{ type: 'terminal', terminalId }],
+      });
+      terminalRequest('terminal/wait_for_exit', { sessionId, terminalId }, ({ result: status }) => {
+        terminalRequest('terminal/output', { sessionId, terminalId }, ({ result: output }) => {
+          update(sessionId, {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: `terminal-${terminalId}`,
+            status: 'completed',
+            content: [
+              { type: 'terminal', terminalId },
+              {
+                type: 'content',
+                content: { type: 'text', text: `${output.output}\n${JSON.stringify(status)}` },
+              },
+            ],
+          });
+          terminalRequest('terminal/release', { sessionId, terminalId }, () => {
+            send({ id: promptId, result: { stopReason: 'end_turn' } });
+          });
+        });
+      });
+    },
+  );
 }
 
 function configOptions() {
@@ -47,7 +104,13 @@ function requestPermission(sessionId, text, promptId) {
 
 for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
+  if (!message.method && terminalRequests.has(message.id)) {
+    terminalRequests.get(message.id)(message);
+    terminalRequests.delete(message.id);
+    continue;
+  }
   if (message.method === 'initialize') {
+    terminalSupport = message.params.clientCapabilities?.terminal === true;
     send({
       id: message.id,
       result: {
@@ -85,6 +148,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
     const text = message.params.prompt[0].text;
+    if (text.startsWith('Terminal:')) {
+      runTerminal(sessionId, text, message.id);
+      continue;
+    }
     const user = { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } };
     sessions.get(sessionId).push(user);
     update(sessionId, user);

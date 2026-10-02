@@ -14,6 +14,8 @@
     "allow-delete-worktree",
     "allow-create-pull-request",
     "allow-open-pull-request",
+    "allow-acp-terminal-snapshot",
+    "allow-acp-terminal-stop",
     "allow-local-plugin-version",
     "allow-acp-agents",
     "allow-acp-connect",

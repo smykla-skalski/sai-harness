@@ -31,6 +31,7 @@ export interface AgentTool {
   title: string;
   status: string;
   content: string;
+  terminalIds: string[];
 }
 
 export type AgentEntry = AgentMessage | AgentTool;
@@ -150,12 +151,30 @@ export function updateEntries(
           .filter(Boolean)
           .join('\n')
       : (existing?.content ?? '');
+    const terminalIds = Array.isArray(update.content)
+      ? [
+          ...new Set([
+            ...(existing?.terminalIds ?? []),
+            ...update.content.flatMap((item): string[] =>
+              item &&
+              typeof item === 'object' &&
+              'type' in item &&
+              item.type === 'terminal' &&
+              'terminalId' in item &&
+              typeof item.terminalId === 'string'
+                ? [item.terminalId]
+                : [],
+            ),
+          ]),
+        ]
+      : (existing?.terminalIds ?? []);
     const next: AgentTool = {
       id,
       type: 'tool',
       title: typeof update.title === 'string' ? update.title : (existing?.title ?? 'Tool call'),
       status: typeof update.status === 'string' ? update.status : (existing?.status ?? 'pending'),
       content,
+      terminalIds,
     };
     return existing
       ? entries.map((entry) => (entry.type === 'tool' && entry.id === id ? next : entry))

@@ -119,6 +119,16 @@
   );
   let savedCommands = $state<SavedCommand[]>(loadSavedCommands(getSetting('sai-saved-commands')));
   let pendingCommands = $state<Record<string, string>>({});
+  let agentTerminals = $state<
+    {
+      agent: string;
+      sessionId: string;
+      terminalId: string;
+      command: string;
+      directory: string;
+    }[]
+  >([]);
+  let agentTerminalsDialog: HTMLDialogElement;
   let commandsDialog: HTMLDialogElement;
   let commandName = $state('');
   let commandText = $state('');
@@ -653,6 +663,7 @@
 
   onMount(() => {
     let unlistenAgentEvents: (() => void) | undefined;
+    let unlistenAgentTerminals: (() => void) | undefined;
     let unlistenNotificationClick: (() => void) | undefined;
     setTheme(dark);
     let stopSettingsRequest: (() => void) | undefined;
@@ -703,6 +714,9 @@
     }
     if (isTauri()) void detectAgents();
     if (isTauri()) {
+      void listen<(typeof agentTerminals)[number]>('acp-terminal-created', ({ payload }) => {
+        agentTerminals = [...agentTerminals, payload];
+      }).then((unlisten) => (unlistenAgentTerminals = unlisten));
       void listen<AgentEvent>('acp-event', ({ payload }) => handleAgentEvent(payload)).then(
         (unlisten) => {
           if (disposed) unlisten();
@@ -755,6 +769,7 @@
       clearInterval(healthTimer);
       clearInterval(diffPollTimer);
       unlistenAgentEvents?.();
+      unlistenAgentTerminals?.();
       unlistenNotificationClick?.();
       cancelAnimationFrame(followFrame);
       for (const pending of messageTimers.values()) clearTimeout(pending.timer);
@@ -1609,6 +1624,13 @@
     splitFocusedPane('row', 'terminal', command.command);
   }
 
+  async function openAgentTerminal(id: string) {
+    const terminal = agentTerminals.find((item) => item.terminalId === id);
+    agentTerminalsDialog?.close();
+    if (terminal && terminal.directory !== directory) await loadProject(terminal.directory, false);
+    splitFocusedPane('row', 'agent-terminal', undefined, id);
+  }
+
   async function choosePaletteEntry(entry: PaletteEntry | null) {
     if (entry?.kind === 'command' && entry.command) {
       runSavedCommand(entry.command);
@@ -1874,14 +1896,15 @@
 
   function splitFocusedPane(
     direction: 'row' | 'column',
-    kind?: 'terminal' | 'browser',
+    kind?: 'terminal' | 'browser' | 'agent-terminal',
     command?: string,
+    agentTerminalId?: string,
   ) {
     if (!directory) return;
     let target = focusedPane;
     let splitDirection = direction;
     let span = paneSpan(target, splitDirection);
-    if (command && (!span || span < 2 * minPaneSpan + 8)) {
+    if ((command || agentTerminalId) && (!span || span < 2 * minPaneSpan + 8)) {
       const options = leaves(paneLayout).flatMap((pane) =>
         (['row', 'column'] as const).map((axis) => ({
           id: pane.id,
@@ -1901,9 +1924,10 @@
       }
     }
     if (!span || span < 2 * minPaneSpan + 8) {
-      error = command
-        ? 'Enlarge a pane before running this command.'
-        : 'Enlarge the focused pane before splitting it again.';
+      error =
+        command || agentTerminalId
+          ? 'Enlarge a pane before running this command.'
+          : 'Enlarge the focused pane before splitting it again.';
       return;
     }
     ++recentJumpGeneration;
@@ -1920,9 +1944,11 @@
             tabs: [browserTab],
             activeTab: browserTab.id,
           })
-        : kind
-          ? updatePane(layout, created.id, { kind })
-          : layout,
+        : kind === 'agent-terminal'
+          ? updatePane(layout, created.id, { kind, terminalId: agentTerminalId })
+          : kind
+            ? updatePane(layout, created.id, { kind })
+            : layout,
     );
     focusPaneForTyping(created.id);
   }
@@ -3444,6 +3470,12 @@
         >
       </div>
       <div class="topbar-actions">
+        {#if agentTerminals.length}<Button
+            variant="ghost"
+            size="sm"
+            onclick={() => agentTerminalsDialog.showModal()}
+            >Agent terminals ({agentTerminals.length})</Button
+          >{/if}
         <Button variant="ghost" size="sm" onclick={openCommandsDialog}>Commands</Button>
         {#if sessionID || acpAgent || focusedPane !== 'main'}<Button
             variant="ghost"
@@ -3504,6 +3536,7 @@
                 oncreated={createAgentThread}
                 onactivity={saveAgentThread}
                 onstatus={updateAgentThreadStatus}
+                onterminal={(id) => void openAgentTerminal(id)}
               />
             {/key}
           {:else}
@@ -3791,6 +3824,7 @@
         delete next[id];
         pendingCommands = next;
       }}
+      onagentterminal={(id) => void openAgentTerminal(id)}
     />
   </div>
 </div>
@@ -3841,6 +3875,25 @@
         >
           Start a thread in the current project
         </button>
+      </div>
+    {/each}
+  </div>
+</dialog>
+<dialog class="commands-dialog" bind:this={agentTerminalsDialog} aria-label="Agent terminals">
+  <div class="commands-header">
+    <h2>Agent terminals</h2>
+    <button aria-label="Close agent terminals" onclick={() => agentTerminalsDialog.close()}
+      >×</button
+    >
+  </div>
+  <div class="commands-list">
+    {#each agentTerminals as terminal (terminal.terminalId)}
+      <div class="commands-row">
+        <span
+          ><strong>{terminal.command}</strong><small>{terminal.agent} · {terminal.directory}</small
+          ></span
+        >
+        <button onclick={() => void openAgentTerminal(terminal.terminalId)}>Open</button>
       </div>
     {/each}
   </div>
