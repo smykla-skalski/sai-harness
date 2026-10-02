@@ -55,10 +55,10 @@ describe('ACP agent threads', () => {
     await expect($('.option-menu button[role="option"]:nth-child(2)')).toBeDisplayed();
     await browser.keys('ArrowDown');
     await browser.keys('Enter');
-    await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Model:"]')).toHaveText(
       expect.stringContaining('Fast model'),
     );
-    await $('.option-trigger[aria-label="Choose model"]').click();
+    await $('.option-trigger[aria-label^="Model:"]').click();
     await $('.option-menu button[role="option"]:nth-child(3)').click();
     await $('.agent-composer textarea').setValue('Keep this draft');
     await $('.agent-actions button').click();
@@ -67,14 +67,14 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).not.toHaveText(
       expect.stringContaining('Keep this draft'),
     );
-    await $('.option-trigger[aria-label="Choose model"]').click();
+    await $('.option-trigger[aria-label^="Model:"]').click();
     await $('.option-menu button[role="option"]:nth-child(2)').click();
     await $('.agent-composer textarea').setValue('');
     await $('.agent-composer textarea').setValue('/effort');
     await browser.keys('Enter');
     await browser.keys('ArrowDown');
     await browser.keys('Enter');
-    await expect($('.option-trigger[aria-label="Choose effort"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Effort:"]')).toHaveText(
       expect.stringContaining('High'),
     );
     await $('.agent-composer textarea').setValue('Do a small thing');
@@ -84,7 +84,7 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Do a small thing'),
     );
-    await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Model:"]')).toHaveText(
       expect.stringContaining('Fast model'),
     );
     writeFileSync(join(repository, 'agent-change.txt'), 'Changed by agent\n');
@@ -105,10 +105,10 @@ describe('ACP agent threads', () => {
     await $('.agent-actions button').click();
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Done: Try Codex'));
-    await $('.agent-picker-controls .option-trigger[aria-label="Choose effort"]').click();
+    await $('.agent-picker-controls .option-trigger[aria-label^="Effort:"]').click();
     await browser.keys('ArrowDown');
     await browser.keys('Enter');
-    await expect($('.option-trigger[aria-label="Choose effort"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Effort:"]')).toHaveText(
       expect.stringContaining('High'),
     );
 
@@ -125,10 +125,10 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Do a small thing'),
     );
-    await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Model:"]')).toHaveText(
       expect.stringContaining('Fast model'),
     );
-    await expect($('.option-trigger[aria-label="Choose effort"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Effort:"]')).toHaveText(
       expect.stringContaining('High'),
     );
     await browser.refresh();
@@ -147,10 +147,10 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Do a small thing'),
     );
-    await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Model:"]')).toHaveText(
       expect.stringContaining('Fast model'),
     );
-    await expect($('.option-trigger[aria-label="Choose effort"]')).toHaveText(
+    await expect($('.option-trigger[aria-label^="Effort:"]')).toHaveText(
       expect.stringContaining('High'),
     );
 

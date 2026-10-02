@@ -684,41 +684,42 @@
               ></span
             >{/each}
         </div>{/if}
-      <div class="agent-picker-controls">
-        <OptionPicker
-          label="Model"
-          value={modelOption?.currentValue}
-          options={modelOption?.options ?? []}
-          open={pickerOpen === 'model'}
-          disabled={!ready || isBusy || !directory}
-          loading={!!creatingSession}
-          onopen={() => void openPicker('model')}
-          onclose={() => (pickerOpen = null)}
-          onchoose={(value) => {
-            if (modelOption) void setConfig(modelOption.id, value);
-          }}
-        />
-        <OptionPicker
-          label="Effort"
-          value={effortOption?.currentValue}
-          options={effortOption?.options ?? []}
-          open={pickerOpen === 'effort'}
-          disabled={!ready || isBusy || !directory}
-          loading={!!creatingSession}
-          onopen={() => void openPicker('effort')}
-          onclose={() => (pickerOpen = null)}
-          onchoose={(value) => {
-            if (effortOption) void setConfig(effortOption.id, value);
-          }}
-        />
-      </div>
-      <div class="agent-actions composer-bottom">
-        <span>Enter to send · Shift+Enter for newline</span>
-        <Button
-          onclick={() => void send()}
-          disabled={!ready || isBusy || !draft.trim()}
-          loading={isBusy}>Send ↗</Button
-        >
+      <div class="agent-composer-footer">
+        <div class="agent-picker-controls">
+          <OptionPicker
+            label="Model"
+            value={modelOption?.currentValue}
+            options={modelOption?.options ?? []}
+            open={pickerOpen === 'model'}
+            disabled={!ready || isBusy || !directory}
+            loading={!!creatingSession}
+            onopen={() => void openPicker('model')}
+            onclose={() => (pickerOpen = null)}
+            onchoose={(value) => {
+              if (modelOption) void setConfig(modelOption.id, value);
+            }}
+          />
+          <OptionPicker
+            label="Effort"
+            value={effortOption?.currentValue}
+            options={effortOption?.options ?? []}
+            open={pickerOpen === 'effort'}
+            disabled={!ready || isBusy || !directory}
+            loading={!!creatingSession}
+            onopen={() => void openPicker('effort')}
+            onclose={() => (pickerOpen = null)}
+            onchoose={(value) => {
+              if (effortOption) void setConfig(effortOption.id, value);
+            }}
+          />
+        </div>
+        <div class="agent-actions">
+          <Button
+            onclick={() => void send()}
+            disabled={!ready || isBusy || !draft.trim()}
+            loading={isBusy}>Send ↗</Button
+          >
+        </div>
       </div>
     </div>
   </div>
@@ -759,7 +760,17 @@
   .agent-picker-controls {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+  .agent-composer-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 9px 9px 10px;
   }
   .agent-header .agent-config {
     display: flex;
@@ -822,18 +833,16 @@
     width: 100%;
     resize: vertical;
     box-sizing: border-box;
-    background: var(--surface-1);
+    background: transparent;
     color: inherit;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px;
+    border: 0;
+    outline: 0;
+    padding: 15px 16px;
     font: inherit;
   }
   .agent-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-top: 8px;
   }
   .agent-error {
     color: var(--danger, #d66);

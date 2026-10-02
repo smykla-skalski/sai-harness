@@ -1465,30 +1465,6 @@ button:disabled {
   border-radius: 12px;
   background: var(--sui-surface);
 }
-.work-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 16px 0;
-}
-.work-controls label {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 160px;
-  color: var(--sui-muted);
-  font-size: 11px;
-}
-.work-controls select {
-  width: 100%;
-  min-width: 0;
-  padding: 7px;
-  border: 1px solid var(--shell-divider);
-  border-radius: 6px;
-  color: var(--sui-foreground);
-  background: var(--sui-surface);
-}
 .composer:focus-within {
   border-color: var(--sui-primary);
 }
@@ -1509,11 +1485,20 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 9px 9px 16px;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 9px 9px 10px;
 }
-.composer-bottom span {
-  color: var(--sui-muted);
-  font-size: 11px;
+.composer-controls,
+.composer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.composer-actions {
+  margin-left: auto;
 }
 .notice {
   margin: 0 0 10px;
@@ -1723,19 +1708,9 @@ button:disabled {
   .composer-wrap {
     padding: 8px;
   }
-  .work-controls {
-    gap: 4px;
-    padding: 8px 10px 0;
-  }
-  .work-controls label {
-    min-width: 100px;
-  }
   .composer textarea {
     min-height: 56px;
     padding: 8px 12px;
-  }
-  .composer-bottom span {
-    display: none;
   }
 }
 @media (max-width: 360px) {

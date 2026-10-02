@@ -223,10 +223,10 @@
   let selectedAgentID = $state('');
   let selectedModelKey = $state('');
   let selectedVariant = $state('');
-  let modelPickerOpen = $state<'model' | 'effort' | null>(null);
+  let composerPickerOpen = $state<'agent' | 'model' | 'effort' | null>(null);
 
   $effect(() => {
-    if (running || sending || switching) modelPickerOpen = null;
+    if (running || sending || switching) composerPickerOpen = null;
   });
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
@@ -623,6 +623,9 @@
   }
 
   let chosenModel = $derived(setup?.models.find((model) => modelKey(model) === selectedModelKey));
+  let agentChoices = $derived(
+    (setup?.agents ?? []).map((agent) => ({ value: agent.id, name: agent.name })),
+  );
   let modelChoices = $derived(
     (setup?.models ?? []).map((model) => ({
       value: modelKey(model),
@@ -3403,7 +3406,7 @@
     if (command === '/model' || command === '/effort') {
       if (!inputReady || running || sending || switching) return;
       draft = '';
-      modelPickerOpen = command.slice(1) as 'model' | 'effort';
+      composerPickerOpen = command.slice(1) as 'model' | 'effort';
       return;
     }
     if (!client || !canSend) return;
@@ -4144,39 +4147,6 @@
                   onchanged={() => refreshPrompts()}
                 />
                 <div class="composer">
-                  <div class="work-controls">
-                    <label
-                      >Agent<select
-                        value={selectedAgentID}
-                        disabled={running || sending || switching || !workReady}
-                        onchange={(event) => void chooseAgent(event.currentTarget.value)}
-                      >
-                        {#each setup?.agents ?? [] as agent (agent.id)}<option value={agent.id}
-                            >{agent.name}</option
-                          >{/each}
-                      </select></label
-                    >
-                    <OptionPicker
-                      label="Model"
-                      value={selectedModelKey}
-                      options={modelChoices}
-                      open={modelPickerOpen === 'model'}
-                      disabled={running || sending || switching || !workReady}
-                      onopen={() => (modelPickerOpen = 'model')}
-                      onclose={() => (modelPickerOpen = null)}
-                      onchoose={(value) => void chooseModel(value)}
-                    />
-                    <OptionPicker
-                      label="Effort"
-                      value={selectedVariant}
-                      options={effortChoices}
-                      open={modelPickerOpen === 'effort'}
-                      disabled={running || sending || switching || !workReady}
-                      onopen={() => (modelPickerOpen = 'effort')}
-                      onclose={() => (modelPickerOpen = null)}
-                      onchoose={(value) => void chooseEffort(value)}
-                    />
-                  </div>
                   {#if attachedFiles.length}<div class="attachments">
                       {#each attachedFiles as path (path)}<span
                           >{path.split(/[\\/]/).at(-1)}<button
@@ -4196,12 +4166,47 @@
                       : 'OpenCode needs a connected model…'}
                     disabled={!inputReady || sending}></textarea>
                   <div class="composer-bottom">
-                    <span>Enter to send · Shift+Enter for newline</span><Button
-                      variant="ghost"
-                      size="sm"
-                      onclick={attachFiles}
-                      disabled={!inputReady || sending}>Attach files</Button
-                    ><Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
+                    <div class="composer-controls">
+                      <OptionPicker
+                        label="Agent"
+                        value={selectedAgentID}
+                        options={agentChoices}
+                        open={composerPickerOpen === 'agent'}
+                        disabled={running || sending || switching || !workReady}
+                        onopen={() => (composerPickerOpen = 'agent')}
+                        onclose={() => (composerPickerOpen = null)}
+                        onchoose={(value) => void chooseAgent(value)}
+                      />
+                      <OptionPicker
+                        label="Model"
+                        value={selectedModelKey}
+                        options={modelChoices}
+                        open={composerPickerOpen === 'model'}
+                        disabled={running || sending || switching || !workReady}
+                        onopen={() => (composerPickerOpen = 'model')}
+                        onclose={() => (composerPickerOpen = null)}
+                        onchoose={(value) => void chooseModel(value)}
+                      />
+                      <OptionPicker
+                        label="Effort"
+                        value={selectedVariant}
+                        options={effortChoices}
+                        open={composerPickerOpen === 'effort'}
+                        disabled={running || sending || switching || !workReady}
+                        onopen={() => (composerPickerOpen = 'effort')}
+                        onclose={() => (composerPickerOpen = null)}
+                        onchoose={(value) => void chooseEffort(value)}
+                      />
+                    </div>
+                    <div class="composer-actions">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onclick={attachFiles}
+                        disabled={!inputReady || sending}>Attach files</Button
+                      >
+                      <Button onclick={send} disabled={!canSend} loading={sending}>Send ↗</Button>
+                    </div>
                   </div>
                 </div>
               </div>{/if}

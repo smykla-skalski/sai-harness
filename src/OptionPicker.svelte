@@ -32,7 +32,9 @@
   let menu = $state<HTMLDivElement>();
   let trigger = $state<HTMLButtonElement>();
   let active = $state(0);
+  let menuPosition = $state({ left: 0, top: 0, width: 210, maxHeight: 260 });
   const optionId = `picker-${crypto.randomUUID()}`;
+  const selected = $derived(options.find((option) => option.value === value)?.name ?? value);
 
   $effect(() => {
     if (!open) return;
@@ -40,8 +42,47 @@
       0,
       options.findIndex((option) => option.value === value),
     );
-    void tick().then(() => menu?.focus());
+    void tick().then(() => {
+      positionMenu();
+      menu?.focus();
+      return undefined;
+    });
   });
+
+  $effect(() => {
+    if (!open) return;
+    const observer = new ResizeObserver(positionMenu);
+    if (trigger) observer.observe(trigger);
+    const pane = trigger?.closest('.pane-leaf');
+    if (pane) observer.observe(pane);
+    window.addEventListener('resize', positionMenu);
+    window.addEventListener('scroll', positionMenu, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', positionMenu);
+      window.removeEventListener('scroll', positionMenu, true);
+    };
+  });
+
+  function positionMenu() {
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const pane = trigger.closest('.pane-leaf')?.getBoundingClientRect();
+    const leftEdge = Math.max(0, pane?.left ?? 0);
+    const rightEdge = Math.min(window.innerWidth, pane?.right ?? window.innerWidth);
+    const width = Math.max(0, Math.min(210, rightEdge - leftEdge - 16));
+    const above = Math.max(0, rect.top - 8);
+    const below = Math.max(0, window.innerHeight - rect.bottom - 8);
+    const menuHeight = Math.min(menu?.scrollHeight ?? 260, 260);
+    const openAbove = above >= menuHeight || above >= below;
+    const maxHeight = Math.min(260, openAbove ? above : below);
+    menuPosition = {
+      left: Math.max(leftEdge + 8, Math.min(rect.left, rightEdge - width - 8)),
+      top: openAbove ? rect.top - Math.min(menuHeight, maxHeight) - 5 : rect.bottom + 5,
+      width,
+      maxHeight,
+    };
+  }
 
   $effect(() => {
     if (open && menu) {
@@ -78,21 +119,39 @@
     type="button"
     class="option-trigger"
     bind:this={trigger}
-    aria-label={`Choose ${label.toLowerCase()}`}
+    aria-label={`${label}: ${selected || 'Choose'}`}
     aria-expanded={open}
     {disabled}
     onclick={onopen}
-    >{label}: {options.find((option) => option.value === value)?.name ?? (value || 'Choose')} ▾</button
+    title={`${label}: ${selected || 'Choose'}`}
   >
+    <span class="option-value">{selected || label}</span>
+    <svg class="option-chevron" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="m2.5 4.5 3.5 3.5 3.5-3.5"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  </button>
   {#if open}
     <div
       class="option-menu"
+      style:left={`${menuPosition.left}px`}
+      style:top={`${menuPosition.top}px`}
+      style:width={`${menuPosition.width}px`}
+      style:max-height={`${menuPosition.maxHeight}px`}
       role="listbox"
       aria-label={label}
       aria-activedescendant={options[active] ? `${optionId}-${active}` : undefined}
       tabindex="-1"
       bind:this={menu}
       onkeydown={keydown}
+      onfocusout={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onclose();
+      }}
     >
       {#if loading}
         <div class="option-empty">Loading…</div>
@@ -104,6 +163,7 @@
             id={`${optionId}-${index}`}
             type="button"
             role="option"
+            tabindex="-1"
             aria-selected={option.value === value}
             class:active={index === active}
             onclick={() => {
@@ -120,21 +180,43 @@
 <style>
   .option-picker {
     position: relative;
+    min-width: 0;
   }
   .option-trigger {
-    padding: 5px 8px;
-    border: 1px solid var(--border, var(--shell-divider));
-    border-radius: 6px;
-    color: inherit;
-    background: var(--sui-surface);
-    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 190px;
+    min-height: 30px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: 5px;
+    color: var(--sui-muted);
+    background: transparent;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .option-trigger:hover:not(:disabled),
+  .option-trigger[aria-expanded='true'] {
+    color: var(--sui-foreground);
+    background: var(--shell-selected);
+  }
+  .option-trigger:disabled {
+    opacity: 0.5;
+  }
+  .option-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .option-chevron {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    opacity: 0.8;
   }
   .option-menu {
-    position: absolute;
-    bottom: calc(100% + 5px);
-    left: 0;
+    position: fixed;
     z-index: 20;
-    min-width: 210px;
     max-height: 260px;
     overflow: auto;
     padding: 4px;
