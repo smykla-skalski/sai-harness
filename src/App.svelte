@@ -415,7 +415,7 @@
       '.side-view:not(.inactive) :is(.panel-scroll, .diff-files, .patch-scroll, .history-list)',
     );
     viewStates.set(viewKey(), {
-      draft,
+      draft: draftWithoutPickedImages(draft),
       scrollTop: chatVisible ? (chatScroll?.scrollTop ?? 0) : (previous?.scrollTop ?? 0),
       follow: chatVisible ? followChat : (previous?.follow ?? true),
       messageCount: chatVisible ? messages.length : (previous?.messageCount ?? 0),
@@ -2142,12 +2142,21 @@
   }
 
   function clearDraftAttachments() {
+    draft = draftWithoutPickedImages(draft);
     for (const path of attachedFiles) {
       if (inFlightCaptures.has(path)) continue;
       if (!pickedImageText.delete(path)) continue;
       void invoke('browser_remove_capture', { path });
     }
     attachedFiles = [];
+  }
+
+  function draftWithoutPickedImages(value: string) {
+    for (const path of attachedFiles) {
+      const pickedText = pickedImageText.get(path);
+      if (pickedText) value = value.replace(pickedText, '').trim();
+    }
+    return value;
   }
 
   function markPickConsumed(id: string) {
@@ -3221,8 +3230,8 @@
       if (current === selection && path === directory) await refreshSession(id);
     } catch (cause) {
       if (current === selection && path === directory) {
-        draft = text;
-        attachedFiles = files;
+        draft = [text, draft.trim()].filter(Boolean).join('\n\n');
+        attachedFiles = [...files, ...attachedFiles.filter((file) => !files.includes(file))];
         running = false;
         error = describe(cause);
       } else {

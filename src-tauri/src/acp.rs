@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
@@ -748,21 +748,43 @@ pub async fn acp_load_session(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn acp_prompt(
-    app: AppHandle,
-    manager: State<'_, AgentManager>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpPromptParams {
     agent: String,
     session_id: String,
     text: String,
     turn_id: String,
     image_paths: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn acp_prompt(
+    app: AppHandle,
+    manager: State<'_, AgentManager>,
+    captures: State<'_, crate::browser::CaptureStore>,
+    params: AcpPromptParams,
 ) -> Result<Value, String> {
+    let AcpPromptParams {
+        agent,
+        session_id,
+        text,
+        turn_id,
+        image_paths,
+    } = params;
+    if image_paths.len() > 4 {
+        return Err("Too many prompt images".to_string());
+    }
     let mut content = vec![json!({"type":"text","text":text})];
+    let mut total_image_bytes = 0;
     for path in image_paths {
-        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        let bytes = captures.read(&path)?;
         if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Err("Invalid prompt image".to_string());
+        }
+        total_image_bytes += bytes.len();
+        if total_image_bytes > 8 * 1024 * 1024 {
+            return Err("Prompt images exceed 8 MiB".to_string());
         }
         content.push(json!({
             "type":"image",

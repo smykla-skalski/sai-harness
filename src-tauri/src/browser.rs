@@ -1,6 +1,7 @@
 use crate::browser_agent::BrowserManager;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -87,9 +88,23 @@ pub struct PickedElement {
     label: String,
     url: String,
     html: String,
-    styles: serde_json::Value,
-    rect: serde_json::Value,
-    viewport: serde_json::Value,
+    styles: HashMap<String, String>,
+    rect: PickRect,
+    viewport: PickViewport,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PickRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PickViewport {
+    width: f64,
+    height: f64,
 }
 
 pub struct CaptureStore {
@@ -109,6 +124,21 @@ impl Default for CaptureStore {
 impl Drop for CaptureStore {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+impl CaptureStore {
+    pub fn read(&self, path: &str) -> Result<Vec<u8>, String> {
+        let path = PathBuf::from(path);
+        if !self
+            .files
+            .lock()
+            .map_err(|error| error.to_string())?
+            .contains(&path)
+        {
+            return Err("Unknown browser capture".to_string());
+        }
+        std::fs::read(path).map_err(|error| error.to_string())
     }
 }
 
@@ -456,6 +486,39 @@ pub fn browser_pick_selection(
     if selection.html.len() > 12000 {
         return Err("Browser selection is too large".to_string());
     }
+    if selection.url.len() > 4096
+        || selection.styles.len() > 32
+        || selection
+            .styles
+            .iter()
+            .any(|(key, value)| key.len() > 64 || value.len() > 2048)
+        || selection
+            .styles
+            .iter()
+            .map(|(key, value)| key.len() + value.len())
+            .sum::<usize>()
+            > 16384
+    {
+        return Err("Browser selection styles are too large".to_string());
+    }
+    let bounds = [
+        selection.rect.x,
+        selection.rect.y,
+        selection.rect.width,
+        selection.rect.height,
+        selection.viewport.width,
+        selection.viewport.height,
+    ];
+    if bounds
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > 100_000.0)
+        || selection.rect.width <= 0.0
+        || selection.rect.height <= 0.0
+        || selection.viewport.width <= 0.0
+        || selection.viewport.height <= 0.0
+    {
+        return Err("Invalid browser selection bounds".to_string());
+    }
     manager.take_picker(&selection.label)?;
     webview
         .emit_to("main", "browser:picked", selection)
@@ -547,4 +610,30 @@ pub fn browser_route(webview: tauri::Webview, mode: String, url: String) -> Resu
             },
         )
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::{CaptureStore, PickedElement};
+
+    #[test]
+    fn rejects_untracked_local_image() {
+        let path = std::env::temp_dir().join(format!("sail-test-{}.png", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\n").unwrap();
+        let store = CaptureStore::default();
+        assert!(store.read(path.to_str().unwrap()).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_malformed_selection_geometry() {
+        let selection = serde_json::json!({
+            "url":"http://localhost:3000",
+            "html":"<button>Pick</button>",
+            "styles":{"display":"block"},
+            "rect":{"x":"invalid","y":0,"width":20,"height":20},
+            "viewport":{"width":800,"height":600}
+        });
+        assert!(serde_json::from_value::<PickedElement>(selection).is_err());
+    }
 }

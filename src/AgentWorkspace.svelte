@@ -260,6 +260,7 @@
     let activityThread = thread;
     let finalStatus: ThreadStatus = 'done';
     let notifyOnDone = true;
+    let keepImages = false;
     busy = true;
     if (activityThread) onstatus(activityThread, 'working');
     stopRequested = false;
@@ -287,7 +288,11 @@
       const id = activeSessionId;
       if (stopRequested) {
         notifyOnDone = false;
-        draft = text;
+        if (current === generation) {
+          draft = [text, draft.trim()].filter(Boolean).join('\n\n');
+          images = [...sentImages, ...images];
+          keepImages = true;
+        }
         return;
       }
       entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
@@ -298,9 +303,6 @@
         text,
         turnId,
         sentImages.map((item) => item.imagePath),
-      );
-      sentImages.forEach(
-        (image) => void invoke('browser_remove_capture', { path: image.imagePath }),
       );
       if (result.stopReason === 'cancelled' || stopRequested) notifyOnDone = false;
       if (current === generation && stopRequested)
@@ -315,11 +317,16 @@
       if (current === generation) {
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
-        if (!activeSessionId) draft = text;
-        images = sentImages;
+        draft = [text, draft.trim()].filter(Boolean).join('\n\n');
+        images = [...sentImages, ...images];
+        keepImages = true;
         if (stopRequested) markTools('status unconfirmed', ['stopping']);
       }
     } finally {
+      if (!keepImages)
+        sentImages.forEach(
+          (image) => void invoke('browser_remove_capture', { path: image.imagePath }),
+        );
       if (activeTurnId === turnId) activeTurnId = null;
       if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
