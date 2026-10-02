@@ -67,11 +67,8 @@ describe('agent coordination bridge', () => {
         encoding: 'utf8',
       });
     } catch (error) {
-      const failure = error as Error & { stdout?: string; stderr?: string };
-      throw new Error(
-        `MCP process failed: ${failure.message}; stdout=${failure.stdout}; stderr=${failure.stderr}`,
-        { cause: error },
-      );
+      console.error('MCP process failed', { error, command: config.command, args: config.args });
+      throw error;
     }
     const result = JSON.parse(response.trim());
     expect(result.result.isError).toBe(true);
