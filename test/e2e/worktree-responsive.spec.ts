@@ -157,8 +157,9 @@ describe('responsive worktree operations', () => {
     const path = await browser.execute(() => localStorage.getItem('sai-directory'));
     if (!path) throw new Error('No selected worktree');
     await $(`.project-worktree-select[title="${path}"]`).click({ button: 'right' });
-    await browser.execute(() => sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes'));
     await $('[aria-label="Delete worktree retry-create"]').click();
+    await expect($('.confirmation-dialog')).toBeDisplayed();
+    await $('.confirmation-dialog .confirmation-primary').click();
     await expect($(`.project-worktree-select[title="${path}"]`)).toBeDisabled();
     await expect($('.project-worktree-status')).toHaveText('Archiving');
     await expect($(`.project-worktree-select[title="${path}"]`)).not.toExist();
