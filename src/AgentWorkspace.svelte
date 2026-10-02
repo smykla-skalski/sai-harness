@@ -93,8 +93,7 @@
   const visibleEntries = $derived(entries.slice(-visibleCount));
   const displayEntries = $derived(groupAgentEntries(visibleEntries));
   const toolFailed = (tool: AgentTool) => /fail|error|reject/i.test(tool.status);
-  const toolRunning = (tool: AgentTool) =>
-    !/^(completed|failed|error|cancelled)$/i.test(tool.status);
+  const toolRunning = (tool: AgentTool) => /^(pending|in_progress|stopping)$/i.test(tool.status);
   let replaying = false;
   let replayEntries: AgentEntry[] = [];
   let pendingUpdates: Record<string, unknown>[] = [];
@@ -761,28 +760,43 @@
         >Show earlier messages ({entries.length - visibleCount} remaining)</button
       >
     {/if}
-    {#snippet toolRow(tool: AgentTool)}
-      <details
-        class="agent-tool-item"
-        ontoggle={(event) => {
-          expandedTools = event.currentTarget.open
-            ? [...expandedTools, tool.id]
-            : expandedTools.filter((id) => id !== tool.id);
-        }}
-      >
-        <summary>
-          <span class="agent-tool-status" class:failed={toolFailed(tool)}
-            >{tool.status.replaceAll('_', ' ')}</span
-          >
-          <span>{tool.title}</span>
-        </summary>
-        {#if expandedTools.includes(tool.id)}
+    {#snippet toolRow(tool: AgentTool, revealed: boolean)}
+      {#if revealed}
+        <div class="agent-tool-item">
+          <div class="agent-tool-heading">
+            <span class="agent-tool-status" class:failed={toolFailed(tool)}
+              >{tool.status.replaceAll('_', ' ')}</span
+            >
+            <span>{tool.title}</span>
+          </div>
           {#if tool.content}<pre>{tool.content}</pre>{/if}
           {#each tool.terminalIds as terminalId (terminalId)}
             <button onclick={() => onterminal(terminalId)}>Open terminal</button>
           {/each}
-        {/if}
-      </details>
+        </div>
+      {:else}
+        <details
+          class="agent-tool-item"
+          ontoggle={(event) => {
+            expandedTools = event.currentTarget.open
+              ? [...expandedTools, tool.id]
+              : expandedTools.filter((id) => id !== tool.id);
+          }}
+        >
+          <summary>
+            <span class="agent-tool-status" class:failed={toolFailed(tool)}
+              >{tool.status.replaceAll('_', ' ')}</span
+            >
+            <span>{tool.title}</span>
+          </summary>
+          {#if expandedTools.includes(tool.id)}
+            {#if tool.content}<pre>{tool.content}</pre>{/if}
+            {#each tool.terminalIds as terminalId (terminalId)}
+              <button onclick={() => onterminal(terminalId)}>Open terminal</button>
+            {/each}
+          {/if}
+        </details>
+      {/if}
     {/snippet}
     {#each displayEntries as entry (entry.id)}
       {#if entry.type === 'tool-group'}
@@ -798,7 +812,7 @@
               </summary>
               <div class="agent-tool-list">
                 {#each entry.tools.slice(0, -1) as tool (tool.id)}
-                  {@render toolRow(tool)}
+                  {@render toolRow(tool, true)}
                 {/each}
               </div>
             </details>
@@ -807,7 +821,7 @@
           {#if latest}
             <div class="agent-tool-current" class:running={toolRunning(latest)}>
               <span class="agent-tool-current-label">Latest action</span>
-              {@render toolRow(latest)}
+              {@render toolRow(latest, false)}
             </div>
           {/if}
         {:else}
@@ -823,7 +837,7 @@
             </summary>
             <div class="agent-tool-list">
               {#each entry.tools as tool (tool.id)}
-                {@render toolRow(tool)}
+                {@render toolRow(tool, true)}
               {/each}
             </div>
           </details>
@@ -1059,7 +1073,8 @@
     white-space: nowrap;
   }
   .agent-tool-group > summary,
-  .agent-tool-item > summary {
+  .agent-tool-item > summary,
+  .agent-tool-heading {
     cursor: pointer;
   }
   .agent-tool-group > summary::before,

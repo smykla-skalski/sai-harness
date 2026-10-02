@@ -287,7 +287,6 @@ describe('ACP agent threads', () => {
     );
     await group.$('summary').click();
     await expect(group.$$('.agent-tool-item')).toBeElementsArrayOfSize(2);
-    await group.$('.agent-tool-item summary').click();
     await expect(group).toHaveText(expect.stringContaining('Could not read the first path.'));
   });
 });
