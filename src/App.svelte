@@ -5051,9 +5051,7 @@
                         class:waiting={attention.status === 'waiting'}
                         class:failed={attention.status === 'failed'}
                       ></span>{thread.agent}
-                      · {attention.status === 'waiting'
-                        ? 'Waiting for input'
-                        : attention.status}
+                      · {attention.status === 'waiting' ? 'Waiting for input' : attention.status}
                       {#if agentUsage[threadKey(thread)]?.context !== undefined}
                         · Context {agentUsage[threadKey(thread)].context}%
                       {/if}</small
