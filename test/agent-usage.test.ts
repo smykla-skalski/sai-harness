@@ -95,8 +95,8 @@ void test('Claude quota appears only for reported utilization', () => {
 
 void test('OpenCode context uses latest assistant tokens and its model', () => {
   const model = { id: 'a', providerID: 'p', limit: { context: 1000, output: 100 } };
-  assert.equal(openCodeContextUsage([assistant(200)], [model]), 40);
-  assert.equal(openCodeContextUsage([assistant(200), assistant(100)], [model]), 30);
+  assert.equal(openCodeContextUsage([assistant(200)], [model]), 42);
+  assert.equal(openCodeContextUsage([assistant(200), assistant(100)], [model]), 32);
   assert.equal(openCodeContextUsage([assistant(200), assistant(100, 'b')], [model]), undefined);
   assert.equal(
     openCodeContextUsage([assistant(200), assistant(100, 'a', false)], [model]),

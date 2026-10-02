@@ -239,6 +239,7 @@
   let agentThreads = $state<AgentThread[]>(savedAgentThreads);
   let agentUsage = $state<Record<string, AgentUsage>>({});
   let agentRates = $state<Record<string, RateWindow[]>>({});
+  let replayingAgentSessions = $state<Record<string, boolean>>({});
   $effect(() => {
     const resets = Object.values(agentRates)
       .flat()
@@ -3575,7 +3576,8 @@
       const sessionId = params?.sessionId;
       if (typeof sessionId === 'string') {
         const usage = acpUsage(params?.update);
-        if (usage?.rates) agentRates = { ...agentRates, [event.agent]: usage.rates };
+        if (usage?.rates && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
+          agentRates = { ...agentRates, [event.agent]: usage.rates };
         for (const thread of agentThreads.filter(
           (item) => item.agent === event.agent && item.sessionId === sessionId,
         )) {
@@ -3613,6 +3615,15 @@
       ))
         updateAgentThreadStatus(thread, 'failed');
     }
+  }
+
+  function setAgentReplay(agent: AgentId, sessionId: string | null, replaying: boolean) {
+    if (!sessionId) return;
+    const key = JSON.stringify([agent, sessionId]);
+    const next = { ...replayingAgentSessions };
+    if (replaying) next[key] = true;
+    else delete next[key];
+    replayingAgentSessions = next;
   }
 
   async function selectSession(id: string, automatic = false) {
@@ -5051,6 +5062,7 @@
                 oncreated={createAgentThread}
                 onactivity={saveAgentThread}
                 onstatus={updateAgentThreadStatus}
+                onreplaychange={setAgentReplay}
                 onterminal={(id) => void openAgentTerminal(id)}
               />
             {/key}
@@ -5383,6 +5395,7 @@
       onpromptfocused={() => (promptFocusPane = null)}
       running={(thread) => !!(thread && runningAgentThreads[agentThreadKey(thread)])}
       onstatus={updateAgentThreadStatus}
+      onreplaychange={setAgentReplay}
       onchanges={(id) => {
         changesPanes = changesPanes.filter((item) => item !== id);
       }}

@@ -79,7 +79,7 @@ export function openCodeContextUsage(
   );
   const tokens = latest.tokens;
   return percentage(
-    tokens.input + tokens.cache.read + tokens.cache.write + tokens.output,
+    tokens.input + tokens.cache.read + tokens.cache.write + tokens.output + tokens.reasoning,
     model?.limit.context,
   );
 }

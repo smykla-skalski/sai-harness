@@ -46,6 +46,7 @@
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
     onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
+    onreplaychange?: (agent: AgentId, sessionId: string | null, replaying: boolean) => void;
     onterminal: (id: string) => void;
     onentrieschange?: (entries: AgentEntry[], sessionId: string | null, ready: boolean) => void;
     ephemeral?: boolean;
@@ -71,6 +72,7 @@
     oncreated,
     onactivity,
     onstatus,
+    onreplaychange,
     onterminal,
     onentrieschange,
     ephemeral = false,
@@ -100,6 +102,11 @@
   let expandedTools = $state<string[]>([]);
   const visibleEntries = $derived(entries.slice(-visibleCount));
   let replaying = false;
+  function setReplaying(value: boolean) {
+    if (replaying === value) return;
+    replaying = value;
+    onreplaychange?.(agent, activeSessionId, value);
+  }
   let replayEntries: AgentEntry[] = [];
   let pendingUpdates: Record<string, unknown>[] = [];
   let updateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -246,7 +253,7 @@
     if (!id || historyLoading || !ready || isBusy) return;
     const current = generation;
     historyLoading = true;
-    replaying = true;
+    setReplaying(true);
     replayEntries = [];
     try {
       await acp.load(agent, directory, id);
@@ -260,7 +267,7 @@
       if (current === generation) error = describe(cause);
     } finally {
       if (current === generation) {
-        replaying = false;
+        setReplaying(false);
         replayEntries = [];
         historyLoading = false;
       }
@@ -310,7 +317,7 @@
     clearTimeout(updateTimer);
     updateTimer = undefined;
     pendingUpdates = [];
-    replaying = false;
+    setReplaying(false);
     replayEntries = [];
     permissions = [];
     selectedThreadId = id;
@@ -352,7 +359,7 @@
           typeof sessionCapabilities === 'object' &&
           'resume' in sessionCapabilities;
         if (!canResume) {
-          replaying = true;
+          setReplaying(true);
           replayEntries = [];
         }
         const session = canResume
@@ -360,7 +367,7 @@
           : await acp.load(agent, directory, id);
         if (current === generation && !canResume) {
           entries = replayEntries;
-          replaying = false;
+          setReplaying(false);
           replayEntries = [];
           historyLoaded = true;
           rememberTranscript();
@@ -374,7 +381,7 @@
     } catch (cause) {
       if (current === generation) {
         error = describe(cause);
-        replaying = false;
+        setReplaying(false);
         authNeeded = /auth|login|sign.?in/i.test(error);
         if (thread) onstatus(thread, 'failed');
       }
@@ -479,6 +486,7 @@
       });
     return () => {
       disposed = true;
+      setReplaying(false);
       rememberTranscript();
       generation++;
       clearTimeout(updateTimer);

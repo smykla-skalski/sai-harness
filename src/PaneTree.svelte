@@ -69,6 +69,7 @@
     onpromptfocused: () => void;
     running: (thread: AgentThread | null) => boolean;
     onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
+    onreplaychange: (agent: string, sessionId: string | null, replaying: boolean) => void;
     onchanges: (id: string) => void;
     pendingCommands: Record<string, string>;
     oncommandstarted: (id: string) => void;
@@ -114,6 +115,7 @@
     onpromptfocused,
     running,
     onstatus,
+    onreplaychange,
     onchanges,
     pendingCommands,
     oncommandstarted,
@@ -250,6 +252,7 @@
       {onpromptfocused}
       {running}
       {onstatus}
+      {onreplaychange}
       {onchanges}
       {pendingCommands}
       {oncommandstarted}
@@ -322,6 +325,7 @@
       {onpromptfocused}
       {running}
       {onstatus}
+      {onreplaychange}
       {onchanges}
       {pendingCommands}
       {oncommandstarted}
@@ -450,6 +454,7 @@
               oncreated={(thread) => oncreated(pane.id, thread)}
               {onactivity}
               {onstatus}
+              {onreplaychange}
               onterminal={onagentterminal}
             />
             {#if changesPanes.includes(pane.id)}
