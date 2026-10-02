@@ -52,6 +52,7 @@
     ) => void;
     changesPanes: string[];
     main: Snippet;
+    mainPicker: boolean;
     canClose: boolean;
     onfocus: (id: string) => void;
     onclose: (id: string) => void;
@@ -100,6 +101,7 @@
     onentries,
     changesPanes,
     main,
+    mainPicker,
     canClose,
     onfocus,
     onclose,
@@ -339,6 +341,7 @@
       {onentries}
       {changesPanes}
       {main}
+      {mainPicker}
       {canClose}
       {onfocus}
       {onclose}
@@ -414,6 +417,7 @@
       {onentries}
       {changesPanes}
       {main}
+      {mainPicker}
       {canClose}
       {onfocus}
       {onclose}
@@ -454,14 +458,14 @@
       class:focused={focused === pane.id}
       data-pane-id={pane.id}
       aria-keyshortcuts="Meta+Alt+ArrowLeft Meta+Alt+ArrowRight Meta+Alt+ArrowUp Meta+Alt+ArrowDown F6 Shift+F6"
-      aria-label={pane.id === 'main'
-        ? 'Main pane'
-        : pane.kind === 'terminal'
-          ? 'Terminal pane'
-          : pane.kind === 'agent-terminal'
-            ? 'Agent terminal pane'
-            : pane.kind === 'browser'
-              ? 'Browser pane'
+      aria-label={pane.kind === 'terminal'
+        ? 'Terminal pane'
+        : pane.kind === 'agent-terminal'
+          ? 'Agent terminal pane'
+          : pane.kind === 'browser'
+            ? 'Browser pane'
+            : pane.id === 'main'
+              ? 'Main pane'
               : pane.agent
                 ? `${pane.agent} pane`
                 : 'Empty pane'}
@@ -470,7 +474,7 @@
       onpointerdown={(event) => {
         onfocus(pane.id);
         if (
-          pane.id === 'main' ||
+          (pane.id === 'main' && !mainPicker) ||
           pane.agent ||
           pane.kind === 'terminal' ||
           pane.kind === 'agent-terminal' ||
@@ -504,13 +508,19 @@
         </div>
       {:else if canClose}
         <div class="pane-heading">
-          <span>Main thread</span><small>⌘⌥ + arrow to switch</small><button
+          <span
+            >{pane.kind === 'terminal'
+              ? 'Terminal'
+              : pane.kind === 'browser'
+                ? 'Browser'
+                : 'Main thread'}</span
+          ><small>⌘⌥ + arrow to switch</small><button
             aria-label="Close main pane"
             onclick={() => onclose(pane.id)}>×</button
           >
         </div>
       {/if}
-      {#if pane.id === 'main'}
+      {#if pane.id === 'main' && !mainPicker && !pane.kind}
         {@render main()}
       {:else if pane.kind === 'terminal'}
         {#key `${directory}:${pane.id}`}

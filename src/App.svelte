@@ -449,6 +449,22 @@
   let editingSessionID = $state<string | null>(null);
   let editedTitle = $state('');
   let sessionID = $state<string | null>(null);
+  let mainPickerDirectory = $state<string | null>(null);
+  let showMainPicker = $derived.by(() => {
+    const panes = leaves(paneLayout);
+    const main = panes[0];
+    return (
+      mainPickerDirectory === directory &&
+      panes.length === 1 &&
+      main?.id === 'main' &&
+      !main.agent &&
+      !main.thread &&
+      !main.kind &&
+      !acpAgent &&
+      !sessionID &&
+      !newSessionMode
+    );
+  });
   $effect(() => {
     const side = sideChat;
     if (!side) return;
@@ -2268,6 +2284,33 @@
     }
   }
 
+  async function selectDefaultWorktree(path: string) {
+    if (path !== directory) await loadProject(path);
+    if (path !== directory) return;
+    const panes = leaves(paneLayout);
+    const main = panes[0];
+    if (
+      panes.length !== 1 ||
+      main?.id !== 'main' ||
+      main.agent ||
+      main.thread ||
+      main.kind ||
+      acpAgent ||
+      sessionID ||
+      newSessionMode
+    )
+      return;
+    mainPickerDirectory = path;
+    focusPaneForTyping('main');
+    await tick();
+    setTimeout(() => {
+      if (directory === path && mainPickerDirectory === path)
+        document
+          .querySelector<HTMLButtonElement>('[data-pane-id="main"] [data-pane-picker]')
+          ?.focus();
+    }, 0);
+  }
+
   async function refreshSetup(path = directory) {
     if (!client || !path) return false;
     setupLoading = true;
@@ -3340,7 +3383,11 @@
       closeFocusedPane(focusedPane);
       return;
     }
-    if (acpAgent || !leaves(paneLayout).some((pane) => pane.id === 'main')) {
+    if (
+      acpAgent ||
+      !leaves(paneLayout).some((pane) => pane.id === 'main') ||
+      leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)
+    ) {
       if (leaves(paneLayout)[0]?.kind === 'terminal')
         void invoke('terminal_close', { id: leaves(paneLayout)[0].id });
       acpAgent = null;
@@ -3388,6 +3435,11 @@
   }
 
   function choosePaneAgent(id: string, agent: AgentId) {
+    if (id === 'main') {
+      if (agent === 'opencode') newWork();
+      else openAgent(agent);
+      return;
+    }
     invalidatePaneSelection(id);
     const batch = pendingAgentBatches[id];
     if (batch) completeAgentBatch(batch.id, 'Agent pane changed before comments were sent.');
@@ -5180,6 +5232,7 @@
         onselect={(path) => {
           if (path !== directory) void loadProject(path);
         }}
+        onselectdefault={(path) => void selectDefaultWorktree(path)}
         onaddrepository={(groupID) => void chooseProject(groupID)}
         onaddgroup={addProjectGroup}
         onrenamegroup={renameProjectGroup}
@@ -5850,7 +5903,10 @@
         (agentEntrySnapshots = { ...agentEntrySnapshots, [id]: { entries, sessionId, ready } })}
       {changesPanes}
       main={mainPaneContent}
-      canClose={leaves(paneLayout).length > 1 || !!sideChat}
+      mainPicker={showMainPicker}
+      canClose={leaves(paneLayout).length > 1 ||
+        !!sideChat ||
+        leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)}
       onfocus={focusPane}
       onclose={closeFocusedPane}
       onratio={updatePaneRatio}

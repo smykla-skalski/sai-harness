@@ -27,6 +27,7 @@
     onworktreecreated: (repository: string, path: string) => void;
     onworktreecancelled: (repository: string) => void;
     onselect: (path: string) => void;
+    onselectdefault: (path: string) => void;
     onaddrepository: (groupID: string | null) => void;
     onaddgroup: (name: string) => void;
     onrenamegroup: (id: string, name: string) => void;
@@ -74,6 +75,7 @@
     onworktreecreated,
     onworktreecancelled,
     onselect,
+    onselectdefault,
     onaddrepository,
     onaddgroup,
     onrenamegroup,
@@ -705,7 +707,7 @@
                     aria-current={path === directory ? 'page' : undefined}
                     title={path}
                     {disabled}
-                    onclick={() => onselect(path)}
+                    onclick={() => onselectdefault(path)}
                     ><span aria-hidden="true">⑂</span><span>Default</span></button
                   >
                 </div>
@@ -808,7 +810,7 @@
                   aria-current={path === directory ? 'page' : undefined}
                   title={path}
                   {disabled}
-                  onclick={() => onselect(path)}
+                  onclick={() => onselectdefault(path)}
                   ><span aria-hidden="true">⑂</span><span>Default</span></button
                 >
               </div>
