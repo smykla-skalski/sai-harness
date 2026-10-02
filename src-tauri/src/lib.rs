@@ -1171,7 +1171,17 @@ fn create_worktree(
 }
 
 #[tauri::command]
-fn delete_worktree(
+async fn delete_worktree(
+    repository: String,
+    worktree: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || remove_worktree(repository, worktree, force))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn remove_worktree(
     repository: String,
     worktree: String,
     force: Option<bool>,
