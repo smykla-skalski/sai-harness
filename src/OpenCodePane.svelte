@@ -2,11 +2,11 @@
   import { onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { invoke } from '@tauri-apps/api/core';
-  import { open } from '@tauri-apps/plugin-dialog';
   import { Badge, Button } from '@smykla-skalski/sui';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import Markdown from './Markdown.svelte';
   import OptionPicker from './OptionPicker.svelte';
+  import PathPicker from './PathPicker.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import type { AgentThread } from './lib/acp';
   import type { BrowserAttachment } from './lib/browser-pick';
@@ -71,6 +71,7 @@
   let sending = $state(false);
   let running = $state(false);
   let pickerOpen = $state<'agent' | 'model' | 'effort' | null>(null);
+  let filePickerOpen = $state(false);
   let selectedAgent = $state('');
   let selectedModel = $state('');
   let selectedVariant = $state('');
@@ -468,10 +469,8 @@
     }
   }
 
-  async function attachFiles() {
-    const selected = await open({ multiple: true, directory: false, title: 'Attach files' });
-    const paths = typeof selected === 'string' ? [selected] : (selected ?? []);
-    files = [...new Set([...files, ...paths])];
+  function attachFiles() {
+    filePickerOpen = true;
   }
 
   function removeFile(path: string) {
@@ -607,6 +606,7 @@
         bind:value={draft}
         onkeydown={keydown}
         rows="3"
+        wrap="soft"
         placeholder="Message OpenCode…"
         disabled={!inputReady || busy || loading}></textarea>
       {#if files.length}<div class="attachments">
@@ -663,6 +663,17 @@
     </div>
   </div>
 </div>
+<PathPicker
+  open={filePickerOpen}
+  title="Attach files"
+  mode="files"
+  initialPath={directory}
+  onselect={(paths) => {
+    files = [...new Set([...files, ...paths])];
+    filePickerOpen = false;
+  }}
+  oncancel={() => (filePickerOpen = false)}
+/>
 
 <style>
   .opencode-pane {
