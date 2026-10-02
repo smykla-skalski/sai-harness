@@ -1254,6 +1254,7 @@ pub fn run() {
             browser::browser_save_capture,
             browser::browser_remove_capture,
             browser_agent::browser_access_reply,
+            browser_agent::agent_coordination_reply,
             browser_agent::browser_project_access,
             browser_agent::browser_mcp_config,
             browser_agent::browser_pane_register,

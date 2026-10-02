@@ -20,6 +20,11 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { BrowserAttachment } from './lib/browser-pick';
+  import {
+    coordinationMessageForText,
+    coordinationPrompt,
+    type CoordinationMessage,
+  } from './lib/coordination';
 
   interface Props {
     agent: AgentId;
@@ -43,6 +48,7 @@
     onentrieschange?: (entries: AgentEntry[], sessionId: string | null, ready: boolean) => void;
     ephemeral?: boolean;
     seedContext?: string;
+    coordinationMessages?: CoordinationMessage[];
   }
   let {
     agent,
@@ -66,6 +72,7 @@
     onentrieschange,
     ephemeral = false,
     seedContext = '',
+    coordinationMessages = [],
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -767,6 +774,10 @@
           {/if}
         </details>
       {:else}
+        {@const attribution =
+          entry.type === 'user'
+            ? coordinationMessageForText(entry.text, coordinationMessages)
+            : undefined}
         <article
           class:user-message={entry.type === 'user'}
           class:assistant-message={entry.type !== 'user'}
@@ -778,20 +789,37 @@
             class:user-avatar={entry.type === 'user'}
             class="avatar"
           >
-            {entry.type === 'user' ? 'You' : 'S.'}
+            {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
           </div>
           <div class="message-body">
             <div class="message-author">
               {entry.type === 'user'
-                ? 'You'
+                ? attribution
+                  ? `From ${attribution.sender}`
+                  : 'You'
                 : entry.type === 'thought'
                   ? `${name} · thinking`
                   : name}
             </div>
-            <Markdown source={entry.text} />
+            <Markdown
+              source={attribution
+                ? entry.text.replace(coordinationPrompt(attribution), attribution.text)
+                : entry.text}
+            />
           </div>
         </article>
       {/if}
+    {/each}
+    {#each coordinationMessages.filter((message) => !entries.some((entry) => entry.type === 'user' && entry.text.includes(coordinationPrompt(message)))) as message (message.id)}
+      <article class="agent-message message user-message">
+        <div class="avatar user-avatar">↗</div>
+        <div class="message-body">
+          <div class="message-author">
+            From {message.sender}{message.delivered ? '' : ' · queued'}
+          </div>
+          <Markdown source={message.text} />
+        </div>
+      </article>
     {/each}
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
