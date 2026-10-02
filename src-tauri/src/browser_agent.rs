@@ -469,14 +469,17 @@ impl BrowserManager {
             "worktree_create" | "worktree_list" | "worktree_info" | "agent_spawn"
             | "agent_status" | "agent_wait" | "agent_result" | "terminal_list"
             | "terminal_read" | "terminal_wait" => "sai-agent-worktrees-enabled",
+            "terminal_create" | "terminal_write" | "terminal_stop" => "sai-agent-terminals-enabled",
             "worktree_status" => "sai-agent-status-enabled",
             "project_threads" => "sai-agent-thread-list-enabled",
             "thread_message" => "sai-agent-messages-enabled",
             _ => return Err("Unknown coordination action.".into()),
         };
-        if crate::settings::load_settings(app.clone())?
-            .get(setting)
-            .is_some_and(|value| value == "false")
+        let settings = crate::settings::load_settings(app.clone())?;
+        let enabled = settings.get(setting).is_some_and(|value| value == "true");
+        if (setting == "sai-agent-terminals-enabled" && !enabled)
+            || (setting != "sai-agent-terminals-enabled"
+                && settings.get(setting).is_some_and(|value| value == "false"))
         {
             return Err("This agent coordination action is disabled in settings.".into());
         }
@@ -526,6 +529,13 @@ impl BrowserManager {
         let client = clients
             .get(&request.token)
             .ok_or("Unknown browser tool connection.")?;
+        if matches!(
+            request.name.as_str(),
+            "terminal_create" | "terminal_write" | "terminal_stop"
+        ) && (client.session.is_none() || client.agent.is_none())
+        {
+            return Err("Terminal control requires a session-bound agent connection.".into());
+        }
         let directory = client.directory.clone();
         let source_agent = client.agent.clone();
         let session = request.session_id.as_deref();
@@ -548,6 +558,9 @@ impl BrowserManager {
                 | "terminal_list"
                 | "terminal_read"
                 | "terminal_wait"
+                | "terminal_create"
+                | "terminal_write"
+                | "terminal_stop"
                 | "worktree_status"
                 | "project_threads"
                 | "thread_message"
@@ -1049,9 +1062,10 @@ pub fn browser_project_access(
 pub fn browser_mcp_config(
     manager: State<'_, BrowserManager>,
     directory: String,
+    session: Option<String>,
     agent: Option<String>,
 ) -> Result<McpConfig, String> {
-    manager.config(&directory, None, agent.as_deref())
+    manager.config(&directory, session.as_deref(), agent.as_deref())
 }
 
 #[tauri::command]
@@ -1113,6 +1127,21 @@ const TOOLS: &[(&str, &str, &str)] = &[
     (
         "terminal_wait",
         "Wait up to 30 seconds for new terminal output or exit, then read a bounded page from a byte cursor.",
+        "terminalId",
+    ),
+    (
+        "terminal_create",
+        "Run a command in a new Sail terminal in this source worktree. Requires the user's terminal execution setting. Returns an owned terminal ID.",
+        "command",
+    ),
+    (
+        "terminal_write",
+        "Send bounded UTF-8 input to a terminal created by this source session.",
+        "terminalId,data",
+    ),
+    (
+        "terminal_stop",
+        "Stop a terminal created by this source session. Read or wait for its actual exit code.",
         "terminalId",
     ),
     (

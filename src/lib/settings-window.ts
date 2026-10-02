@@ -21,6 +21,7 @@ export type SettingsSnapshot = {
   notificationsEnabled: boolean;
   notificationSound: boolean;
   agentWorktreesEnabled: boolean;
+  agentTerminalsEnabled: boolean;
   agentStatusEnabled: boolean;
   agentThreadListEnabled: boolean;
   agentMessagesEnabled: boolean;
@@ -32,6 +33,7 @@ export type SettingsAction =
   | { type: 'notifications'; value: boolean }
   | { type: 'notification-sound'; value: boolean }
   | { type: 'agent-worktrees'; value: boolean }
+  | { type: 'agent-terminals'; value: boolean }
   | { type: 'agent-status'; value: boolean }
   | { type: 'agent-thread-list'; value: boolean }
   | { type: 'agent-messages'; value: boolean }

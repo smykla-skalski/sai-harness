@@ -3443,6 +3443,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-wdio",
  "tauri-plugin-wdio-webdriver",
+ "tokio",
  "uuid",
  "webkit2gtk",
  "webview2-com 0.39.1",

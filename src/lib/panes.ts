@@ -2,7 +2,7 @@ import type { AgentId, AgentThread } from './acp';
 
 export type Pane =
   | { id: string; agent: AgentId | null; thread: AgentThread | null; kind?: undefined }
-  | { id: string; agent: null; thread: null; kind: 'terminal' }
+  | { id: string; agent: null; thread: null; kind: 'terminal'; owner?: string }
   | { id: string; agent: null; thread: null; kind: 'agent-terminal'; terminalId: string }
   | {
       id: string;
@@ -148,7 +148,13 @@ export function updatePane(pane: Pane, id: string, update: Partial<Pane>): Pane 
   if (pane.id !== id) return pane;
   const next = { ...pane, ...update };
   return next.kind === 'terminal'
-    ? { id: next.id, kind: 'terminal', agent: null, thread: null }
+    ? {
+        id: next.id,
+        kind: 'terminal',
+        agent: null,
+        thread: null,
+        ...(next.owner ? { owner: next.owner } : {}),
+      }
     : next.kind === 'agent-terminal'
       ? {
           id: next.id,

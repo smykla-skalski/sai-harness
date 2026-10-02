@@ -5,6 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tauri::ipc::Channel;
@@ -55,10 +56,12 @@ struct TerminalOutput {
 
 struct TerminalSession {
     inspect_id: String,
+    owner: Option<String>,
     directory: PathBuf,
     process_id: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
+    write_busy: AtomicBool,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     output: Arc<Mutex<TerminalOutput>>,
     changed: Arc<Condvar>,
@@ -425,6 +428,7 @@ fn spawn(
     script: Option<&str>,
     id: String,
     app: AppHandle,
+    owner: Option<String>,
 ) -> Result<TerminalSession, String> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -522,10 +526,12 @@ fn spawn(
     });
     Ok(TerminalSession {
         inspect_id: Uuid::new_v4().to_string(),
+        owner,
         directory,
         process_id,
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
+        write_busy: AtomicBool::new(false),
         killer: Mutex::new(killer),
         output,
         changed,
@@ -538,7 +544,7 @@ pub fn terminal_open(
     manager: State<'_, TerminalManager>,
     params: TerminalOpenParams,
     on_event: Channel<TerminalEvent>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let TerminalOpenParams {
         id,
         directory,
@@ -557,6 +563,7 @@ pub fn terminal_open(
         return Err("Terminal directory is not a folder".to_string());
     }
     let mut sessions = manager.0.lock().map_err(|error| error.to_string())?;
+    let existed = sessions.contains_key(&id);
     let session = if let Some(session) = sessions.get(&id) {
         if session.directory != directory {
             return Err("Terminal belongs to another directory".to_string());
@@ -576,6 +583,7 @@ pub fn terminal_open(
             command.as_deref(),
             id.clone(),
             app,
+            None,
         )?);
         sessions.insert(id, Arc::clone(&session));
         session
@@ -608,7 +616,7 @@ pub fn terminal_open(
             .send(TerminalEvent::Exit { code })
             .map_err(|error| error.to_string())?;
     }
-    Ok(())
+    Ok(existed)
 }
 
 #[tauri::command]
@@ -656,6 +664,116 @@ pub fn terminal_write(
         .write_all(&data)
         .map_err(|error| error.to_string());
     result
+}
+
+fn owned_session(
+    manager: &TerminalManager,
+    terminal_id: &str,
+    owner: &str,
+) -> Result<Arc<TerminalSession>, String> {
+    let session = manager
+        .0
+        .lock()
+        .map_err(|error| error.to_string())?
+        .values()
+        .find(|session| format!("shell:{}", session.inspect_id) == terminal_id)
+        .cloned()
+        .ok_or("Unknown terminal ID.")?;
+    if session.owner.as_deref() != Some(owner) {
+        return Err("Terminal belongs to another source session.".into());
+    }
+    Ok(session)
+}
+
+#[tauri::command]
+pub fn terminal_owned_create(
+    app: AppHandle,
+    manager: State<'_, TerminalManager>,
+    pane_id: String,
+    directory: String,
+    command: String,
+    owner: String,
+) -> Result<String, String> {
+    if pane_id.is_empty() || owner.is_empty() || command.trim().is_empty() {
+        return Err("Terminal pane, owner, and command are required.".into());
+    }
+    if command.len() > 16_384 {
+        return Err("Terminal command exceeds 16384 bytes.".into());
+    }
+    let directory = Path::new(&directory)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !directory.is_dir() {
+        return Err("Terminal directory is not a folder.".into());
+    }
+    let mut sessions = manager.0.lock().map_err(|error| error.to_string())?;
+    if sessions.contains_key(&pane_id) {
+        return Err("Terminal pane already exists.".into());
+    }
+    let session = Arc::new(spawn(
+        directory,
+        80,
+        24,
+        Some(&command),
+        pane_id.clone(),
+        app,
+        Some(owner),
+    )?);
+    let terminal_id = format!("shell:{}", session.inspect_id);
+    sessions.insert(pane_id, session);
+    Ok(terminal_id)
+}
+
+#[tauri::command]
+pub async fn terminal_owned_write(
+    manager: State<'_, TerminalManager>,
+    terminal_id: String,
+    owner: String,
+    data: String,
+) -> Result<(), String> {
+    if data.is_empty() || data.len() > 16_384 {
+        return Err("Terminal input must be 1–16384 bytes.".into());
+    }
+    let session = owned_session(&manager, &terminal_id, &owner)?;
+    if session
+        .output
+        .lock()
+        .map_err(|error| error.to_string())?
+        .exit_code
+        .is_some()
+    {
+        return Err("Terminal has exited.".into());
+    }
+    if session.write_busy.swap(true, Ordering::AcqRel) {
+        return Err("Terminal input is already in progress.".into());
+    }
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        let result = session
+            .writer
+            .lock()
+            .map_err(|error| error.to_string())
+            .and_then(|mut writer| {
+                writer
+                    .write_all(data.as_bytes())
+                    .map_err(|error| error.to_string())
+            });
+        session.write_busy.store(false, Ordering::Release);
+        result
+    });
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .map_err(|_| "Terminal input timed out.".to_string())?
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn terminal_owned_stop(
+    manager: State<'_, TerminalManager>,
+    terminal_id: String,
+    owner: String,
+) -> Result<(), String> {
+    owned_session(&manager, &terminal_id, &owner)?.stop();
+    Ok(())
 }
 
 #[tauri::command]
