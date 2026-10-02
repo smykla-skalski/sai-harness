@@ -77,7 +77,13 @@ describe('empty default worktree', () => {
     await expect($('.pane-picker')).toBeDisplayed();
     await $('.pane-picker-choices .pane-picker-choice:nth-child(2)').click();
     await expect($('.pane-leaf[aria-label="Browser pane"] .browser-pane')).toBeDisplayed();
+    await $('.agent-launches button').click();
+    await expect($('.agent-conversation')).toBeDisplayed();
+    await expect($('.browser-pane')).not.toExist();
     await $('[aria-label="Close main pane"]').click();
     await expect($('.pane-picker')).toBeDisplayed();
+    await $('[data-pane-picker]').click();
+    await $('[data-agent-choice]:not([disabled])').click();
+    await expect($('.agent-conversation')).toBeDisplayed();
   });
 });

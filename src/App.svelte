@@ -1324,7 +1324,7 @@
     await reconcileNativeActivity();
     if (current !== selection || path !== directory) return;
     if (!workReady && !planReady) return;
-    if (acpAgent) return;
+    if (acpAgent || leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)) return;
     const saved = getSetting(`sai-session:${path}`);
     const initial = sessionID ?? saved ?? sessions[0]?.id;
     if (initial && initial !== sessionID) {
@@ -2274,6 +2274,7 @@
     try {
       await refreshSessions();
       if (current !== selection) return;
+      if (leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)) return;
       const saved = getSetting(`sai-session:${directory}`);
       if (saved && (await restoreSession(saved))) return;
       if (current !== selection) return;
@@ -2572,13 +2573,13 @@
     }
     if (focusedPane !== 'main' && leaves(paneLayout).some((leaf) => leaf.id === focusedPane)) {
       invalidatePaneSelection(focusedPane);
-      savePaneLayout(updatePane(paneLayout, focusedPane, { agent, thread }));
+      savePaneLayout(updatePane(paneLayout, focusedPane, { agent, thread, kind: undefined }));
       return;
     }
     saveViewState();
     acpAgent = agent;
     acpThread = thread;
-    savePaneLayout(updatePane(paneLayout, 'main', { agent, thread }));
+    savePaneLayout(updatePane(paneLayout, 'main', { agent, thread, kind: undefined }));
     mobileView = 'chat';
   }
 
@@ -3091,7 +3092,9 @@
         `${directory}\0main\0acp:${thread.agent}:${thread.sessionId}`,
       );
       acpThread = thread;
-      savePaneLayout(updatePane(paneLayout, 'main', { agent: thread.agent, thread }));
+      savePaneLayout(
+        updatePane(paneLayout, 'main', { agent: thread.agent, thread, kind: undefined }),
+      );
     }
   }
 
@@ -3603,7 +3606,9 @@
       acpAgent === thread.agent
     ) {
       acpThread = null;
-      savePaneLayout(updatePane(paneLayout, 'main', { agent: thread.agent, thread: null }));
+      savePaneLayout(
+        updatePane(paneLayout, 'main', { agent: thread.agent, thread: null, kind: undefined }),
+      );
     }
     void tick().then(() => forgetRecentTranscript(thread));
   }
@@ -3941,7 +3946,9 @@
       focusMainPane();
       acpAgent = null;
       acpThread = null;
-      savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
+      savePaneLayout(
+        updatePane(paneLayout, 'main', { agent: null, thread: null, kind: undefined }),
+      );
       if (sessionID || newSessionMode || draft !== (viewStates.get(viewKey())?.draft ?? ''))
         saveViewState();
     }
@@ -4047,7 +4054,7 @@
     focusMainPane();
     acpAgent = null;
     acpThread = null;
-    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
+    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null, kind: undefined }));
     saveViewState();
     ++selection;
     sessionID = null;
@@ -4082,7 +4089,7 @@
     focusMainPane();
     acpAgent = null;
     acpThread = null;
-    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null }));
+    savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null, kind: undefined }));
     const path = directory;
     const current = selection;
     try {
