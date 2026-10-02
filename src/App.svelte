@@ -681,6 +681,7 @@
   let pendingPermissions = $state<PermissionRequest[]>([]);
   let pendingForms = $state<FormInfo[]>([]);
   let selection = 0;
+  const paneSelections = new SvelteMap<string, number>();
   let projectLoadGeneration = 0;
   let sessionRefresh = 0;
   let promptRefresh = 0;
@@ -3764,15 +3765,23 @@
         saveViewState();
     }
     const current = targetPane ? selection : ++selection;
+    const paneSelection = targetPane ? (paneSelections.get(targetPane.id) ?? 0) + 1 : undefined;
+    if (targetPane && paneSelection !== undefined) paneSelections.set(targetPane.id, paneSelection);
     const path = directory;
+    const valid = () =>
+      current === selection &&
+      path === directory &&
+      (!targetPane ||
+        (paneSelections.get(targetPane.id) === paneSelection &&
+          leaves(paneLayout).some((pane) => pane.id === targetPane.id)));
     let info: SessionInfo;
     try {
       info = await client.session.get({ sessionID: id });
-      if (current !== selection || path !== directory) return;
+      if (!valid()) return;
       if (info.location.directory !== path || info.parentID)
         throw new Error('This session does not belong to the selected repository.');
     } catch (cause) {
-      if (current === selection && path === directory) error = describe(cause);
+      if (valid()) error = describe(cause);
       return;
     }
     const nativeThread: AgentThread = {
@@ -3789,6 +3798,7 @@
         updatePane(paneLayout, targetPane.id, {
           agent: 'opencode',
           thread: nativeThread,
+          kind: undefined,
         }),
       );
       focusPaneForTyping(targetPane.id);
@@ -4474,6 +4484,26 @@
         const eventSession =
           'data' in event && 'sessionID' in event.data ? event.data.sessionID : undefined;
         if (
+          eventSession &&
+          (event.type === 'session.execution.started' ||
+            event.type === 'session.execution.succeeded' ||
+            event.type === 'session.execution.failed' ||
+            event.type === 'session.execution.interrupted')
+        ) {
+          for (const thread of nativeThreads.filter(
+            (item) => item.sessionId === eventSession && item.directory === directory,
+          ))
+            updateAgentThreadStatus(
+              thread,
+              event.type === 'session.execution.started'
+                ? 'working'
+                : event.type === 'session.execution.failed'
+                  ? 'failed'
+                  : 'done',
+              event.type !== 'session.execution.interrupted',
+            );
+        }
+        if (
           eventSession === sessionID ||
           (event.type === 'rpc.planreview.changed' && event.location?.directory === directory)
         ) {
@@ -4511,26 +4541,6 @@
             running = true;
             activity = 'Thinking';
             activityTool = '';
-          }
-          if (
-            event.type === 'session.execution.started' ||
-            event.type === 'session.execution.succeeded' ||
-            event.type === 'session.execution.failed' ||
-            event.type === 'session.execution.interrupted'
-          ) {
-            const thread = nativeThreads.find(
-              (item) => item.sessionId === sessionID && item.directory === directory,
-            );
-            if (thread)
-              updateAgentThreadStatus(
-                thread,
-                event.type === 'session.execution.started'
-                  ? 'working'
-                  : event.type === 'session.execution.failed'
-                    ? 'failed'
-                    : 'done',
-                event.type !== 'session.execution.interrupted',
-              );
           }
           if (event.type === 'session.reasoning.started') activity = 'Thinking';
           if (event.type === 'session.text.started') activity = 'Writing response';

@@ -6,6 +6,8 @@
   import AgentWorkspace from './AgentWorkspace.svelte';
   import OpenCodePane from './OpenCodePane.svelte';
   import DiffPanel from './DiffPanel.svelte';
+  import PlanPanel from './PlanPanel.svelte';
+  import HistoryPanel from './HistoryPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
   import TerminalPane from './TerminalPane.svelte';
   import AgentTerminalPane from './AgentTerminalPane.svelte';
@@ -20,6 +22,8 @@
   import type { ThreadStatus } from './lib/attention';
   import type { AgentUsage, RateWindow } from './lib/agent-usage';
   import { threadKey } from './lib/recent-threads';
+  import { getPlan, getHistory, type PlanSnapshot, type HistoryEntry } from './lib/plan';
+  import { annotateDiffs } from './lib/diff';
   import {
     clampPaneRatio,
     paneRatioBounds,
@@ -145,6 +149,61 @@
   let diffGeneration = 0;
   let diffRevision = '';
   let diffRevisionPath = '';
+  let nativeSnapshot = $state<PlanSnapshot>({ plan: null, questions: null });
+  let nativeHistory = $state<HistoryEntry[]>([]);
+  let nativeHistoryError = $state('');
+  let nativeDetailsOpen = $state(false);
+  let nativeTab = $state<'plan' | 'changes' | 'history'>('changes');
+  let nativeDetailsGeneration = 0;
+  const nativeDetailsVisible = $derived(nativeDetailsOpen || changesPanes.includes(pane.id));
+
+  async function refreshNativeDetails() {
+    if (!client || 'direction' in pane || !pane.thread || pane.agent !== 'opencode') return;
+    const id = pane.thread.sessionId;
+    const path = directory;
+    const generation = ++nativeDetailsGeneration;
+    if (setup?.rpc.state !== 'ready') {
+      nativeSnapshot = { plan: null, questions: null };
+      nativeHistory = [];
+      nativeHistoryError = 'Install the plan-review plugin to record plan history.';
+      return;
+    }
+    const [plan, history] = await Promise.allSettled([
+      getPlan(client, path, id),
+      getHistory(client, path, id),
+    ]);
+    if (
+      generation !== nativeDetailsGeneration ||
+      path !== directory ||
+      'direction' in pane ||
+      id !== pane.thread?.sessionId
+    )
+      return;
+    if (plan.status === 'fulfilled') {
+      nativeSnapshot = plan.value;
+      if ((plan.value.plan || plan.value.questions) && !nativeDetailsOpen) {
+        nativeDetailsOpen = true;
+        nativeTab = 'plan';
+      }
+    } else nativeHistoryError = String(plan.reason);
+    if (history.status === 'fulfilled') {
+      nativeHistory = history.value;
+      nativeHistoryError = '';
+    } else nativeHistoryError = String(history.reason);
+  }
+
+  $effect(() => {
+    if ('direction' in pane) return;
+    const id = pane.thread?.sessionId;
+    const source = client;
+    const rpc = setup?.rpc.state;
+    if (pane.agent !== 'opencode' || !id || !source || !rpc) return;
+    nativeSnapshot = { plan: null, questions: null };
+    nativeHistory = [];
+    nativeDetailsOpen = false;
+    nativeTab = 'changes';
+    void refreshNativeDetails();
+  });
 
   async function refreshDiff(quiet = false) {
     const current = ++diffGeneration;
@@ -432,7 +491,7 @@
         {/key}
       {:else if pane.agent === 'opencode'}
         {#key `${pane.id}:opencode`}
-          <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>
+          <div class="pane-agent-content" class:changes-open={nativeDetailsVisible}>
             <OpenCodePane
               {client}
               {directory}
@@ -452,28 +511,77 @@
               {onpickedconsumed}
               {onpromptfocused}
               oncreated={(thread) => oncreated(pane.id, thread)}
-              {onactivity}
+              onactivity={(thread) => {
+                onactivity(thread);
+                void refreshNativeDetails();
+              }}
               {onstatus}
             />
-            {#if changesPanes.includes(pane.id)}
-              <DiffPanel
-                {directory}
-                files={diffs}
-                annotations={{}}
-                selected={selectedFile}
-                loading={diffLoading}
-                error={diffError}
-                onselect={(file) => (selectedFile = file)}
-                onrefresh={refreshDiff}
-                onclose={() => onchanges(pane.id)}
-                scope={`${directory}\0${pane.id}\0opencode:${pane.thread?.sessionId ?? 'new'}`}
-                comments={diffComments[
-                  `${directory}\0${pane.id}\0opencode:${pane.thread?.sessionId ?? 'new'}`
-                ] ?? []}
-                oncomments={ondiffcomments}
-                oncommentssent={ondiffcommentssent}
-                onsendcomments={(scope, text) => onsenddiffcomments(pane.id, scope, text)}
-              />
+            {#if nativeDetailsVisible}
+              <section class="native-details side-area" aria-label="OpenCode session details">
+                <nav class="side-tabs" aria-label="OpenCode detail tabs">
+                  {#if nativeSnapshot.plan || nativeSnapshot.questions}<button
+                      class:active={nativeTab === 'plan'}
+                      onclick={() => (nativeTab = 'plan')}>Plan</button
+                    >{/if}<button
+                    class:active={nativeTab === 'changes'}
+                    onclick={() => (nativeTab = 'changes')}>Changes ({diffs.length})</button
+                  ><button
+                    class:active={nativeTab === 'history'}
+                    onclick={() => (nativeTab = 'history')}>History</button
+                  ><button
+                    aria-label="Close OpenCode details"
+                    onclick={() => {
+                      nativeDetailsOpen = false;
+                      if (changesPanes.includes(pane.id)) onchanges(pane.id);
+                    }}>×</button
+                  >
+                </nav>
+                {#if nativeTab === 'plan'}
+                  <PlanPanel
+                    snapshot={nativeSnapshot}
+                    {client}
+                    {directory}
+                    sessionID={pane.thread?.sessionId ?? null}
+                    {dark}
+                    onchanged={refreshNativeDetails}
+                    onselectfile={(file) => {
+                      selectedFile = file;
+                      nativeTab = 'changes';
+                    }}
+                  />
+                {:else if nativeTab === 'history'}
+                  <HistoryPanel
+                    events={nativeHistory}
+                    session={undefined}
+                    loading={false}
+                    error={nativeHistoryError}
+                    onrefresh={refreshNativeDetails}
+                  />
+                {:else}
+                  <DiffPanel
+                    {directory}
+                    files={diffs}
+                    annotations={annotateDiffs(diffs, nativeSnapshot.plan, directory)}
+                    selected={selectedFile}
+                    loading={diffLoading}
+                    error={diffError}
+                    onselect={(file) => (selectedFile = file)}
+                    onrefresh={refreshDiff}
+                    onclose={() => {
+                      nativeDetailsOpen = false;
+                      if (changesPanes.includes(pane.id)) onchanges(pane.id);
+                    }}
+                    scope={`${directory}\0${pane.id}\0opencode:${pane.thread?.sessionId ?? 'new'}`}
+                    comments={diffComments[
+                      `${directory}\0${pane.id}\0opencode:${pane.thread?.sessionId ?? 'new'}`
+                    ] ?? []}
+                    oncomments={ondiffcomments}
+                    oncommentssent={ondiffcommentssent}
+                    onsendcomments={(scope, text) => onsenddiffcomments(pane.id, scope, text)}
+                  />
+                {/if}
+              </section>
             {/if}
           </div>
         {/key}

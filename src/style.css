@@ -995,6 +995,20 @@ button:disabled {
   flex: 1 1 50%;
   min-width: 0;
 }
+.pane-agent-content > .native-details {
+  flex: 1 1 50%;
+  min-width: 0;
+  border-left: 1px solid var(--shell-divider);
+}
+.native-details > .diff-panel,
+.native-details > .history-panel,
+.native-details > .plan-panel {
+  flex: 1;
+  min-height: 0;
+}
+.native-details .side-tabs button:last-child {
+  margin-left: auto;
+}
 .terminal-pane {
   display: flex;
   flex: 1;

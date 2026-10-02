@@ -177,6 +177,12 @@
   async function activate(id: string | null) {
     const current = ++generation;
     clearTimeout(refreshTimer);
+    if (!sending) {
+      for (const path of pickedImages) void invoke('browser_remove_capture', { path });
+      pickedImages.clear();
+    }
+    draft = '';
+    files = [];
     selectedThreadId = id;
     activeID = id;
     session = null;
@@ -185,6 +191,7 @@
     pendingPermissions = [];
     pendingForms = [];
     error = '';
+    sending = false;
     running = false;
     following = true;
     selectedAgent = setup?.agents.find((agent) => agent.id !== 'architect')?.id ?? '';
@@ -395,8 +402,9 @@
       if (external) throw cause;
     } finally {
       if (current === generation) sending = false;
-      if (disposed)
+      if (disposed || current !== generation)
         for (const path of pickedImages) void invoke('browser_remove_capture', { path });
+      if (current !== generation) pickedImages.clear();
     }
   }
 
@@ -460,6 +468,11 @@
   }
 
   function keydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && busy) {
+      event.preventDefault();
+      void stop();
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       void send();

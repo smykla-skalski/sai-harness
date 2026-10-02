@@ -96,6 +96,19 @@ void test('pane layouts survive serialization and reject malformed saved trees',
     activeTab: browserTab.id,
   });
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': browser }))['/repo'], browser);
+  const openCode = updatePane(browser, leaves(browser)[1].id, {
+    kind: undefined,
+    agent: 'opencode',
+    thread: {
+      agent: 'opencode',
+      sessionId: 'native-1',
+      directory: '/repo',
+      title: 'Native thread',
+      updated: 1,
+    },
+  });
+  assert.equal(leaves(openCode)[1].kind, undefined);
+  assert.equal(leaves(openCode)[1].agent, 'opencode');
   const invalidBrowser = updatePane(browser, leaves(browser)[1].id, {
     tabs: [{ ...browserTab, history: ['javascript:alert(1)'] }],
   });
