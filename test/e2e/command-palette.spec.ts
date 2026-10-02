@@ -14,6 +14,7 @@ async function capture(name: string) {
 }
 
 async function openPalette() {
+  await $('body').click();
   await browser.keys(['Meta', 'k']);
   await expect($('.command-palette[open]')).toBeDisplayed();
   await expect(input()).toBeFocused();
@@ -142,7 +143,8 @@ describe('command palette project flow', () => {
     await browser.waitUntil(
       async () => (await browser.execute(() => localStorage.getItem('sai-directory'))) === repoPath,
     );
-    await expect($('.pane-picker-intro h2')).toHaveText('Choose an agent');
+    await expect($('.pane-picker-intro h2')).toHaveText('What would you like to open?');
+    await expect($('.pane-picker-choices')).toHaveText(expect.stringContaining('Agent'));
 
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
