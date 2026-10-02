@@ -119,7 +119,7 @@
       const key = event.key.toLowerCase();
       const appShortcut =
         (event.metaKey || event.ctrlKey) &&
-        ((!event.altKey && ['w', 'd', 't', 'k'].includes(key)) ||
+        ((!event.altKey && ['w', 'd', 't', 'k', 'n'].includes(key)) ||
           (event.altKey && key.startsWith('arrow')));
       if (!appShortcut && event.key !== 'F6') return true;
       onshortcut(event);

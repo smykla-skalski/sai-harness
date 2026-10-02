@@ -179,4 +179,19 @@ describe('command palette project flow', () => {
     const selected = await browser.execute(() => localStorage.getItem('sai-directory'));
     expect(selected).toContain('palette-created');
   });
+
+  it('opens the full worktree popup with Cmd+N for the current project', async () => {
+    await browser.keys(['Meta', 'n']);
+    await expect($('.worktree-dialog[open]')).toBeDisplayed();
+    await expect($('.command-palette[open]')).not.toExist();
+    await expect($('.worktree-dialog')).toHaveText(
+      expect.stringContaining(realpathSync(repository).split(/[\\/]/).at(-1)!),
+    );
+    await expect($('.worktree-dialog')).not.toHaveText(
+      expect.stringContaining('Choose an agent and session after creation.'),
+    );
+    await $('.worktree-cancel').click();
+    await expect($('.worktree-dialog[open]')).not.toExist();
+    await expect($('.command-palette[open]')).not.toExist();
+  });
 });
