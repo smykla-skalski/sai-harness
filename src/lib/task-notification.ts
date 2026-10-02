@@ -7,30 +7,61 @@ export type TaskNotification = {
   durationMs?: number;
 };
 
-const BLOCK = /^\s*<task-notification>([\s\S]*?)<\/task-notification>\s*$/;
+const BLOCK = /<task-notification>([\s\S]*?)<\/task-notification>/g;
+const ENTITIES: Record<string, string> = {
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+  '&amp;': '&',
+};
+
+function decode(value: string): string {
+  return value.replace(/&(?:lt|gt|quot|apos|amp);/g, (entity) => ENTITIES[entity] ?? entity);
+}
 
 function tag(body: string, name: string): string | undefined {
-  return body.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1].trim();
+  const value = body.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))?.[1].trim();
+  return value ? decode(value) : undefined;
 }
 
 function count(value: string | undefined): number | undefined {
-  const parsed = value === undefined ? NaN : Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return value !== undefined && /^\d+$/.test(value) ? Number(value) : undefined;
 }
 
-export function parseTaskNotification(text: string): TaskNotification | undefined {
-  const body = text.match(BLOCK)?.[1];
-  if (body === undefined) return undefined;
+function parseBlock(block: string): TaskNotification | undefined {
+  // Free-form note/result text can contain tag-like strings; read fields only from the rest.
+  const body = block.replace(/<(note|result)>[\s\S]*?<\/\1>/g, '');
   const taskId = tag(body, 'task-id');
   if (!taskId) return undefined;
+  const usage = body.match(/<usage>([\s\S]*?)<\/usage>/)?.[1] ?? '';
   return {
     taskId,
     status: tag(body, 'status') ?? 'unknown',
     summary: tag(body, 'summary') ?? 'Subagent update',
-    tokens: count(tag(body, 'subagent_tokens')),
-    toolUses: count(tag(body, 'tool_uses')),
-    durationMs: count(tag(body, 'duration_ms')),
+    tokens: count(tag(usage, 'subagent_tokens')),
+    toolUses: count(tag(usage, 'tool_uses')),
+    durationMs: count(tag(usage, 'duration_ms')),
   };
+}
+
+export function parseTaskNotifications(text: string): {
+  notifications: TaskNotification[];
+  rest: string;
+} {
+  if (!text.includes('<task-notification>')) return { notifications: [], rest: text };
+  const notifications: TaskNotification[] = [];
+  const rest = text.replace(BLOCK, (block) => {
+    const parsed = parseBlock(block);
+    if (!parsed) return block;
+    notifications.push(parsed);
+    return '';
+  });
+  return { notifications, rest: notifications.length > 0 ? rest.trim() : text };
+}
+
+export function isFailedStatus(status: string): boolean {
+  return ['failed', 'error', 'killed'].includes(status);
 }
 
 export function formatDuration(ms: number): string {
