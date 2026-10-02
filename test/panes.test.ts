@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adjacentPaneId,
+  browserPopIndex,
   closePane,
   leaves,
   loadPaneLayouts,
@@ -12,6 +13,14 @@ import {
   splitPane,
   updatePane,
 } from '../src/lib/panes.ts';
+
+void test('browser pop history selects duplicate URLs in travel direction', () => {
+  const history = ['https://example.com/a', 'https://example.com/b', 'https://example.com/a'];
+  assert.equal(browserPopIndex(history, 2, history[1], -1), 1);
+  assert.equal(browserPopIndex(history, 1, history[0], -1), 0);
+  assert.equal(browserPopIndex(history, 0, history[1], 1), 1);
+  assert.equal(browserPopIndex(history, 1, history[2], 1), 2);
+});
 
 void test('split ratios keep both panes usable at narrow sizes', () => {
   const bounds = paneRatioBounds(370);

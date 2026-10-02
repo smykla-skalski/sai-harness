@@ -15,6 +15,17 @@ export type Pane =
 
 export type BrowserTab = { id: string; history: string[]; index: number };
 
+export function browserPopIndex(
+  history: string[],
+  current: number,
+  url: string,
+  direction: -1 | 1,
+): number {
+  const previous = history.slice(0, current).lastIndexOf(url);
+  const next = history.findIndex((item, index) => index > current && item === url);
+  return direction < 0 ? (previous >= 0 ? previous : next) : next >= 0 ? next : previous;
+}
+
 export function newBrowserTab(): BrowserTab {
   return { id: crypto.randomUUID(), history: [], index: -1 };
 }

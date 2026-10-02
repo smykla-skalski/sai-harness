@@ -29,11 +29,15 @@ impl BrowserBounds {
             .get_webview("main")
             .ok_or("Main webview is missing")?;
         let main_bounds = main.bounds().map_err(|error| error.to_string())?;
-        let outer = window.outer_size().map_err(|error| error.to_string())?;
         let scale = window.scale_factor().map_err(|error| error.to_string())?;
         let origin = main_bounds.position.to_logical::<f64>(scale);
+        #[cfg(target_os = "macos")]
         let main_size = main_bounds.size.to_logical::<f64>(scale);
+        #[cfg(target_os = "macos")]
+        let outer = window.outer_size().map_err(|error| error.to_string())?;
+        #[cfg(target_os = "macos")]
         let outer = outer.to_logical::<f64>(scale);
+        #[cfg(target_os = "macos")]
         let titlebar = (outer.height - main_size.height).max(0.0);
         #[cfg(target_os = "macos")]
         let titlebar = if window.is_fullscreen().map_err(|error| error.to_string())? {
@@ -41,6 +45,8 @@ impl BrowserBounds {
         } else {
             titlebar.max(32.0)
         };
+        #[cfg(not(target_os = "macos"))]
+        let titlebar = 0.0;
         Ok(Self {
             x: self.x + origin.x,
             y: self.y + origin.y + titlebar,

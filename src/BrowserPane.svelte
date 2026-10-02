@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { BrowserTab, Pane } from './lib/panes';
-  import { newBrowserTab } from './lib/panes';
+  import { browserPopIndex, newBrowserTab } from './lib/panes';
 
   type BrowserLeaf = Extract<Pane, { kind: 'browser' }>;
   type BrowserEvent = { label: string; url: string };
@@ -83,10 +83,7 @@
       return;
     }
     if (mode === 'pop') {
-      const previous = tab.history.slice(0, tab.index).lastIndexOf(url);
-      const next = tab.history.findIndex((item, index) => index > tab.index && item === url);
-      const index =
-        popDirection < 0 ? (previous >= 0 ? previous : next) : next >= 0 ? next : previous;
+      const index = browserPopIndex(tab.history, tab.index, url, popDirection);
       if (index >= 0) {
         popDirection = index < tab.index ? -1 : 1;
         updateTab({ ...tab, index });
