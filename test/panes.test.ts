@@ -84,6 +84,45 @@ void test('split and close preserve neighboring panes and their threads', () => 
   );
 });
 
+void test('native and ACP threads restore independently across split panes', () => {
+  const first = splitPane(mainPane(), 'main', 'row');
+  const second = splitPane(first, leaves(first)[1].id, 'column');
+  const [main, nativeLeaf, acpLeaf] = leaves(second);
+  const native = {
+    agent: 'opencode',
+    sessionId: 'native-1',
+    directory: '/repo',
+    title: 'OpenCode',
+    updated: 1,
+  };
+  const acp = {
+    agent: 'claude',
+    sessionId: 'acp-1',
+    directory: '/repo',
+    title: 'Claude',
+    updated: 2,
+  };
+  const mixed = updatePane(
+    updatePane(second, nativeLeaf.id, { agent: 'opencode', thread: native }),
+    acpLeaf.id,
+    { agent: 'claude', thread: acp },
+  );
+  const restored = loadPaneLayouts(JSON.stringify({ '/repo': mixed }))['/repo'];
+  assert.deepEqual(
+    leaves(restored).map((pane) => [pane.agent, pane.thread?.sessionId]),
+    [
+      [null, undefined],
+      ['opencode', 'native-1'],
+      ['claude', 'acp-1'],
+    ],
+  );
+  const switched = updatePane(restored, nativeLeaf.id, {
+    thread: { ...native, sessionId: 'native-2' },
+  });
+  assert.equal(leaves(switched)[2].thread?.sessionId, acp.sessionId);
+  assert.equal(leaves(switched)[0].id, main.id);
+});
+
 void test('pane layouts survive serialization and reject malformed saved trees', () => {
   const layout = splitPane(mainPane(), 'main', 'column');
   assert.deepEqual(loadPaneLayouts(JSON.stringify({ '/repo': layout }))['/repo'], layout);
