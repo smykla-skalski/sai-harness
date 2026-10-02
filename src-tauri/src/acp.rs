@@ -183,9 +183,11 @@ impl AgentManager {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentActivity {
     alive: bool,
     active: Vec<String>,
+    active_turns: HashMap<String, String>,
     waiting: Vec<String>,
     sessions: Vec<String>,
     finished: HashMap<String, PromptOutcome>,
@@ -201,6 +203,8 @@ struct PromptState {
 pub struct PromptOutcome {
     status: &'static str,
     notify: bool,
+    #[serde(rename = "turnId")]
+    turn_id: String,
 }
 
 #[tauri::command]
@@ -217,6 +221,7 @@ pub fn acp_activity(
                 .lock()
                 .map_err(|error| error.to_string())?;
             let active = prompts.active.keys().cloned().collect();
+            let active_turns = prompts.active.clone();
             let finished = prompts.finished.clone();
             let sessions = runtime
                 .session_directories
@@ -243,6 +248,7 @@ pub fn acp_activity(
                 AgentActivity {
                     alive,
                     active,
+                    active_turns,
                     waiting,
                     sessions,
                     finished,
@@ -684,7 +690,7 @@ pub async fn acp_new_session(
     let runtime = connection(&manager, &agent)?;
     let browser = browser.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let config = browser.config(&cwd, None)?;
+        let config = browser.config(&cwd, None, Some(&agent))?;
         let mcp_server = json!({"name":"sail-browser","command":config.command,"args":config.args,
             "env":config.env.iter().map(|(name,value)| json!({"name":name,"value":value})).collect::<Vec<_>>()});
         let _serial = runtime
@@ -752,7 +758,7 @@ async fn restore_session(
     let runtime = connection(&manager, &agent)?;
     let browser = browser.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let config = browser.config(&cwd, Some(&session_id))?;
+        let config = browser.config(&cwd, Some(&session_id), Some(&agent))?;
         let mcp_server = json!({"name":"sail-browser","command":config.command,"args":config.args,
             "env":config.env.iter().map(|(name,value)| json!({"name":name,"value":value})).collect::<Vec<_>>()});
         runtime
@@ -859,9 +865,14 @@ pub async fn acp_prompt(
         let latest = if let Ok(mut prompts) = runtime.prompt_state.lock() {
             if prompts.active.get(&session_id) == Some(&turn_id) {
                 prompts.active.remove(&session_id);
-                prompts
-                    .finished
-                    .insert(session_id.clone(), PromptOutcome { status, notify });
+                prompts.finished.insert(
+                    session_id.clone(),
+                    PromptOutcome {
+                        status,
+                        notify,
+                        turn_id: turn_id.clone(),
+                    },
+                );
                 true
             } else {
                 false
@@ -875,7 +886,7 @@ pub async fn acp_prompt(
                 AgentEvent {
                     agent,
                     message: json!({"method":"sail/prompt_finished","params":{
-                        "sessionId":session_id,"status":status,"notify":notify
+                        "sessionId":session_id,"turnId":turn_id,"status":status,"notify":notify
                     }}),
                 },
             );

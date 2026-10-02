@@ -150,7 +150,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       send({ id: message.id, error: { code: -32000, message: 'Authentication required' } });
       continue;
     }
-    const sessionId = `test-${++nextSession}`;
+    const sessionId = `${agent}-test-${++nextSession}`;
     sessions.set(sessionId, { history: [], config: { model: 'test', effort: 'medium' } });
     update(sessionId, { sessionUpdate: 'available_commands_update', availableCommands });
     setTimeout(
@@ -198,6 +198,13 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
     const text = message.params.prompt[0].text;
+    if (text === 'Prompt failure') {
+      setTimeout(
+        () => send({ id: message.id, error: { code: -1, message: 'Fixture prompt failed' } }),
+        1500,
+      );
+      continue;
+    }
     if (text.startsWith('Clipboard fixture')) {
       const image = message.params.prompt.find((part) => part.type === 'image');
       const paths = text.split('Attached files (read these paths):\n')[1]?.split('\n') ?? [];

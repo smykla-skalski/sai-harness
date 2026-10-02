@@ -45,7 +45,7 @@ describe('agent coordination bridge', () => {
       async ({ core }, directory) =>
         core.invoke<{ command: string; args: string[]; env: Record<string, string> }>(
           'browser_mcp_config',
-          { directory },
+          { directory, agent: 'claude' },
         ),
       path,
     );

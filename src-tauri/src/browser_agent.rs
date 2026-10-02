@@ -27,6 +27,7 @@ struct PaneRef {
 struct Client {
     directory: PathBuf,
     session: Option<String>,
+    agent: Option<String>,
 }
 
 #[derive(Default)]
@@ -71,6 +72,7 @@ struct NavigateRequest {
 struct CoordinationRequest {
     id: String,
     session_id: String,
+    source_agent: Option<String>,
     directory: String,
     name: String,
     arguments: Value,
@@ -102,7 +104,12 @@ pub struct McpConfig {
 }
 
 impl BrowserManager {
-    pub fn config(&self, directory: &str, session: Option<&str>) -> Result<McpConfig, String> {
+    pub fn config(
+        &self,
+        directory: &str,
+        session: Option<&str>,
+        agent: Option<&str>,
+    ) -> Result<McpConfig, String> {
         let directory = PathBuf::from(directory)
             .canonicalize()
             .map_err(|error| format!("Cannot find browser project: {error}"))?;
@@ -116,6 +123,7 @@ impl BrowserManager {
                 Client {
                     directory,
                     session: session.map(str::to_string),
+                    agent: agent.map(str::to_string),
                 },
             );
         let port = *self.0.port.lock().map_err(|error| error.to_string())?;
@@ -452,14 +460,14 @@ impl BrowserManager {
         &self,
         app: &AppHandle,
         session: &str,
+        source_agent: Option<&str>,
         directory: &Path,
         name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
         let setting = match name {
-            "worktree_create" | "worktree_list" | "worktree_info" | "agent_spawn" => {
-                "sai-agent-worktrees-enabled"
-            }
+            "worktree_create" | "worktree_list" | "worktree_info" | "agent_spawn"
+            | "agent_status" | "agent_wait" | "agent_result" => "sai-agent-worktrees-enabled",
             "worktree_status" => "sai-agent-status-enabled",
             "project_threads" => "sai-agent-thread-list-enabled",
             "thread_message" => "sai-agent-messages-enabled",
@@ -481,6 +489,7 @@ impl BrowserManager {
         let event = CoordinationRequest {
             id: id.clone(),
             session_id: session.to_string(),
+            source_agent: source_agent.map(str::to_string),
             directory: directory.to_string_lossy().into_owned(),
             name: name.to_string(),
             arguments,
@@ -517,6 +526,7 @@ impl BrowserManager {
             .get(&request.token)
             .ok_or("Unknown browser tool connection.")?;
         let directory = client.directory.clone();
+        let source_agent = client.agent.clone();
         let session = request.session_id.as_deref();
         let session = client
             .session
@@ -531,11 +541,21 @@ impl BrowserManager {
                 | "worktree_list"
                 | "worktree_info"
                 | "agent_spawn"
+                | "agent_status"
+                | "agent_wait"
+                | "agent_result"
                 | "worktree_status"
                 | "project_threads"
                 | "thread_message"
         ) {
-            return self.coordinate(app, &session, &directory, &request.name, request.arguments);
+            return self.coordinate(
+                app,
+                &session,
+                source_agent.as_deref(),
+                &directory,
+                &request.name,
+                request.arguments,
+            );
         }
         let target_key = format!("{}:{session}", request.token);
         let chosen_pane = self
@@ -1025,8 +1045,9 @@ pub fn browser_project_access(
 pub fn browser_mcp_config(
     manager: State<'_, BrowserManager>,
     directory: String,
+    agent: Option<String>,
 ) -> Result<McpConfig, String> {
-    manager.config(&directory, None)
+    manager.config(&directory, None, agent.as_deref())
 }
 
 #[tauri::command]
@@ -1057,8 +1078,23 @@ const TOOLS: &[(&str, &str, &str)] = &[
     ),
     (
         "agent_spawn",
-        "Start Claude, Codex, or OpenCode with a prompt in a new worktree by default. An explicit existing target shares its files and may require approval.",
+        "Start Claude, Codex, or OpenCode with a prompt in a new worktree by default. An explicit existing target shares its files and may require approval. Pass UUID receiptId and accessKey together to inspect queued or starting state before launch returns.",
         "provider,prompt",
+    ),
+    (
+        "agent_status",
+        "Inspect a launch receipt with its ID and access key. Only the launching thread can read it.",
+        "receiptId,accessKey",
+    ),
+    (
+        "agent_wait",
+        "Wait up to 30 seconds for a launch receipt to finish or require input. Supply its ID and access key; returns timedOut on expiry.",
+        "receiptId,accessKey",
+    ),
+    (
+        "agent_result",
+        "Read a bounded completion result using the launch receipt ID and access key. Only the launching thread can read it.",
+        "receiptId,accessKey",
     ),
     (
         "worktree_status",
@@ -1128,12 +1164,23 @@ pub fn run_mcp_stdio() {
                         "properties":{
                             "provider":{"type":"string","enum":["claude","codex","opencode"]},
                             "prompt":{"type":"string"},
+                            "receiptId":{"type":"string","format":"uuid"},
+                            "accessKey":{"type":"string","format":"uuid"},
                             "target":{"oneOf":[
                                 {"type":"object","properties":{"kind":{"const":"new"},"name":{"type":"string"}},"required":["kind","name"]},
                                 {"type":"object","properties":{"kind":{"const":"existing"},"path":{"type":"string"}},"required":["kind","path"]}
                             ]}
                         },
                         "required":["provider","prompt"]
+                    }});
+                }
+                if *name == "agent_wait" {
+                    return json!({"name":name,"description":description,"inputSchema":{
+                        "type":"object","properties":{
+                            "receiptId":{"type":"string"},
+                            "accessKey":{"type":"string"},
+                            "timeoutMs":{"type":"integer","minimum":0,"maximum":30000}
+                        },"required":["receiptId","accessKey"]
                     }});
                 }
                 let properties: serde_json::Map<String, Value> = fields.split(',').filter(|field| !field.is_empty()).map(|field| (field.to_string(), json!({"type":"string"}))).collect();

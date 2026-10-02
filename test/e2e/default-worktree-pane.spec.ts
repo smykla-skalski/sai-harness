@@ -31,6 +31,8 @@ describe('empty default worktree', () => {
         localStorage.removeItem('sai-pane-layouts');
         localStorage.removeItem(`sai-session:${selectedPath}`);
         localStorage.removeItem(`sai-session:${otherPath}`);
+        localStorage.removeItem(`sai-main-pane-empty:${selectedPath}`);
+        localStorage.removeItem(`sai-main-pane-empty:${otherPath}`);
       },
       [path, other],
     );
@@ -84,6 +86,12 @@ describe('empty default worktree', () => {
     await expect($('.browser-pane')).not.toExist();
     await browser.keys(['Meta', 'w']);
     await expect($('.pane-picker')).toBeDisplayed();
+    await $(`.project-default-worktree-select[title="${path}"]`).click();
+    await expect($('.browser-pane')).toBeDisplayed();
+    await $(`.project-default-worktree-select[title="${other}"]`).click();
+    await expect($('.pane-picker')).toBeDisplayed();
+    await browser.refresh();
+    await expect($('.pane-picker')).toBeDisplayed();
     await $('[data-pane-picker]').click();
     await $('[data-agent-choice]:not([disabled])').click();
     await expect($('.agent-conversation')).toBeDisplayed();
@@ -106,6 +114,8 @@ describe('empty default worktree', () => {
         );
         localStorage.removeItem(`sai-session:${selectedPath}`);
         localStorage.removeItem(`sai-session:${otherPath}`);
+        localStorage.removeItem(`sai-main-pane-empty:${selectedPath}`);
+        localStorage.removeItem(`sai-main-pane-empty:${otherPath}`);
       },
       [path, other],
     );

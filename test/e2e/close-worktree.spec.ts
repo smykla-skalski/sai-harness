@@ -127,6 +127,7 @@ describe('close worktree shortcut', () => {
     await select(first);
     await browser.execute(() => {
       sessionStorage.setItem('sai-e2e-delete-worktree', 'Yes');
+      localStorage.setItem(`sai-main-pane-empty:${localStorage.getItem('sai-directory')}`, 'true');
       for (let press = 0; press < 2; press++)
         window.dispatchEvent(
           new KeyboardEvent('keydown', { key: 'w', metaKey: true, shiftKey: true }),
@@ -141,6 +142,9 @@ describe('close worktree shortcut', () => {
     expect(git('worktree', 'list')).not.toContain(first);
     await expect($('.app-shell [role="alert"]')).not.toExist();
     expect(await browser.execute(() => localStorage.getItem('sai-directory'))).toBe(repository);
+    expect(
+      await browser.execute((path) => localStorage.getItem(`sai-main-pane-empty:${path}`), first),
+    ).toBeNull();
     await expect($('dialog[open]')).not.toExist();
   });
 });
