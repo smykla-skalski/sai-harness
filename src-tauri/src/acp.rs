@@ -187,6 +187,7 @@ pub struct AgentActivity {
     alive: bool,
     active: Vec<String>,
     waiting: Vec<String>,
+    sessions: Vec<String>,
     finished: HashMap<String, PromptOutcome>,
 }
 
@@ -217,6 +218,13 @@ pub fn acp_activity(
                 .map_err(|error| error.to_string())?;
             let active = prompts.active.keys().cloned().collect();
             let finished = prompts.finished.clone();
+            let sessions = runtime
+                .session_directories
+                .lock()
+                .map_err(|error| error.to_string())?
+                .keys()
+                .cloned()
+                .collect();
             let waiting = runtime
                 .permissions
                 .lock()
@@ -236,6 +244,7 @@ pub fn acp_activity(
                     alive,
                     active,
                     waiting,
+                    sessions,
                     finished,
                 },
             ))

@@ -20,7 +20,11 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { BrowserAttachment } from './lib/browser-pick';
-  import type { CoordinationMessage } from './lib/coordination';
+  import {
+    coordinationMessageForText,
+    coordinationPrompt,
+    type CoordinationMessage,
+  } from './lib/coordination';
 
   interface Props {
     agent: AgentId;
@@ -770,6 +774,10 @@
           {/if}
         </details>
       {:else}
+        {@const attribution =
+          entry.type === 'user'
+            ? coordinationMessageForText(entry.text, coordinationMessages)
+            : undefined}
         <article
           class:user-message={entry.type === 'user'}
           class:assistant-message={entry.type !== 'user'}
@@ -781,22 +789,28 @@
             class:user-avatar={entry.type === 'user'}
             class="avatar"
           >
-            {entry.type === 'user' ? 'You' : 'S.'}
+            {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
           </div>
           <div class="message-body">
             <div class="message-author">
               {entry.type === 'user'
-                ? 'You'
+                ? attribution
+                  ? `From ${attribution.sender}`
+                  : 'You'
                 : entry.type === 'thought'
                   ? `${name} · thinking`
                   : name}
             </div>
-            <Markdown source={entry.text} />
+            <Markdown
+              source={attribution
+                ? entry.text.replace(coordinationPrompt(attribution), attribution.text)
+                : entry.text}
+            />
           </div>
         </article>
       {/if}
     {/each}
-    {#each coordinationMessages as message (message.id)}
+    {#each coordinationMessages.filter((message) => !entries.some((entry) => entry.type === 'user' && entry.text.includes(coordinationPrompt(message)))) as message (message.id)}
       <article class="agent-message message user-message">
         <div class="avatar user-avatar">↗</div>
         <div class="message-body">

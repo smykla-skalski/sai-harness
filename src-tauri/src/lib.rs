@@ -1082,44 +1082,6 @@ fn create_worktree(
 }
 
 #[tauri::command]
-async fn run_worktree_setup(path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(validate_repository(path)?);
-        let Some(config) = worktree_config::read(&root)? else {
-            return Ok(());
-        };
-        if config.setup.trim().is_empty() {
-            return Ok(());
-        }
-        let mut command = if cfg!(windows) {
-            Command::new("cmd")
-        } else {
-            Command::new("sh")
-        };
-        if cfg!(windows) {
-            command.arg("/C");
-        } else {
-            command.arg("-lc");
-        }
-        let output = command
-            .arg(&config.setup)
-            .current_dir(&root)
-            .output()
-            .map_err(|error| format!("Cannot run worktree setup: {error}"))?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "Worktree setup failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-        }
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
 fn delete_worktree(
     repository: String,
     worktree: String,
@@ -1240,7 +1202,6 @@ pub fn run() {
             git_change_action,
             diff_file_contents,
             create_worktree,
-            run_worktree_setup,
             delete_worktree,
             worktree_config,
             github::create_pull_request,

@@ -14,7 +14,6 @@ fn main() {
             "git_change_action",
             "diff_file_contents",
             "create_worktree",
-            "run_worktree_setup",
             "delete_worktree",
             "worktree_config",
             "create_pull_request",

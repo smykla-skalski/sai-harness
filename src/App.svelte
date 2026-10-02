@@ -92,6 +92,9 @@
   import { fileUri } from './lib/attachments';
   import {
     coordinationKey,
+    coordinationMessageForText,
+    coordinationPrompt,
+    enqueueCoordinationMessage,
     loadCoordinationMessages,
     type CoordinationMessage,
   } from './lib/coordination';
@@ -178,6 +181,12 @@
   let selectedWorktreeConfig = $state<WorktreeConfig | null>(null);
   let configGeneration = 0;
   const terminalExitWaiters = new SvelteMap<string, (code: number) => void>();
+  const coordinationSetupWaiters = new SvelteMap<string, (code: number) => void>();
+  function finishCoordinationSetup(id: string, code: number) {
+    const finish = coordinationSetupWaiters.get(id);
+    coordinationSetupWaiters.delete(id);
+    finish?.(code);
+  }
   $effect(() => {
     const path = directory;
     const generation = ++configGeneration;
@@ -835,6 +844,7 @@
     let unlistenAgentEvents: (() => void) | undefined;
     let unlistenBrowserAccess: (() => void) | undefined;
     let unlistenCoordination: (() => void) | undefined;
+    let unlistenTerminalExit: (() => void) | undefined;
     const coordinationRetry = setInterval(() => {
       if (isTauri()) retryCoordinationDeliveries();
     }, 10_000);
@@ -874,6 +884,9 @@
       void listen<CoordinationRequest>('agent:coordination-request', ({ payload }) => {
         void handleCoordinationRequest(payload);
       }).then((unlisten) => (unlistenCoordination = unlisten));
+      void listen<{ id: string; code: number }>('terminal:exit', ({ payload }) => {
+        finishCoordinationSetup(payload.id, payload.code);
+      }).then((unlisten) => (unlistenTerminalExit = unlisten));
       void listen('pane:close', () => {
         if (!document.querySelector('dialog[open]')) closeCurrentPane();
       }).then((unlisten) => (stopPaneClose = unlisten));
@@ -989,6 +1002,7 @@
       unlistenAgentEvents?.();
       unlistenBrowserAccess?.();
       unlistenCoordination?.();
+      unlistenTerminalExit?.();
       unlistenAgentTerminals?.();
       unlistenNotificationClick?.();
       cancelAnimationFrame(followFrame);
@@ -1249,34 +1263,66 @@
       .then(async () => {
         if (disposed || coordinationMessages.find((item) => item.id === message.id)?.delivered)
           return;
-        const text = `Message ${message.id} from ${message.sender}:\n\n${message.text}`;
+        const text = coordinationPrompt(message);
         const thread = agentThreads.find(
           (item) =>
             item.directory === target.directory &&
             target.id === `acp:${item.agent}:${item.sessionId}`,
         );
         if (thread) {
+          const info = await acp.connect(thread.agent);
+          const agentActivity = (await acp.activity())[thread.agent];
+          if (!agentActivity?.sessions.includes(thread.sessionId)) {
+            const capabilities = info.agentCapabilities;
+            const sessionCapabilities =
+              capabilities &&
+              typeof capabilities === 'object' &&
+              'sessionCapabilities' in capabilities
+                ? capabilities.sessionCapabilities
+                : null;
+            const canResume =
+              sessionCapabilities &&
+              typeof sessionCapabilities === 'object' &&
+              'resume' in sessionCapabilities;
+            if (canResume) await acp.resume(thread.agent, thread.directory, thread.sessionId);
+            else await acp.load(thread.agent, thread.directory, thread.sessionId);
+          }
           await waitForCoordinationThread(thread);
           if (disposed) return;
-          await acp.load(thread.agent, thread.directory, thread.sessionId);
           await invoke('record_turn_snapshot', {
             path: thread.directory,
             thread: target.id,
           });
           updateAgentThreadStatus(thread, 'working');
-          try {
-            await acp.prompt(thread.agent, thread.sessionId, text, crypto.randomUUID());
-            updateAgentThreadStatus(thread, 'done');
-          } catch (cause) {
-            updateAgentThreadStatus(thread, 'failed');
-            throw cause;
-          }
+          const turn = acp.prompt(thread.agent, thread.sessionId, text, crypto.randomUUID());
+          void turn.then(
+            () => updateAgentThreadStatus(thread, 'done'),
+            (cause) => {
+              updateAgentThreadStatus(thread, 'failed');
+              error = `Agent message turn failed: ${describe(cause)}`;
+            },
+          );
+          await awaitCoordinationStart(turn, async () => {
+            const state = (await acp.activity())[thread.agent];
+            return !!state?.active.includes(thread.sessionId);
+          });
         } else {
           if (!client) throw new Error('OpenCode is unavailable for the receiving thread.');
           await waitForOpenCodeCoordinationThread(target.id.slice('opencode:'.length));
           if (disposed) return;
           await invoke('record_turn_snapshot', { path: target.directory, thread: target.id });
-          await client.session.prompt({ sessionID: target.id.slice('opencode:'.length), text });
+          const turn = client.session.prompt({
+            sessionID: target.id.slice('opencode:'.length),
+            text,
+          });
+          void turn.catch((cause) => {
+            error = `Agent message turn failed: ${describe(cause)}`;
+          });
+          await awaitCoordinationStart(turn, async () => {
+            if (!client) return false;
+            const active = await client.session.active();
+            return active[target.id.slice('opencode:'.length)]?.type === 'running';
+          });
         }
         coordinationMessages = coordinationMessages.map((item) =>
           item.id === message.id ? { ...item, delivered: true } : item,
@@ -1370,7 +1416,7 @@
         text: text.trim(),
         created: Date.now(),
       };
-      coordinationMessages = [...coordinationMessages, message].slice(-500);
+      coordinationMessages = enqueueCoordinationMessage(coordinationMessages, message);
       setSetting('sai-coordination-messages', JSON.stringify(coordinationMessages));
       setTimeout(retryCoordinationDeliveries, 200);
       return { queuedFor: target.id, queued: true, messageId: message.id };
@@ -1399,14 +1445,42 @@
       { repository: request.directory, name, destinationParent: null, baseRef: null },
     );
     saveProjectCatalog(addWorktree(projectCatalog, project, created));
-    if (created.setup) await invoke('run_worktree_setup', { path: created.path });
+    if (created.setup) {
+      await loadProject(created.path);
+      if (directory !== created.path) throw new Error('Worktree changed before setup started.');
+      const paneId = splitFocusedPane('row', 'terminal', created.setup);
+      if (!paneId) throw new Error('Enlarge a pane before running worktree setup.');
+      coordinationSetupWaiters.set(paneId, (code) => {
+        if (code !== 0) {
+          error = `Worktree setup exited with code ${code}. The agent thread was not started.`;
+          return;
+        }
+        void startCoordinatedThread(created, source, prompt.trim()).catch((cause) => {
+          error = `Could not start coordinated thread: ${describe(cause)}`;
+        });
+      });
+      return {
+        path: created.path,
+        branch: created.branch,
+        status: 'setup-running',
+        terminalPaneId: paneId,
+      };
+    }
+    return startCoordinatedThread(created, source, prompt.trim());
+  }
+
+  async function startCoordinatedThread(
+    created: { path: string; branch: string },
+    source: CoordinationSource,
+    prompt: string,
+  ) {
     if (source.kind === 'acp') {
       const session = await acp.create(source.agent, created.path);
       const thread: AgentThread = {
         agent: source.agent,
         sessionId: session.sessionId,
         directory: created.path,
-        title: prompt.trim().slice(0, 60),
+        title: prompt.slice(0, 60),
         updated: Date.now(),
       };
       saveAgentThread(thread);
@@ -1415,7 +1489,7 @@
         thread: `acp:${source.agent}:${session.sessionId}`,
       });
       updateAgentThreadStatus(thread, 'working');
-      const turn = acp.prompt(source.agent, session.sessionId, prompt.trim(), crypto.randomUUID());
+      const turn = acp.prompt(source.agent, session.sessionId, prompt, crypto.randomUUID());
       const finished = turn.then(
         () => {
           updateAgentThreadStatus(thread, 'done');
@@ -1427,7 +1501,10 @@
           throw cause;
         },
       );
-      await Promise.race([finished, waitForAcpCoordinationTurn(source.agent, session.sessionId)]);
+      await awaitCoordinationStart(finished, async () => {
+        const state = (await acp.activity())[source.agent];
+        return !!state?.active.includes(session.sessionId);
+      });
       void finished.catch(() => undefined);
       return {
         path: created.path,
@@ -1440,7 +1517,7 @@
     const session = await client.session.create({
       location: { directory: created.path },
       metadata: { saiHarness: true },
-      title: prompt.trim().slice(0, 60),
+      title: prompt.slice(0, 60),
       agent: source.agent === 'OpenCode' ? undefined : source.agent,
       model: source.model,
     });
@@ -1448,27 +1525,36 @@
       path: created.path,
       thread: `opencode:${session.id}`,
     });
-    const startingPrompt = client.session.prompt({ sessionID: session.id, text: prompt.trim() });
-    await Promise.race([startingPrompt, waitForOpenCodeCoordinationStart(session.id)]);
+    const startingPrompt = client.session.prompt({ sessionID: session.id, text: prompt });
+    await awaitCoordinationStart(startingPrompt, async () => {
+      if (!client) return false;
+      const active = await client.session.active();
+      return active[session.id]?.type === 'running';
+    });
     void startingPrompt.catch((cause) => {
       error = `Could not start agent thread: ${describe(cause)}`;
     });
     return { path: created.path, branch: created.branch, threadId: `opencode:${session.id}` };
   }
 
-  async function waitForAcpCoordinationTurn(agent: string, sessionId: string): Promise<void> {
-    const agentActivity = (await acp.activity())[agent];
-    if (agentActivity?.active.includes(sessionId) || agentActivity?.finished[sessionId]) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return waitForAcpCoordinationTurn(agent, sessionId);
-  }
-
-  async function waitForOpenCodeCoordinationStart(sessionId: string): Promise<void> {
-    if (!client) throw new Error('OpenCode is unavailable for the new thread.');
-    const active = await client.session.active();
-    if (active[sessionId]?.type === 'running') return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return waitForOpenCodeCoordinationStart(sessionId);
+  async function awaitCoordinationStart(
+    turn: Promise<unknown>,
+    isActive: () => Promise<boolean>,
+  ): Promise<void> {
+    let stopped = false;
+    const deadline = Date.now() + 30_000;
+    async function poll(): Promise<void> {
+      if (stopped || disposed) return;
+      if (await isActive().catch(() => false)) return;
+      if (Date.now() >= deadline) throw new Error('Agent prompt did not start within 30 seconds.');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return poll();
+    }
+    try {
+      await Promise.race([turn, poll()]);
+    } finally {
+      stopped = true;
+    }
   }
 
   function finishWorktreeApproval(allowed: boolean) {
@@ -3026,6 +3112,7 @@
     ++recentJumpGeneration;
     terminalExitWaiters.get(id)?.(1);
     terminalExitWaiters.delete(id);
+    finishCoordinationSetup(id, 1);
     if (leaves(paneLayout).find((leaf) => leaf.id === id)?.kind === 'terminal')
       void invoke('terminal_close', { id });
     let layout = closePane(paneLayout, id);
@@ -4934,14 +5021,24 @@
                     </div>{/if}
                 </div>{/if}
               {#each chatMessages as message (message.id)}
-                {#if message.type === 'user'}<article
-                    class="message user-message"
-                    data-message-id={message.id}
-                  >
-                    <div class="avatar user-avatar">You</div>
+                {#if message.type === 'user'}
+                  {@const attribution = coordinationMessageForText(
+                    message.text,
+                    coordinationMessages.filter(
+                      (item) => item.target === coordinationKey(directory, `opencode:${sessionID}`),
+                    ),
+                  )}
+                  <article class="message user-message" data-message-id={message.id}>
+                    <div class="avatar user-avatar">{attribution ? '↗' : 'You'}</div>
                     <div class="message-body">
-                      <div class="message-author">You</div>
-                      <Markdown source={message.text} />
+                      <div class="message-author">
+                        {attribution ? `From ${attribution.sender}` : 'You'}
+                      </div>
+                      <Markdown
+                        source={attribution
+                          ? message.text.replace(coordinationPrompt(attribution), attribution.text)
+                          : message.text}
+                      />
                       {#if message.files?.length}<div class="message-files">
                           {#each message.files as file, fileIndex (fileIndex)}<span
                               >{file.name ??
@@ -4983,7 +5080,7 @@
                     </div>
                   </article>{/if}
               {/each}
-              {#each coordinationMessages.filter((message) => sessionID && message.target === coordinationKey(directory, `opencode:${sessionID}`)) as message (message.id)}
+              {#each coordinationMessages.filter((message) => sessionID && message.target === coordinationKey(directory, `opencode:${sessionID}`) && !chatMessages.some((item) => item.type === 'user' && item.text.includes(coordinationPrompt(message)))) as message (message.id)}
                 <article class="message user-message">
                   <div class="avatar user-avatar">↗</div>
                   <div class="message-body">
@@ -5225,6 +5322,7 @@
       onterminalexit={(id, code) => {
         terminalExitWaiters.get(id)?.(code);
         terminalExitWaiters.delete(id);
+        finishCoordinationSetup(id, code);
       }}
       onagentterminal={(id) => void openAgentTerminal(id)}
     />
@@ -5234,7 +5332,9 @@
   class="commands-dialog worktree-approval-dialog"
   bind:this={worktreeApprovalDialog}
   aria-label="Agent worktree request"
-  onclose={() => finishWorktreeApproval(false)}
+  onclose={() => {
+    if (!worktreeApprovalDialog.open) finishWorktreeApproval(false);
+  }}
 >
   {#if worktreeApproval}
     <div class="commands-header"><h2>Agent worktree request</h2></div>

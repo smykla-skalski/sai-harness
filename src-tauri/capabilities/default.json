@@ -17,7 +17,6 @@
     "allow-git-change-action",
     "allow-diff-file-contents",
     "allow-create-worktree",
-    "allow-run-worktree-setup",
     "allow-delete-worktree",
     "allow-worktree-config",
     "allow-create-pull-request",
