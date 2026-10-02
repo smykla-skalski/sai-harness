@@ -1000,6 +1000,7 @@
     let stopSettingsAction: (() => void) | undefined;
     let stopCloseRequest: (() => void) | undefined;
     let stopPaneClose: (() => void) | undefined;
+    let stopWorktreeClose: (() => void) | undefined;
     if (isTauri()) {
       void listen<BrowserAccessRequest>('browser:access-request', ({ payload }) => {
         const previousApproval = browserApprovalQueue;
@@ -1035,6 +1036,9 @@
       void listen('pane:close', () => {
         if (!document.querySelector('dialog[open]')) closeCurrentPane();
       }).then((unlisten) => (stopPaneClose = unlisten));
+      void listen('worktree:close', () => {
+        if (!document.querySelector('dialog[open]')) closeCurrentWorktree();
+      }).then((unlisten) => (stopWorktreeClose = unlisten));
       void getCurrentWindow()
         .onCloseRequested((event) => {
           event.preventDefault();
@@ -1133,6 +1137,7 @@
       stopSettingsAction?.();
       stopCloseRequest?.();
       stopPaneClose?.();
+      stopWorktreeClose?.();
       disposed = true;
       finishWorktreeApproval(false);
       clearInterval(coordinationRetry);
@@ -2092,6 +2097,18 @@
       if (directory !== path) await loadProject(path);
       error = describe(cause);
     }
+  }
+
+  function closeCurrentWorktree() {
+    const repository = selectedRepository(projectCatalog, directory);
+    const worktree = repository
+      ? projectCatalog.worktrees[repository]?.find((item) => item.path === directory)
+      : undefined;
+    if (!repository || !worktree) {
+      error = 'Select a worktree to close it.';
+      return;
+    }
+    void deleteProjectWorktree(repository, worktree.path, worktree.branch);
   }
 
   async function createProjectPullRequest(
@@ -5012,6 +5029,16 @@
     ) {
       event.preventDefault();
       openCommandPalette();
+      return;
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      event.shiftKey &&
+      event.key.toLowerCase() === 'w'
+    ) {
+      event.preventDefault();
+      if (!event.repeat && !document.querySelector('dialog[open]')) closeCurrentWorktree();
       return;
     }
     if (

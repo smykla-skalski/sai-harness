@@ -17,6 +17,13 @@ fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 
     let menu = Menu::default(app)?;
     let close_pane = MenuItem::with_id(app, "close-pane", "Close Pane", true, Some("CmdOrCtrl+W"))?;
+    let close_worktree = MenuItem::with_id(
+        app,
+        "close-worktree",
+        "Close Session and Delete Worktree",
+        true,
+        Some("CmdOrCtrl+Shift+W"),
+    )?;
     for item in menu.items()? {
         if let Some(submenu) = item.as_submenu() {
             for (index, entry) in submenu.items()?.into_iter().enumerate().rev() {
@@ -28,11 +35,16 @@ fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
             if submenu.text()? == "File" {
                 submenu.insert(&close_pane, 0)?;
+                submenu.insert(&close_worktree, 1)?;
             }
         }
     }
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
+        if event.id() == "close-worktree" {
+            let _ = app.emit_to("main", "worktree:close", ());
+            return;
+        }
         if event.id() != "close-pane" {
             return;
         }
