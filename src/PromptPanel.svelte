@@ -30,6 +30,29 @@
   let error = $state('');
   let status = $state('');
 
+  function suggestionKeydown(event: KeyboardEvent) {
+    const button = event.currentTarget as HTMLButtonElement;
+    const combo = button.closest('.prompt-custom-combo');
+    const input = combo?.querySelector<HTMLInputElement>('input');
+    const buttons = [
+      ...(combo?.querySelectorAll<HTMLButtonElement>('.prompt-suggestions button') ?? []),
+    ];
+    const index = buttons.indexOf(button);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      input?.focus();
+      suggestionOpen = null;
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      buttons[(index + 1) % buttons.length]?.focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (index === 0) input?.focus();
+      else buttons[index - 1]?.focus();
+    }
+  }
+
   $effect(() => {
     void sessionID;
     busyID = null;
@@ -371,7 +394,11 @@
                     oninput={(event) => setValue(form, field.key, event.currentTarget.value)}
                     onfocus={() => (suggestionOpen = `${form.id}:${field.key}`)}
                     onkeydown={(event) => {
-                      if (event.key === 'Escape') suggestionOpen = null;
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        suggestionOpen = null;
+                      }
                       if (
                         event.key === 'ArrowDown' &&
                         field.type === 'string' &&
@@ -399,6 +426,7 @@
                           type="button"
                           role="option"
                           aria-selected={value(form, field.key) === option.value}
+                          onkeydown={suggestionKeydown}
                           onclick={() => {
                             setValue(form, field.key, option.value);
                             suggestionOpen = null;

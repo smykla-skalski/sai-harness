@@ -83,6 +83,26 @@ struct PickerDirectory {
     entries: Vec<PickerEntry>,
 }
 
+fn picker_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        return normalize_picker_path(&path);
+    }
+    #[cfg(not(windows))]
+    path.into_owned()
+}
+
+#[cfg(any(windows, test))]
+fn normalize_picker_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    path.strip_prefix(r"\\?\")
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.to_owned())
+}
+
 #[tauri::command]
 fn list_picker_directory(path: Option<String>) -> Result<PickerDirectory, String> {
     let chosen = match path {
@@ -107,7 +127,7 @@ fn list_picker_directory(path: Option<String>) -> Result<PickerDirectory, String
             }
             Some(PickerEntry {
                 name: item.file_name().to_string_lossy().into_owned(),
-                path: path.to_string_lossy().into_owned(),
+                path: picker_path(&path),
                 is_directory,
             })
         })
@@ -118,10 +138,8 @@ fn list_picker_directory(path: Option<String>) -> Result<PickerDirectory, String
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(PickerDirectory {
-        parent: chosen
-            .parent()
-            .map(|path| path.to_string_lossy().into_owned()),
-        path: chosen.to_string_lossy().into_owned(),
+        parent: chosen.parent().map(picker_path),
+        path: picker_path(&chosen),
         entries,
     })
 }
@@ -1333,12 +1351,24 @@ mod tests {
     #[cfg(unix)]
     use super::working_tree_revision;
     use super::{
-        git_change_action, git_patch, repository_namespace, server_args, version_number,
-        working_tree_diff,
+        git_change_action, git_patch, normalize_picker_path, repository_namespace, server_args,
+        version_number, working_tree_diff,
     };
     use std::fs;
     use std::path::Path;
     use std::process::Command;
+
+    #[test]
+    fn picker_paths_remove_windows_verbatim_prefixes() {
+        assert_eq!(
+            normalize_picker_path(r"\\?\C:\Users\me\a.txt"),
+            r"C:\Users\me\a.txt"
+        );
+        assert_eq!(
+            normalize_picker_path(r"\\?\UNC\server\share\a.txt"),
+            r"\\server\share\a.txt"
+        );
+    }
 
     fn git(root: &str, args: &[&str]) {
         let result = Command::new("git")
