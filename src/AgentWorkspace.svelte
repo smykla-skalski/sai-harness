@@ -39,7 +39,7 @@
   import {
     isFailedStatus,
     notificationStats,
-    parseTaskNotifications,
+    splitTaskNotifications,
   } from './lib/task-notification';
 
   interface Props {
@@ -963,63 +963,65 @@
           </details>
         {/if}
       {:else}
-        {@const split =
+        {@const segments =
           entry.type === 'user'
-            ? parseTaskNotifications(entry.text)
-            : { notifications: [], rest: entry.text }}
-        {#each split.notifications as note, index (index)}
-          <div
-            class="agent-subagent-card"
-            class:stopped={note.status !== 'completed'}
-            aria-label={`Subagent ${note.status}`}
-            role="group"
-          >
-            <span class="agent-tool-status" class:failed={isFailedStatus(note.status)}
-              >{note.status.replaceAll('_', ' ')}</span
-            >
-            <span class="agent-subagent-summary">{note.summary}</span>
-            {#each notificationStats(note) as stat (stat)}<span class="agent-subagent-stat"
-                >{stat}</span
-              >{/each}
-          </div>
-        {/each}
-        {#if split.notifications.length === 0 || split.rest}
-          {@const text = split.rest}
-          {@const attribution =
-            entry.type === 'user'
-              ? coordinationMessageForText(entry.text, coordinationMessages)
-              : undefined}
-          <article
-            class:user-message={entry.type === 'user'}
-            class:assistant-message={entry.type !== 'user'}
-            class:thought={entry.type === 'thought'}
-            class="agent-message message"
-          >
+            ? splitTaskNotifications(entry.text)
+            : [{ type: 'text' as const, text: entry.text }]}
+        {#each segments as segment, index (index)}
+          {#if segment.type === 'notification'}
+            {@const note = segment.notification}
             <div
-              class:agent-avatar={entry.type !== 'user'}
-              class:user-avatar={entry.type === 'user'}
-              class="avatar"
+              class="agent-subagent-card"
+              class:stopped={note.status !== 'completed'}
+              aria-label={`Subagent ${note.status}`}
+              role="group"
             >
-              {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
+              <span class="agent-tool-status" class:failed={isFailedStatus(note.status)}
+                >{note.status.replaceAll('_', ' ')}</span
+              >
+              <span class="agent-subagent-summary">{note.summary}</span>
+              {#each notificationStats(note) as stat (stat)}<span class="agent-subagent-stat"
+                  >{stat}</span
+                >{/each}
             </div>
-            <div class="message-body">
-              <div class="message-author">
-                {entry.type === 'user'
-                  ? attribution
-                    ? `From ${attribution.sender}`
-                    : 'You'
-                  : entry.type === 'thought'
-                    ? `${name} · thinking`
-                    : name}
+          {:else}
+            {@const text = segment.text}
+            {@const attribution =
+              entry.type === 'user'
+                ? coordinationMessageForText(text, coordinationMessages)
+                : undefined}
+            <article
+              class:user-message={entry.type === 'user'}
+              class:assistant-message={entry.type !== 'user'}
+              class:thought={entry.type === 'thought'}
+              class="agent-message message"
+            >
+              <div
+                class:agent-avatar={entry.type !== 'user'}
+                class:user-avatar={entry.type === 'user'}
+                class="avatar"
+              >
+                {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
               </div>
-              <Markdown
-                source={attribution
-                  ? text.replace(coordinationPrompt(attribution), attribution.text)
-                  : text}
-              />
-            </div>
-          </article>
-        {/if}
+              <div class="message-body">
+                <div class="message-author">
+                  {entry.type === 'user'
+                    ? attribution
+                      ? `From ${attribution.sender}`
+                      : 'You'
+                    : entry.type === 'thought'
+                      ? `${name} · thinking`
+                      : name}
+                </div>
+                <Markdown
+                  source={attribution
+                    ? text.replace(coordinationPrompt(attribution), attribution.text)
+                    : text}
+                />
+              </div>
+            </article>
+          {/if}
+        {/each}
       {/if}
     {/each}
     {#each coordinationMessages.filter((message) => !entries.some((entry) => entry.type === 'user' && entry.text.includes(coordinationPrompt(message)))) as message (message.id)}

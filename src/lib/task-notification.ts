@@ -26,7 +26,9 @@ function tag(body: string, name: string): string | undefined {
 }
 
 function count(value: string | undefined): number | undefined {
-  return value !== undefined && /^\d+$/.test(value) ? Number(value) : undefined;
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function parseBlock(block: string): TaskNotification | undefined {
@@ -45,19 +47,29 @@ function parseBlock(block: string): TaskNotification | undefined {
   };
 }
 
-export function parseTaskNotifications(text: string): {
-  notifications: TaskNotification[];
-  rest: string;
-} {
-  if (!text.includes('<task-notification>')) return { notifications: [], rest: text };
-  const notifications: TaskNotification[] = [];
-  const rest = text.replace(BLOCK, (block) => {
-    const parsed = parseBlock(block);
-    if (!parsed) return block;
-    notifications.push(parsed);
-    return '';
-  });
-  return { notifications, rest: notifications.length > 0 ? rest.trim() : text };
+export type TaskSegment =
+  { type: 'text'; text: string } | { type: 'notification'; notification: TaskNotification };
+
+export function splitTaskNotifications(text: string): TaskSegment[] {
+  if (!text.includes('<task-notification>')) return [{ type: 'text', text }];
+  const segments: TaskSegment[] = [];
+  let cursor = 0;
+  let found = false;
+  const pushText = (end: number) => {
+    const chunk = text.slice(cursor, end).trim();
+    if (chunk) segments.push({ type: 'text', text: chunk });
+  };
+  for (const match of text.matchAll(BLOCK)) {
+    const notification = parseBlock(match[0]);
+    if (!notification) continue;
+    found = true;
+    pushText(match.index);
+    segments.push({ type: 'notification', notification });
+    cursor = match.index + match[0].length;
+  }
+  if (!found) return [{ type: 'text', text }];
+  pushText(text.length);
+  return segments;
 }
 
 export function isFailedStatus(status: string): boolean {
