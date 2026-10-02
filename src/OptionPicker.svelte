@@ -70,9 +70,11 @@
     const pane = trigger.closest('.pane-leaf')?.getBoundingClientRect();
     const leftEdge = Math.max(0, pane?.left ?? 0);
     const rightEdge = Math.min(window.innerWidth, pane?.right ?? window.innerWidth);
+    const topEdge = Math.max(0, pane?.top ?? 0);
+    const bottomEdge = Math.min(window.innerHeight, pane?.bottom ?? window.innerHeight);
     const width = Math.max(0, Math.min(210, rightEdge - leftEdge - 16));
-    const above = Math.max(0, rect.top - 8);
-    const below = Math.max(0, window.innerHeight - rect.bottom - 8);
+    const above = Math.max(0, rect.top - topEdge - 8);
+    const below = Math.max(0, bottomEdge - rect.bottom - 8);
     const menuHeight = Math.min(menu?.scrollHeight ?? 260, 260);
     const openAbove = above >= menuHeight || above >= below;
     const maxHeight = Math.min(260, openAbove ? above : below);
@@ -217,6 +219,7 @@
   .option-menu {
     position: fixed;
     z-index: 20;
+    box-sizing: border-box;
     max-height: 260px;
     overflow: auto;
     padding: 4px;
