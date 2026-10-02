@@ -2217,12 +2217,20 @@
     } else {
       const agent = focusedPane === 'main' ? acpAgent : current.agent;
       const thread = focusedPane === 'main' ? acpThread : current.thread;
-      if (!agent || !thread) {
+      const transcript = agentEntrySnapshots[focusedPane];
+      const pendingFirstTurn =
+        !thread &&
+        transcript?.sessionId === null &&
+        transcript.entries.some((entry) => entry.type === 'user');
+      if (!agent || (!thread && !pendingFirstTurn)) {
         error = 'Select an agent thread before opening a side chat.';
         return;
       }
-      const transcript = agentEntrySnapshots[focusedPane];
-      if (!transcript || transcript.sessionId !== thread.sessionId || !transcript.ready) {
+      if (
+        !transcript ||
+        !transcript.ready ||
+        (thread && transcript.sessionId !== thread.sessionId)
+      ) {
         error = 'Wait for this thread to finish loading before opening a side chat.';
         return;
       }

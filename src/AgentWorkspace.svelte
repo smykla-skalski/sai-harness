@@ -405,6 +405,9 @@
       draft = '';
       images = [];
     }
+    const userEntryId = crypto.randomUUID();
+    entries = [...entries, { id: userEntryId, type: 'user', text }];
+    void follow();
     try {
       if (!activeSessionId) activityThread = await ensureSession(text.slice(0, 60));
       else if (activityThread?.title === 'New thread')
@@ -419,14 +422,13 @@
         notifyOnDone = false;
         if (external) throw new Error('Agent turn was cancelled.');
         if (current === generation) {
+          entries = entries.filter((entry) => entry.id !== userEntryId);
           draft = [text, draft.trim()].filter(Boolean).join('\n\n');
           images = [...sentImages, ...images];
           keepImages = true;
         }
         return;
       }
-      entries = [...entries, { id: crypto.randomUUID(), type: 'user', text }];
-      void follow();
       const promptText =
         ephemeral && seedContext && entries.length === 1
           ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
@@ -453,6 +455,7 @@
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
         if (!external) {
+          entries = entries.filter((entry) => entry.id !== userEntryId);
           draft = [text, draft.trim()].filter(Boolean).join('\n\n');
           images = [...sentImages, ...images];
           keepImages = true;
