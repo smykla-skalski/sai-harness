@@ -59,19 +59,31 @@
 
   onMount(() => {
     disposed = false;
-    if (source.kind === 'opencode' && client) {
+    const forkClient = client;
+    if (source.kind === 'opencode' && forkClient) {
       loading = true;
       void (async () => {
+        let createdID: string | null = null;
         try {
-          const fork = await client.session.fork({ sessionID: source.sessionID });
+          const fork = await forkClient.session.fork({ sessionID: source.sessionID });
+          createdID = fork.id;
           if (disposed) {
-            await client.session.remove({ sessionID: fork.id });
+            await forkClient.session.remove({ sessionID: fork.id });
             return;
           }
-          forkID = fork.id;
-          const page = await client.message.list({ sessionID: fork.id, limit: 100, order: 'desc' });
+          const page = await forkClient.message.list({
+            sessionID: fork.id,
+            limit: 100,
+            order: 'desc',
+          });
+          if (disposed) {
+            await forkClient.session.remove({ sessionID: fork.id });
+            return;
+          }
           baseline = new Set(page.data.map((message) => message.id));
+          forkID = fork.id;
         } catch (cause) {
+          if (createdID) await forkClient.session.remove({ sessionID: createdID }).catch(() => {});
           if (!disposed) error = String(cause);
         } finally {
           if (!disposed) loading = false;
@@ -80,13 +92,13 @@
     }
     return () => {
       disposed = true;
-      if (forkID && client) {
+      if (forkID && forkClient) {
         const sessionID = forkID;
         const pending = inboxID;
         void (async () => {
           if (pending)
-            await client.session.inbox.cancel({ sessionID, inboxID: pending }).catch(() => {});
-          await client.session.remove({ sessionID }).catch(() => {});
+            await forkClient.session.inbox.cancel({ sessionID, inboxID: pending }).catch(() => {});
+          await forkClient.session.remove({ sessionID }).catch(() => {});
         })();
       }
     };
@@ -108,8 +120,10 @@
     busy = true;
     error = '';
     draft = '';
+    let accepted = false;
     try {
       const inbox = await client.session.prompt({ sessionID: forkID, text });
+      accepted = true;
       if (disposed) {
         await client.session.inbox.cancel({ sessionID: forkID, inboxID: inbox.id }).catch(() => {});
         return;
@@ -121,7 +135,7 @@
     } catch (cause) {
       if (!disposed) {
         error = String(cause);
-        draft = text;
+        if (!accepted) draft = text;
       }
     } finally {
       if (!disposed) busy = false;
