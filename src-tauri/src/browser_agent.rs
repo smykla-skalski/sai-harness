@@ -457,7 +457,9 @@ impl BrowserManager {
         arguments: Value,
     ) -> Result<Value, String> {
         let setting = match name {
-            "worktree_create" | "worktree_list" | "worktree_info" => "sai-agent-worktrees-enabled",
+            "worktree_create" | "worktree_list" | "worktree_info" | "agent_spawn" => {
+                "sai-agent-worktrees-enabled"
+            }
             "worktree_status" => "sai-agent-status-enabled",
             "project_threads" => "sai-agent-thread-list-enabled",
             "thread_message" => "sai-agent-messages-enabled",
@@ -528,6 +530,7 @@ impl BrowserManager {
             "worktree_create"
                 | "worktree_list"
                 | "worktree_info"
+                | "agent_spawn"
                 | "worktree_status"
                 | "project_threads"
                 | "thread_message"
@@ -1053,6 +1056,11 @@ const TOOLS: &[(&str, &str, &str)] = &[
         "name,prompt",
     ),
     (
+        "agent_spawn",
+        "Start Claude, Codex, or OpenCode with a prompt in a new worktree by default. An explicit existing target shares its files and may require approval.",
+        "provider,prompt",
+    ),
+    (
         "worktree_status",
         "Set a short status comment on the current worktree in the Sail sidebar. Empty text clears it.",
         "comment",
@@ -1114,6 +1122,20 @@ pub fn run_mcp_stdio() {
             }),
             "ping" => json!({}),
             "tools/list" => json!({"tools": TOOLS.iter().map(|(name, description, fields)| {
+                if *name == "agent_spawn" {
+                    return json!({"name":name,"description":description,"inputSchema":{
+                        "type":"object",
+                        "properties":{
+                            "provider":{"type":"string","enum":["claude","codex","opencode"]},
+                            "prompt":{"type":"string"},
+                            "target":{"oneOf":[
+                                {"type":"object","properties":{"kind":{"const":"new"},"name":{"type":"string"}},"required":["kind","name"]},
+                                {"type":"object","properties":{"kind":{"const":"existing"},"path":{"type":"string"}},"required":["kind","path"]}
+                            ]}
+                        },
+                        "required":["provider","prompt"]
+                    }});
+                }
                 let properties: serde_json::Map<String, Value> = fields.split(',').filter(|field| !field.is_empty()).map(|field| (field.to_string(), json!({"type":"string"}))).collect();
                 json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":properties.keys().collect::<Vec<_>>()}})
             }).collect::<Vec<_>>() }),
