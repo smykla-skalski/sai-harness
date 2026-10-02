@@ -42,7 +42,7 @@ objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfigura
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0.2"
-cairo-rs = { version = "0.18", features = ["png"] }
+cairo-rs = { version = "0.22", features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39.1"
