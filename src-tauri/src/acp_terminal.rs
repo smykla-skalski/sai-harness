@@ -591,35 +591,39 @@ pub struct InspectedOutput {
     timed_out: bool,
 }
 
-fn inspected_page(
-    id: &str,
-    directory: &Path,
-    bytes: &[u8],
+struct PageSource<'a> {
+    id: &'a str,
+    directory: &'a Path,
+    bytes: &'a [u8],
     base: u64,
     exit_code: Option<i32>,
     exited: bool,
+}
+
+fn inspected_page(
+    source: PageSource<'_>,
     cursor: u64,
     max_bytes: usize,
     timed_out: bool,
 ) -> InspectedOutput {
-    let end = base + bytes.len() as u64;
-    let truncated = cursor < base;
+    let end = source.base + source.bytes.len() as u64;
+    let truncated = cursor < source.base;
     let reset = cursor > end;
     let offset = if truncated || reset {
         0
     } else {
-        (cursor - base) as usize
+        (cursor - source.base) as usize
     };
-    let page = &bytes[offset..(offset + max_bytes.clamp(1, 65_536)).min(bytes.len())];
+    let page = &source.bytes[offset..(offset + max_bytes.clamp(1, 65_536)).min(source.bytes.len())];
     InspectedOutput {
-        terminal_id: format!("agent:{id}"),
-        worktree: directory.to_string_lossy().into_owned(),
-        state: if exited { "exited" } else { "running" },
-        exit_code,
+        terminal_id: format!("agent:{}", source.id),
+        worktree: source.directory.to_string_lossy().into_owned(),
+        state: if source.exited { "exited" } else { "running" },
+        exit_code: source.exit_code,
         output: String::from_utf8_lossy(page).into_owned(),
         output_base64: base64::engine::general_purpose::STANDARD.encode(page),
-        cursor: base + offset as u64 + page.len() as u64,
-        base_cursor: base,
+        cursor: source.base + offset as u64 + page.len() as u64,
+        base_cursor: source.base,
         truncated,
         reset,
         timed_out,
@@ -730,12 +734,14 @@ pub fn acp_terminal_inspect_read(
         let output = terminal.output.lock().map_err(|error| error.to_string())?;
         let bytes: Vec<_> = output.bytes.iter().copied().collect();
         return Ok(inspected_page(
-            id,
-            &terminal.directory,
-            &bytes,
-            output.start,
-            output.exit.as_ref().and_then(|status| status.exit_code),
-            output.exit.is_some() || output.released,
+            PageSource {
+                id,
+                directory: &terminal.directory,
+                bytes: &bytes,
+                base: output.start,
+                exit_code: output.exit.as_ref().and_then(|status| status.exit_code),
+                exited: output.exit.is_some() || output.released,
+            },
             cursor,
             max_bytes,
             false,
@@ -743,15 +749,17 @@ pub fn acp_terminal_inspect_read(
     }
     let snapshot = inspected_archived(&manager, id, &allowed)?.ok_or("Unknown terminal ID.")?;
     Ok(inspected_page(
-        id,
-        Path::new(&snapshot.directory),
-        &snapshot.bytes,
-        snapshot.base_cursor,
-        snapshot
-            .exit_status
-            .as_ref()
-            .and_then(|status| status.exit_code),
-        true,
+        PageSource {
+            id,
+            directory: Path::new(&snapshot.directory),
+            bytes: &snapshot.bytes,
+            base: snapshot.base_cursor,
+            exit_code: snapshot
+                .exit_status
+                .as_ref()
+                .and_then(|status| status.exit_code),
+            exited: true,
+        },
         cursor,
         max_bytes,
         false,
@@ -772,15 +780,17 @@ pub fn acp_terminal_inspect_wait(
     let Some(terminal) = inspected_active(&manager, id, &allowed)? else {
         let snapshot = inspected_archived(&manager, id, &allowed)?.ok_or("Unknown terminal ID.")?;
         return Ok(inspected_page(
-            id,
-            Path::new(&snapshot.directory),
-            &snapshot.bytes,
-            snapshot.base_cursor,
-            snapshot
-                .exit_status
-                .as_ref()
-                .and_then(|status| status.exit_code),
-            true,
+            PageSource {
+                id,
+                directory: Path::new(&snapshot.directory),
+                bytes: &snapshot.bytes,
+                base: snapshot.base_cursor,
+                exit_code: snapshot
+                    .exit_status
+                    .as_ref()
+                    .and_then(|status| status.exit_code),
+                exited: true,
+            },
             cursor,
             max_bytes,
             false,
@@ -810,12 +820,14 @@ pub fn acp_terminal_inspect_wait(
         };
     let bytes: Vec<_> = output.bytes.iter().copied().collect();
     Ok(inspected_page(
-        id,
-        &terminal.directory,
-        &bytes,
-        output.start,
-        output.exit.as_ref().and_then(|status| status.exit_code),
-        output.exit.is_some() || output.released,
+        PageSource {
+            id,
+            directory: &terminal.directory,
+            bytes: &bytes,
+            base: output.start,
+            exit_code: output.exit.as_ref().and_then(|status| status.exit_code),
+            exited: output.exit.is_some() || output.released,
+        },
         cursor,
         max_bytes,
         timed_out,
