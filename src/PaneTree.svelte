@@ -72,6 +72,7 @@
     onbatchcomplete: (id: string, failure: string | null) => void;
     onshortcut: (event: KeyboardEvent) => void;
     onactivity: (thread: AgentThread) => void;
+    onusage: (sessionID: string, context: number | undefined) => void;
     focusPromptPane: string | null;
     onpromptfocused: () => void;
     running: (thread: AgentThread | null) => boolean;
@@ -119,6 +120,7 @@
     onbatchcomplete,
     onshortcut,
     onactivity,
+    onusage,
     focusPromptPane,
     onpromptfocused,
     running,
@@ -340,6 +342,7 @@
       {onbatchcomplete}
       {onshortcut}
       {onactivity}
+      {onusage}
       {focusPromptPane}
       {onpromptfocused}
       {running}
@@ -414,6 +417,7 @@
       {onbatchcomplete}
       {onshortcut}
       {onactivity}
+      {onusage}
       {focusPromptPane}
       {onpromptfocused}
       {running}
@@ -543,6 +547,7 @@
                 onactivity(thread);
                 void refreshNativeDetails();
               }}
+              {onusage}
               {onstatus}
             />
             {#if nativeDetailsVisible}

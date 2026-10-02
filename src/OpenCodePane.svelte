@@ -16,6 +16,7 @@
     type CoordinationMessage,
   } from './lib/coordination';
   import type { ThreadStatus } from './lib/attention';
+  import { openCodeContextUsage } from './lib/agent-usage';
   import { fileUri } from './lib/attachments';
   import type { SetupReport } from './lib/onboarding';
   import type { OpenCodeClient, SessionInfo, SessionMessageInfo } from './lib/opencode';
@@ -37,6 +38,7 @@
     oncreated,
     onactivity,
     onstatus,
+    onusage,
   }: {
     client: OpenCodeClient | null;
     directory: string;
@@ -53,6 +55,7 @@
     oncreated: (thread: AgentThread) => void;
     onactivity: (thread: AgentThread) => void;
     onstatus: (thread: AgentThread, status: ThreadStatus, notifyOnDone?: boolean) => void;
+    onusage?: (sessionID: string, context: number | undefined) => void;
   } = $props();
 
   let session = $state<SessionInfo | null>(null);
@@ -86,6 +89,7 @@
   let following = true;
   let stopRequested = false;
   const busy = $derived(sending || running);
+  const contextUsage = $derived(openCodeContextUsage(messages, setup?.models ?? []));
   const inputReady = $derived(
     !!setup?.workReady || (session?.agent === 'architect' && !!setup?.planReady),
   );
@@ -130,6 +134,7 @@
     if (current !== generation || id !== activeID) return;
     const first = !messages.length;
     messages = first ? page.data.toReversed() : mergeMessages(messages, page.data);
+    onusage?.(id, openCodeContextUsage(messages, setup?.models ?? []));
     if (first) cursor = page.cursor.next ?? null;
     await follow();
     if (scroll?.scrollHeight <= scroll?.clientHeight && cursor) void loadOlder();
@@ -488,6 +493,7 @@
     <div class="agent-heading">
       <strong>OpenCode</strong><span>{session?.title ?? thread?.title ?? 'New thread'}</span>
     </div>
+    {#if contextUsage !== undefined}<span class="agent-usage">Context {contextUsage}%</span>{/if}
     <Badge tone={busy ? 'warning' : inputReady ? 'success' : 'neutral'}
       >{loading ? 'Connecting' : busy ? 'Working' : inputReady ? 'Ready' : 'Offline'}</Badge
     >
@@ -671,6 +677,7 @@
   .opencode-pane .agent-heading {
     display: flex;
     min-width: 0;
+    flex: 1;
     align-items: baseline;
     gap: 12px;
   }
@@ -678,6 +685,11 @@
     overflow: hidden;
     opacity: 0.65;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .opencode-pane .agent-usage {
+    flex: none;
+    font-size: 11px;
     white-space: nowrap;
   }
   .opencode-pane .agent-conversation {

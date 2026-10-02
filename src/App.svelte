@@ -5652,6 +5652,10 @@
       onpickedconsumed={markPickConsumed}
       onshortcut={keydownWorkspace}
       onactivity={recordPaneActivity}
+      onusage={(id, context) => {
+        if (context !== undefined && openCodeUsage[`${directory}:${id}`] !== context)
+          openCodeUsage = { ...openCodeUsage, [`${directory}:${id}`]: context };
+      }}
       focusPromptPane={promptFocusPane}
       onpromptfocused={() => (promptFocusPane = null)}
       running={(thread) => !!(thread && runningAgentThreads[agentThreadKey(thread)])}
