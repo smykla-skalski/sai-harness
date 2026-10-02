@@ -216,6 +216,9 @@
       | 'terminal_list'
       | 'terminal_read'
       | 'terminal_wait'
+      | 'terminal_create'
+      | 'terminal_write'
+      | 'terminal_stop'
       | 'worktree_list'
       | 'worktree_info'
       | 'worktree_status'
@@ -378,6 +381,7 @@
   let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
   let notificationSound = $state(getSetting('sai-notification-sound') !== 'false');
   let agentWorktreesEnabled = $state(getSetting('sai-agent-worktrees-enabled') !== 'false');
+  let agentTerminalsEnabled = $state(getSetting('sai-agent-terminals-enabled') === 'true');
   let agentStatusEnabled = $state(getSetting('sai-agent-status-enabled') !== 'false');
   let agentThreadListEnabled = $state(getSetting('sai-agent-thread-list-enabled') !== 'false');
   let agentMessagesEnabled = $state(getSetting('sai-agent-messages-enabled') !== 'false');
@@ -1061,6 +1065,7 @@
       notificationsEnabled,
       notificationSound,
       agentWorktreesEnabled,
+      agentTerminalsEnabled,
       agentStatusEnabled,
       agentThreadListEnabled,
       agentMessagesEnabled,
@@ -1212,6 +1217,9 @@
         } else if (action.type === 'agent-worktrees') {
           agentWorktreesEnabled = action.value;
           setSetting('sai-agent-worktrees-enabled', String(action.value));
+        } else if (action.type === 'agent-terminals') {
+          agentTerminalsEnabled = action.value;
+          setSetting('sai-agent-terminals-enabled', String(action.value));
         } else if (action.type === 'agent-status') {
           agentStatusEnabled = action.value;
           setSetting('sai-agent-status-enabled', String(action.value));
@@ -1812,6 +1820,85 @@
       source.kind === 'acp'
         ? `acp:${source.agent}:${request.sessionId}`
         : `opencode:${request.sessionId}`;
+    if (
+      request.name === 'terminal_create' ||
+      request.name === 'terminal_write' ||
+      request.name === 'terminal_stop'
+    ) {
+      if (source.kind !== 'acp')
+        throw new Error('Terminal control requires a session-bound agent connection.');
+      if (!agentTerminalsEnabled)
+        throw new Error('Agent terminal execution is disabled in settings.');
+      const owner = `${request.directory}\0${sourceId}`;
+      if (request.name === 'terminal_create') {
+        const registered = await invoke<RegisteredWorktree[]>('registered_worktrees', {
+          repository: project,
+          paths: [project, ...(projectCatalog.worktrees[project] ?? []).map((item) => item.path)],
+        });
+        if (
+          request.directory !== project &&
+          !registered.some((item) => item.path === request.directory)
+        )
+          throw new Error('The source worktree is not registered in this project.');
+        const command = request.arguments.command;
+        if (typeof command !== 'string' || !command.trim())
+          throw new Error('A terminal command is required.');
+        if (new TextEncoder().encode(command).length > 16_384)
+          throw new Error('Terminal command exceeds 16384 bytes.');
+        const layout = paneLayouts[request.directory] ?? mainPane();
+        const target = leaves(layout)[0];
+        const split = splitPane(layout, target.id, 'row');
+        const prior = new Set(leaves(layout).map((pane) => pane.id));
+        const created = leaves(split).find((pane) => !prior.has(pane.id));
+        if (!created) throw new Error('Could not create a terminal pane.');
+        paneLayouts = { ...paneLayouts, [request.directory]: split };
+        persistPaneLayouts();
+        let terminalId: string | null = null;
+        try {
+          terminalId = await invoke<string>('terminal_owned_create', {
+            paneId: created.id,
+            directory: request.directory,
+            command,
+            owner,
+          });
+          const current = paneLayouts[request.directory] ?? mainPane();
+          const reserved = leaves(current).find((pane) => pane.id === created.id);
+          if (!reserved || reserved.kind)
+            throw new Error('The terminal pane changed before creation finished.');
+          paneLayouts = {
+            ...paneLayouts,
+            [request.directory]: updatePane(current, created.id, {
+              kind: 'terminal',
+              owner: `${source.agent}: ${source.title}`,
+            }),
+          };
+          persistPaneLayouts();
+          if (directory !== request.directory) await loadProject(request.directory);
+          focusPaneForTyping(created.id);
+        } catch (cause) {
+          if (terminalId) await invoke('terminal_close', { id: created.id });
+          const current = paneLayouts[request.directory];
+          if (current && leaves(current).some((pane) => pane.id === created.id)) {
+            paneLayouts = { ...paneLayouts, [request.directory]: closePane(current, created.id) };
+            persistPaneLayouts();
+          }
+          throw cause;
+        }
+        return { terminalId, paneId: created.id, worktree: request.directory };
+      }
+      const terminalId = request.arguments.terminalId;
+      if (typeof terminalId !== 'string' || !terminalId.startsWith('shell:'))
+        throw new Error('Choose an owned shell terminal ID.');
+      if (request.name === 'terminal_write') {
+        const data = request.arguments.data;
+        if (typeof data !== 'string' || !data || new TextEncoder().encode(data).length > 16_384)
+          throw new Error('Terminal input must be 1–16384 bytes.');
+        await invoke('terminal_owned_write', { terminalId, owner, data });
+        return { terminalId, writtenBytes: new TextEncoder().encode(data).length };
+      }
+      await invoke('terminal_owned_stop', { terminalId, owner });
+      return { terminalId, stopping: true };
+    }
     if (request.name === 'worktree_list' || request.name === 'worktree_info') {
       if (!agentWorktreesEnabled) throw new Error('Agent worktree access is disabled in settings.');
       const registered = await invoke<RegisteredWorktree[]>('registered_worktrees', {
@@ -6915,6 +7002,7 @@
         terminalExitWaiters.delete(id);
         finishCoordinationSetup(id, code);
       }}
+      onterminalownerlost={(id) => savePaneLayout(updatePane(paneLayout, id, { owner: undefined }))}
       onagentterminal={(id) => void openAgentTerminal(id)}
     />
   </div>

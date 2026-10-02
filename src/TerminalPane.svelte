@@ -19,6 +19,8 @@
     command,
     oncommandstarted,
     onexit,
+    owner,
+    onownerlost,
   }: {
     id: string;
     directory: string;
@@ -28,6 +30,8 @@
     command?: string;
     oncommandstarted: (id: string) => void;
     onexit: (id: string, code: number) => void;
+    owner?: string;
+    onownerlost: (id: string) => void;
   } = $props();
   const runtimeId = $derived(terminalRuntimeId(directory, id));
   let container: HTMLDivElement;
@@ -62,7 +66,7 @@
   async function open() {
     let reportedExit: number | null = null;
     try {
-      await invoke('terminal_open', {
+      const existed = await invoke<boolean>('terminal_open', {
         params: {
           id: runtimeId,
           directory,
@@ -72,6 +76,7 @@
         },
         onEvent: channel((code) => (reportedExit = code)),
       });
+      if (owner && !existed) onownerlost(id);
       started = true;
       if (initialCommand) oncommandstarted(id);
       exitCode = reportedExit;

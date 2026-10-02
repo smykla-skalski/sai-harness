@@ -83,6 +83,7 @@
     pendingCommands: Record<string, string>;
     oncommandstarted: (id: string) => void;
     onterminalexit: (id: string, code: number) => void;
+    onterminalownerlost: (id: string) => void;
     onagentterminal: (id: string) => void;
   };
 
@@ -132,6 +133,7 @@
     pendingCommands,
     oncommandstarted,
     onterminalexit,
+    onterminalownerlost,
     onagentterminal,
   }: Props = $props();
   let container = $state<HTMLDivElement>();
@@ -372,6 +374,7 @@
       {pendingCommands}
       {oncommandstarted}
       {onterminalexit}
+      {onterminalownerlost}
       {onagentterminal}
     />
     <div
@@ -448,6 +451,7 @@
       {pendingCommands}
       {oncommandstarted}
       {onterminalexit}
+      {onterminalownerlost}
       {onagentterminal}
     />
   </div>
@@ -494,7 +498,9 @@
         <div class="pane-heading">
           <span
             >{pane.kind === 'terminal'
-              ? 'Terminal'
+              ? pane.owner
+                ? `Terminal · ${pane.owner}`
+                : 'Terminal'
               : pane.kind === 'agent-terminal'
                 ? 'Agent terminal'
                 : pane.kind === 'browser'
@@ -510,7 +516,9 @@
         <div class="pane-heading">
           <span
             >{pane.kind === 'terminal'
-              ? 'Terminal'
+              ? pane.owner
+                ? `Terminal · ${pane.owner}`
+                : 'Terminal'
               : pane.kind === 'browser'
                 ? 'Browser'
                 : 'Main thread'}</span
@@ -533,6 +541,8 @@
             command={pendingCommands[pane.id]}
             {oncommandstarted}
             onexit={onterminalexit}
+            owner={pane.owner}
+            onownerlost={onterminalownerlost}
           />
         {/key}
       {:else if pane.kind === 'agent-terminal'}

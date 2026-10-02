@@ -226,6 +226,15 @@
         <label class="attention-setting">
           <input
             type="checkbox"
+            checked={snapshot?.agentTerminalsEnabled ?? false}
+            onchange={(event) =>
+              send({ type: 'agent-terminals', value: event.currentTarget.checked })}
+          />
+          Allow agents to run commands in owned terminals
+        </label>
+        <label class="attention-setting">
+          <input
+            type="checkbox"
             checked={snapshot?.agentStatusEnabled ?? true}
             onchange={(event) => send({ type: 'agent-status', value: event.currentTarget.checked })}
           />
