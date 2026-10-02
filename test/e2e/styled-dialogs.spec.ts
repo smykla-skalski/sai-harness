@@ -75,6 +75,17 @@ describe('styled app dialogs', () => {
     await $('.path-picker-dialog[open] [aria-label="Folder path"]').setValue(another);
     await $('.path-picker-dialog[open] button[type="submit"]').click();
     await expect($('.path-picker-dialog[open] .path-picker-actions span')).toHaveText(another);
+    await $('.path-picker-dialog[open] [aria-label="Folder path"]').setValue(
+      join(fixture, 'missing'),
+    );
+    await $('.path-picker-dialog[open] button[type="submit"]').click();
+    await expect($('.path-picker-dialog[open] [role="alert"]')).toBeDisplayed();
+    await expect(
+      $('.path-picker-dialog[open] .path-picker-actions .confirmation-primary'),
+    ).toBeDisabled();
+    await $('.path-picker-dialog[open] [aria-label="Folder path"]').setValue(another);
+    await $('.path-picker-dialog[open] button[type="submit"]').click();
+    await expect($('.path-picker-dialog[open] [role="alert"]')).not.toExist();
     await $('.path-picker-dialog[open] .path-picker-actions .confirmation-primary').click();
     await expect($('.path-picker-dialog[open]')).not.toExist();
     await expect($(`.project-default-worktree-select[title="${another}"]`)).toBeDisplayed();

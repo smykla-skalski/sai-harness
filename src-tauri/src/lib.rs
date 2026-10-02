@@ -118,7 +118,9 @@ fn list_picker_directory(path: Option<String>) -> Result<PickerDirectory, String
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(PickerDirectory {
-        parent: chosen.parent().map(|path| path.to_string_lossy().into_owned()),
+        parent: chosen
+            .parent()
+            .map(|path| path.to_string_lossy().into_owned()),
         path: chosen.to_string_lossy().into_owned(),
         entries,
     })

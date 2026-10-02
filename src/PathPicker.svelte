@@ -138,7 +138,10 @@
     <button
       type="button"
       class="confirmation-primary"
-      disabled={loading || (mode === 'files' ? !selected.length : !listing)}
+      disabled={loading ||
+        !!error ||
+        location !== listing?.path ||
+        (mode === 'files' ? !selected.length : !listing)}
       onclick={() => onselect(mode === 'files' ? selected : listing ? [listing.path] : [])}
       >{mode === 'files' ? 'Attach files' : 'Choose folder'}</button
     >
