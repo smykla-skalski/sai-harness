@@ -113,6 +113,14 @@
     type CoordinationMessage,
     type RegisteredWorktree,
   } from './lib/coordination';
+  import {
+    acpReceiptState,
+    loadSpawnReceipts,
+    receiptForSource,
+    receiptIsSettled,
+    saveBoundedReceipt,
+    type SpawnReceipt,
+  } from './lib/agent-results';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
   import {
     commandsForDirectory,
@@ -174,10 +182,14 @@
   type CoordinationRequest = {
     id: string;
     sessionId: string;
+    sourceAgent: string | null;
     directory: string;
     name:
       | 'worktree_create'
       | 'agent_spawn'
+      | 'agent_status'
+      | 'agent_wait'
+      | 'agent_result'
       | 'worktree_list'
       | 'worktree_info'
       | 'worktree_status'
@@ -211,6 +223,18 @@
   let coordinationMessages = $state<CoordinationMessage[]>(
     loadCoordinationMessages(getSetting('sai-coordination-messages')),
   );
+  let spawnReceipts = loadSpawnReceipts(getSetting('sai-agent-spawn-receipts'));
+  const spawnOutput = new SvelteMap<string, string>();
+  const activeSpawnTargets = new SvelteMap<string, string>();
+  for (const receipt of spawnReceipts) {
+    if (
+      receipt.targetId &&
+      receipt.turnId &&
+      (receipt.state === 'working' || receipt.state === 'waiting')
+    )
+      activeSpawnTargets.set(receipt.targetId, receipt.receiptId);
+  }
+  const activeSpawnRequests = new SvelteSet<string>();
   const coordinationDeliveries = new SvelteMap<string, Promise<void>>();
   const coordinationAttempts = new SvelteMap<string, number>();
   type WorktreeConfig = { setup: string; run: string; archive: string; copy: string[] };
@@ -1421,6 +1445,132 @@
     scheduleInboxRefresh();
   }
 
+  function saveSpawnReceipt(receipt: SpawnReceipt) {
+    spawnReceipts = saveBoundedReceipt(spawnReceipts, receipt);
+    setSetting('sai-agent-spawn-receipts', JSON.stringify(spawnReceipts));
+  }
+
+  function updateSpawnReceipt(id: string, changes: Partial<SpawnReceipt>) {
+    const current = spawnReceipts.find((item) => item.receiptId === id);
+    if (!current) return;
+    if (
+      receiptIsSettled(current.state) &&
+      changes.state &&
+      ['working', 'waiting', 'unavailable'].includes(changes.state)
+    )
+      return;
+    if (
+      Object.entries(changes).every(([key, value]) => current[key as keyof SpawnReceipt] === value)
+    )
+      return;
+    saveSpawnReceipt({ ...current, ...changes, updated: Date.now() });
+  }
+
+  async function settleOpenCodeReceipt(
+    receipt: SpawnReceipt,
+    source: OpenCodeClient,
+    outcome: 'succeeded' | 'failed' | 'interrupted' | undefined,
+  ) {
+    const sessionId = receipt.targetId?.slice('opencode:'.length);
+    if (!sessionId || !receipt.prompt) {
+      updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
+      return;
+    }
+    const page = await source.message.list({ sessionID: sessionId, limit: 50, order: 'desc' });
+    const users = page.data.filter((message) => message.type === 'user');
+    if (users.length !== 1 || users[0].text !== receipt.prompt) {
+      updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
+      return;
+    }
+    const idle = page.data.find((message) => message.type === 'idle');
+    const finished = idle?.outcome ?? outcome;
+    if (!finished) {
+      updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
+      return;
+    }
+    const result =
+      page.data
+        .flatMap((message) =>
+          message.type === 'assistant' && message.time.completed
+            ? message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))
+            : [],
+        )
+        .join('\n')
+        .slice(-16_000) || null;
+    updateSpawnReceipt(receipt.receiptId, {
+      state:
+        finished === 'succeeded' ? 'completed' : finished === 'failed' ? 'failed' : 'interrupted',
+      result,
+    });
+  }
+
+  async function currentSpawnReceipt(receipt: SpawnReceipt): Promise<SpawnReceipt> {
+    if (receiptIsSettled(receipt.state)) return receipt;
+    if (
+      !receipt.targetId ||
+      !receipt.targetDirectory ||
+      (receipt.provider !== 'opencode' && !receipt.turnId)
+    ) {
+      if (activeSpawnRequests.has(receipt.receiptId)) return receipt;
+      updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
+      return spawnReceipts.find((item) => item.receiptId === receipt.receiptId) ?? receipt;
+    }
+    if (receipt.provider !== 'opencode') {
+      const receiptActivity = await acp.activity().then(
+        (states) => states[receipt.provider],
+        () => null,
+      );
+      reconcileAcpSpawnReceipt(receipt, receiptActivity);
+    } else if (client) {
+      const sessionId = receipt.targetId.slice('opencode:'.length);
+      try {
+        const [session, active, inbox, permissions, forms] = await Promise.all([
+          client.session.get({ sessionID: sessionId }),
+          client.session.active(),
+          client.session.inbox.list({ sessionID: sessionId }),
+          client.permission.request.list({ location: { directory: receipt.targetDirectory } }),
+          client.form.list({ location: { directory: receipt.targetDirectory } }),
+        ]);
+        if (session.location.directory !== receipt.targetDirectory)
+          throw new Error('Target session moved to another worktree.');
+        if (
+          permissions.data.some((item) => item.sessionID === sessionId) ||
+          forms.data.some((item) => item.sessionID === sessionId)
+        )
+          updateSpawnReceipt(receipt.receiptId, { state: 'waiting' });
+        else if (active[sessionId]?.type === 'running')
+          updateSpawnReceipt(receipt.receiptId, { state: 'working' });
+        else if (session.outcome) await settleOpenCodeReceipt(receipt, client, session.outcome);
+        else if (inbox.some((item) => item.id === receipt.turnId))
+          updateSpawnReceipt(receipt.receiptId, { state: 'queued' });
+        else await settleOpenCodeReceipt(receipt, client, session.outcome);
+      } catch {
+        updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
+      }
+    } else {
+      updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
+    }
+    return spawnReceipts.find((item) => item.receiptId === receipt.receiptId) ?? receipt;
+  }
+
+  function reconcileAcpSpawnReceipt(
+    receipt: SpawnReceipt,
+    agentActivity: Awaited<ReturnType<typeof acp.activity>>[AgentId] | null,
+  ) {
+    const state = acpReceiptState(receipt, agentActivity);
+    if (state === 'working' || state === 'waiting') {
+      updateSpawnReceipt(receipt.receiptId, { state });
+      activeSpawnTargets.set(receipt.targetId!, receipt.receiptId);
+    } else {
+      updateSpawnReceipt(receipt.receiptId, {
+        state,
+        result: spawnOutput.get(receipt.receiptId) ?? receipt.result,
+      });
+      if (receipt.targetId && activeSpawnTargets.get(receipt.targetId) === receipt.receiptId)
+        activeSpawnTargets.delete(receipt.targetId);
+    }
+  }
+
   function coordinationProject(path: string): string | null {
     if (projectCatalog.repositories.includes(path)) return path;
     return (
@@ -1431,25 +1581,31 @@
   }
 
   async function coordinationSource(request: CoordinationRequest): Promise<CoordinationSource> {
-    const thread = agentThreads.find(
-      (item) => item.directory === request.directory && item.sessionId === request.sessionId,
-    );
-    if (thread) {
-      const runtime = (await acp.activity())[thread.agent];
-      if (!runtime?.alive || !runtime.sessions.includes(thread.sessionId))
-        throw new Error('The source agent session is unavailable.');
-      return { kind: 'acp', agent: thread.agent, title: thread.title };
+    if (!request.sourceAgent) {
+      if (!client) throw new Error('The source agent session is unavailable.');
+      const session = await client.session.get({ sessionID: request.sessionId });
+      if (session.location.directory !== request.directory)
+        throw new Error('The source agent session belongs to another worktree.');
+      return {
+        kind: 'opencode',
+        agent: session.agent ?? 'OpenCode',
+        model: session.model,
+        title: session.title ?? 'OpenCode thread',
+      };
     }
-    if (!client) throw new Error('The source agent session is unavailable.');
-    const session = await client.session.get({ sessionID: request.sessionId });
-    if (session.location.directory !== request.directory)
-      throw new Error('The source agent session belongs to another worktree.');
-    return {
-      kind: 'opencode',
-      agent: session.agent ?? 'OpenCode',
-      model: session.model,
-      title: session.title ?? 'OpenCode thread',
-    };
+    const matches = agentThreads.filter(
+      (item) =>
+        item.directory === request.directory &&
+        item.sessionId === request.sessionId &&
+        item.agent === request.sourceAgent,
+    );
+    if (matches.length > 1) throw new Error('The source agent session is ambiguous.');
+    const thread = matches[0];
+    if (!thread) throw new Error('The source agent session is unavailable.');
+    const runtime = (await acp.activity())[thread.agent];
+    if (!runtime?.alive || !runtime.sessions.includes(thread.sessionId))
+      throw new Error('The source agent session is unavailable.');
+    return { kind: 'acp', agent: thread.agent, title: thread.title };
   }
 
   async function projectCoordinationThreads(project: string): Promise<CoordinationThread[]> {
@@ -1683,7 +1839,92 @@
       setTimeout(retryCoordinationDeliveries, 200);
       return { queuedFor: target.id, queued: true, messageId: message.id };
     }
-    if (request.name === 'agent_spawn') return spawnCoordinatedAgent(request, project, source);
+    if (
+      request.name === 'agent_status' ||
+      request.name === 'agent_wait' ||
+      request.name === 'agent_result'
+    ) {
+      if (!agentWorktreesEnabled) throw new Error('Agent worktree access is disabled in settings.');
+      const id = request.arguments.receiptId;
+      const accessKey = request.arguments.accessKey;
+      if (typeof id !== 'string' || typeof accessKey !== 'string')
+        throw new Error('Launch receipt ID and access key are required.');
+      const receipt = receiptForSource(
+        spawnReceipts,
+        id,
+        accessKey,
+        project,
+        sourceId,
+        request.directory,
+      );
+      if (!receipt) throw new Error('Launch receipt is unavailable to this source thread.');
+      const requestedTimeout = request.arguments.timeoutMs;
+      if (
+        request.name === 'agent_wait' &&
+        requestedTimeout !== undefined &&
+        (!Number.isInteger(requestedTimeout) ||
+          Number(requestedTimeout) < 0 ||
+          Number(requestedTimeout) > 30_000)
+      )
+        throw new Error('Wait timeout must be 0–30000 milliseconds.');
+      const deadline =
+        Date.now() + (request.name === 'agent_wait' ? Number(requestedTimeout ?? 30_000) : 0);
+      async function boundedReceipt(current: SpawnReceipt): Promise<SpawnReceipt> {
+        if (request.name !== 'agent_wait') return currentSpawnReceipt(current);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return current;
+        let timer: ReturnType<typeof setTimeout>;
+        try {
+          return await Promise.race([
+            currentSpawnReceipt(current),
+            new Promise<SpawnReceipt>((resolve) => {
+              timer = setTimeout(() => resolve(current), remaining);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer!);
+        }
+      }
+      async function awaitReceipt(current: SpawnReceipt): Promise<SpawnReceipt> {
+        if (
+          request.name !== 'agent_wait' ||
+          receiptIsSettled(current.state) ||
+          current.state === 'waiting' ||
+          Date.now() >= deadline ||
+          disposed
+        )
+          return current;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+        return awaitReceipt(await boundedReceipt(current));
+      }
+      const current = await awaitReceipt(await boundedReceipt(receipt));
+      const status = {
+        receiptId: current.receiptId,
+        requestId: current.requestId,
+        project: current.project,
+        sourceId: current.sourceId,
+        sourceDirectory: current.sourceDirectory,
+        targetId: current.targetId,
+        turnId: current.turnId,
+        targetDirectory: current.targetDirectory,
+        worktreeId: current.worktreeId,
+        provider: current.provider,
+        state: current.state,
+        created: current.created,
+        updated: current.updated,
+        error: current.error,
+      };
+      if (request.name === 'agent_result')
+        return { ...status, result: current.state === 'completed' ? current.result : null };
+      return {
+        ...status,
+        ...(request.name === 'agent_wait'
+          ? { timedOut: !receiptIsSettled(current.state) && current.state !== 'waiting' }
+          : {}),
+      };
+    }
+    if (request.name === 'agent_spawn')
+      return spawnCoordinatedAgent(request, project, source, sourceId);
     if (!agentWorktreesEnabled) throw new Error('Agent worktree creation is disabled in settings.');
     const name = request.arguments.name;
     const prompt = request.arguments.prompt;
@@ -1740,11 +1981,25 @@
     request: CoordinationRequest,
     project: string,
     source: CoordinationSource,
+    sourceId: string,
   ) {
     if (!agentWorktreesEnabled) throw new Error('Agent worktree access is disabled in settings.');
     const provider = request.arguments.provider;
     const prompt = request.arguments.prompt;
     const target = request.arguments.target;
+    const suppliedReceiptId = request.arguments.receiptId;
+    const suppliedAccessKey = request.arguments.accessKey;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (
+      (suppliedReceiptId !== undefined || suppliedAccessKey !== undefined) &&
+      (typeof suppliedReceiptId !== 'string' ||
+        !uuid.test(suppliedReceiptId) ||
+        typeof suppliedAccessKey !== 'string' ||
+        !uuid.test(suppliedAccessKey))
+    )
+      throw new Error('Provide both receiptId and accessKey as UUIDs.');
+    const receiptId = (suppliedReceiptId as string | undefined) ?? request.id;
+    const receiptAccessKey = (suppliedAccessKey as string | undefined) ?? crypto.randomUUID();
     if (typeof provider !== 'string' || !['claude', 'codex', 'opencode'].includes(provider))
       throw new Error('Choose Claude, Codex, or OpenCode as the provider.');
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 8000)
@@ -1768,7 +2023,8 @@
     if (existing && typeof path !== 'string')
       throw new Error('Existing worktree path is required.');
 
-    const chosenProvider = provider;
+    const chosenProvider: SpawnReceipt['provider'] =
+      provider === 'claude' ? 'claude' : provider === 'codex' ? 'codex' : 'opencode';
     if (chosenProvider === 'opencode') {
       if (!client || runtimeState !== 'connected') throw new Error('OpenCode is unavailable.');
     } else {
@@ -1806,6 +2062,29 @@
       }
     }
 
+    if (spawnReceipts.some((item) => item.receiptId === receiptId))
+      throw new Error('Launch receipt ID is already in use.');
+    saveSpawnReceipt({
+      receiptId,
+      accessKey: receiptAccessKey,
+      requestId: request.id,
+      project,
+      sourceId,
+      sourceDirectory: request.directory,
+      targetId: null,
+      turnId: null,
+      targetDirectory: destination?.path ?? null,
+      worktreeId: destination?.path ?? null,
+      provider: chosenProvider,
+      prompt: prompt.trim(),
+      state: 'queued',
+      created: Date.now(),
+      updated: Date.now(),
+      result: null,
+      error: null,
+    });
+    activeSpawnRequests.add(receiptId);
+
     const approval = browserApprovalQueue.then(() =>
       confirmWorktreeApproval(request.expiresAt, {
         agent: source.agent,
@@ -1822,6 +2101,7 @@
     if (Date.now() >= request.expiresAt)
       throw new Error('The agent spawn request expired before approval.');
     await coordinationSource(request);
+    updateSpawnReceipt(receiptId, { state: 'starting' });
 
     if (destination) {
       const targetPath = destination.path;
@@ -1841,6 +2121,10 @@
       );
       saveProjectCatalog(addWorktree(projectCatalog, project, created));
       destination = created;
+      updateSpawnReceipt(receiptId, {
+        worktreeId: created.path,
+        targetDirectory: created.path,
+      });
       if (created.setup) {
         let setupTimedOut = false;
         try {
@@ -1899,14 +2183,29 @@
       chosenProvider === 'opencode'
         ? { kind: 'opencode', agent: 'OpenCode', title: source.title }
         : { kind: 'acp', agent: chosenProvider, title: source.title };
-    const started = await startCoordinatedThread(destination, selectedSource, prompt.trim());
-    return { ...started, worktreeId: destination.path, status: 'started' };
+    const started = await startCoordinatedThread(
+      destination,
+      selectedSource,
+      prompt.trim(),
+      receiptId,
+    );
+    activeSpawnRequests.delete(receiptId);
+    return {
+      ...started,
+      worktreeId: destination.path,
+      receiptId,
+      accessKey: receiptAccessKey,
+      sourceId,
+      targetId: started.threadId,
+      status: 'started',
+    };
   }
 
   async function startCoordinatedThread(
     created: { path: string; branch: string },
     source: CoordinationSource,
     prompt: string,
+    receiptId?: string,
   ) {
     if (source.kind === 'acp') {
       const session = await acp.create(source.agent, created.path);
@@ -1918,19 +2217,47 @@
         updated: Date.now(),
       };
       saveAgentThread(thread);
+      if (receiptId)
+        updateSpawnReceipt(receiptId, {
+          targetId: `acp:${source.agent}:${session.sessionId}`,
+          targetDirectory: created.path,
+          worktreeId: created.path,
+        });
       await invoke('record_turn_snapshot', {
         path: created.path,
         thread: `acp:${source.agent}:${session.sessionId}`,
       });
       updateAgentThreadStatus(thread, 'working');
-      const turn = acp.prompt(source.agent, session.sessionId, prompt, crypto.randomUUID());
+      const turnId = crypto.randomUUID();
+      if (receiptId) updateSpawnReceipt(receiptId, { state: 'working', turnId });
+      if (receiptId) activeSpawnTargets.set(`acp:${source.agent}:${session.sessionId}`, receiptId);
+      const turn = acp.prompt(source.agent, session.sessionId, prompt, turnId);
       const finished = turn.then(
-        () => {
+        (outcome) => {
           updateAgentThreadStatus(thread, 'done');
+          if (receiptId) {
+            const current = spawnReceipts.find((item) => item.receiptId === receiptId);
+            updateSpawnReceipt(receiptId, {
+              state:
+                outcome.stopReason === 'cancelled' || current?.state === 'interrupted'
+                  ? 'interrupted'
+                  : 'completed',
+              result: spawnOutput.get(receiptId) ?? current?.result ?? null,
+            });
+            spawnOutput.delete(receiptId);
+            if (activeSpawnTargets.get(`acp:${source.agent}:${session.sessionId}`) === receiptId)
+              activeSpawnTargets.delete(`acp:${source.agent}:${session.sessionId}`);
+          }
           return undefined;
         },
         (cause) => {
           updateAgentThreadStatus(thread, 'failed');
+          if (receiptId) {
+            updateSpawnReceipt(receiptId, { state: 'failed', error: describe(cause) });
+            spawnOutput.delete(receiptId);
+            if (activeSpawnTargets.get(`acp:${source.agent}:${session.sessionId}`) === receiptId)
+              activeSpawnTargets.delete(`acp:${source.agent}:${session.sessionId}`);
+          }
           error = describe(cause);
           throw cause;
         },
@@ -1955,6 +2282,12 @@
       agent: source.agent === 'OpenCode' ? undefined : source.agent,
       model: source.model,
     });
+    if (receiptId)
+      updateSpawnReceipt(receiptId, {
+        targetId: `opencode:${session.id}`,
+        targetDirectory: created.path,
+        worktreeId: created.path,
+      });
     rememberRecentThread({
       agent: 'opencode',
       sessionId: session.id,
@@ -1966,7 +2299,25 @@
       path: created.path,
       thread: `opencode:${session.id}`,
     });
-    const startingPrompt = client.session.prompt({ sessionID: session.id, text: prompt });
+    const promptClient = client;
+    const startingPrompt = promptClient.session.prompt({ sessionID: session.id, text: prompt });
+    if (receiptId)
+      void startingPrompt
+        .then(async (inbox) => {
+          updateSpawnReceipt(receiptId, { state: 'queued', turnId: inbox.id });
+          try {
+            await promptClient.session.wait({ sessionID: session.id });
+            const outcome = await promptClient.session.get({ sessionID: session.id });
+            const receipt = spawnReceipts.find((item) => item.receiptId === receiptId);
+            if (receipt) await settleOpenCodeReceipt(receipt, promptClient, outcome.outcome);
+          } catch (cause) {
+            updateSpawnReceipt(receiptId, { state: 'unavailable', error: describe(cause) });
+          }
+          return undefined;
+        })
+        .catch((cause) =>
+          updateSpawnReceipt(receiptId, { state: 'failed', error: describe(cause) }),
+        );
     await awaitCoordinationStart(startingPrompt, async () => {
       if (!client) return false;
       const active = await client.session.active();
@@ -2027,6 +2378,18 @@
     try {
       result = { value: await performCoordination(request) };
     } catch (cause) {
+      if (request.name === 'agent_spawn') {
+        const id =
+          typeof request.arguments.receiptId === 'string'
+            ? request.arguments.receiptId
+            : request.id;
+        const receipt = spawnReceipts.find((item) => item.receiptId === id);
+        if (receipt?.requestId === request.id) {
+          if (!receiptIsSettled(receipt.state))
+            updateSpawnReceipt(id, { state: 'failed', error: describe(cause) });
+          activeSpawnRequests.delete(id);
+        }
+      }
       result = { error: describe(cause) };
     }
     try {
@@ -4108,6 +4471,14 @@
     try {
       const backendActivity = await acp.activity();
       if (disposed) return;
+      for (const receipt of spawnReceipts.filter(
+        (item) =>
+          item.provider !== 'opencode' &&
+          item.targetId &&
+          item.turnId &&
+          !receiptIsSettled(item.state),
+      ))
+        reconcileAcpSpawnReceipt(receipt, backendActivity[receipt.provider]);
       if (revision !== attentionRevision) {
         if (attempt < 2) await restoreAgentActivity(attempt + 1);
         return;
@@ -4186,6 +4557,31 @@
       const params = event.message.params;
       const sessionId = params?.sessionId;
       if (typeof sessionId === 'string') {
+        const update = params?.update;
+        const content =
+          update && typeof update === 'object' && 'content' in update ? update.content : null;
+        const text =
+          update &&
+          typeof update === 'object' &&
+          'sessionUpdate' in update &&
+          update.sessionUpdate === 'agent_message_chunk' &&
+          content &&
+          typeof content === 'object' &&
+          'text' in content &&
+          typeof content.text === 'string'
+            ? content.text
+            : null;
+        if (text && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
+          for (const receipt of spawnReceipts.filter(
+            (item) =>
+              item.targetId === `acp:${event.agent}:${sessionId}` &&
+              activeSpawnTargets.get(item.targetId) === item.receiptId &&
+              !receiptIsSettled(item.state),
+          )) {
+            const result = `${receipt.result ?? ''}${text}`.slice(-16_000);
+            updateSpawnReceipt(receipt.receiptId, { result });
+            spawnOutput.set(receipt.receiptId, result);
+          }
         const usage = acpUsage(params?.update);
         if (usage?.rates && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
           agentRates = { ...agentRates, [event.agent]: usage.rates };
@@ -4209,11 +4605,27 @@
     if (event.message.method === 'sail/prompt_finished') {
       const sessionId = event.message.params?.sessionId;
       const status = event.message.params?.status;
+      const turnId = event.message.params?.turnId;
       if (typeof sessionId !== 'string' || (status !== 'done' && status !== 'failed')) return;
       for (const thread of agentThreads.filter(
         (item) => item.agent === event.agent && item.sessionId === sessionId,
       ))
         updateAgentThreadStatus(thread, status, event.message.params?.notify !== false);
+      for (const receipt of spawnReceipts.filter(
+        (item) =>
+          item.targetId === `acp:${event.agent}:${sessionId}` &&
+          item.turnId === turnId &&
+          !receiptIsSettled(item.state),
+      ))
+        updateSpawnReceipt(receipt.receiptId, {
+          state:
+            status === 'failed'
+              ? 'failed'
+              : event.message.params?.notify === false
+                ? 'interrupted'
+                : 'completed',
+          result: spawnOutput.get(receipt.receiptId) ?? receipt.result,
+        });
     } else if (event.message.method === 'session/request_permission') {
       const sessionId = event.message.params?.sessionId;
       if (typeof sessionId !== 'string') return;
@@ -4221,6 +4633,13 @@
         (item) => item.agent === event.agent && item.sessionId === sessionId,
       ))
         updateAgentThreadStatus(thread, 'waiting');
+      for (const receipt of spawnReceipts.filter(
+        (item) =>
+          item.targetId === `acp:${event.agent}:${sessionId}` &&
+          activeSpawnTargets.get(item.targetId) === item.receiptId &&
+          !receiptIsSettled(item.state),
+      ))
+        updateSpawnReceipt(receipt.receiptId, { state: 'waiting' });
     } else if (event.message.method === 'sail/disconnected') {
       for (const thread of agentThreads.filter(
         (item) =>
@@ -4228,6 +4647,10 @@
           ['working', 'waiting'].includes(threadAttention[threadKey(item)]?.status ?? ''),
       ))
         updateAgentThreadStatus(thread, 'failed');
+      for (const receipt of spawnReceipts.filter(
+        (item) => item.provider === event.agent && !receiptIsSettled(item.state),
+      ))
+        updateSpawnReceipt(receipt.receiptId, { state: 'unavailable' });
     }
   }
 

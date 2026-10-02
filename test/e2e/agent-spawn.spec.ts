@@ -1,5 +1,6 @@
 import { browser, $, expect } from '@wdio/globals';
 import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -10,9 +11,19 @@ const mcpResult = z.object({
   isError: z.boolean().optional(),
   content: z.array(z.object({ text: z.string() })),
 });
-const agentThread = z.object({ sessionId: z.string(), directory: z.string() });
+const agentThread = z.object({
+  agent: z.string(),
+  sessionId: z.string(),
+  directory: z.string(),
+  title: z.string(),
+});
 
-function callMcp(config: McpConfig, sessionId: string, arguments_: Record<string, unknown>) {
+function callMcp(
+  config: McpConfig,
+  sessionId: string,
+  arguments_: Record<string, unknown>,
+  name = 'agent_spawn',
+) {
   const child = spawn(config.command, config.args, {
     env: { ...process.env, ...config.env },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -27,7 +38,7 @@ function callMcp(config: McpConfig, sessionId: string, arguments_: Record<string
       id: 1,
       method: 'tools/call',
       params: {
-        name: 'agent_spawn',
+        name,
         arguments: arguments_,
         _meta: { sessionID: sessionId },
       },
@@ -106,22 +117,34 @@ describe('provider selected agent spawn', () => {
       { timeout: 15_000 },
     );
     const saved = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
-    const sessionId = z.array(agentThread).parse(JSON.parse(saved ?? '[]'))[0].sessionId;
+    const sourceThread = z
+      .array(agentThread)
+      .parse(JSON.parse(saved ?? '[]'))
+      .find((thread) => thread.directory === path && thread.title === 'Clipboard fixture source');
+    if (!sourceThread) throw new Error(`Source thread was not saved: ${saved}`);
+    const sessionId = sourceThread.sessionId;
 
     await $('.agent-launches button:nth-child(2)').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Clipboard fixture authenticate Codex');
     await $('.agent-actions button').click();
-    await expect($('.agent-auth button')).toBeDisplayed();
-    await $('.agent-auth button').click();
-    await $('.agent-actions button').click();
+    await browser.waitUntil(
+      async () =>
+        (await $('.agent-auth button').isDisplayed()) ||
+        (await $('.agent-conversation').getText()).includes('Clipboard received:'),
+      { timeout: 15_000 },
+    );
+    if (await $('.agent-auth button').isDisplayed()) {
+      await $('.agent-auth button').click();
+      await $('.agent-actions button').click();
+    }
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Clipboard received:'),
     );
 
     const config = await browser.tauri.execute(
-      async ({ core }, directory) => core.invoke<McpConfig>('browser_mcp_config', { directory }),
-      path,
+      async ({ core }, input) => core.invoke<McpConfig>('browser_mcp_config', input),
+      { directory: path, agent: sourceThread.agent },
     );
     const invalid = await callMcp(config, sessionId, {
       provider: 'other',
@@ -129,12 +152,23 @@ describe('provider selected agent spawn', () => {
     });
     expect(invalid.isError).toBe(true);
     expect(invalid.content[0].text).toContain('Choose Claude, Codex, or OpenCode');
+    const pendingReceiptId = randomUUID();
+    const pendingAccessKey = randomUUID();
     const spawnNew = callMcp(config, sessionId, {
       provider: 'codex',
       prompt: 'Clipboard fixture delegate',
+      receiptId: pendingReceiptId,
+      accessKey: pendingAccessKey,
     });
     await expect($('.worktree-approval-dialog')).toBeDisplayed();
     await expect($('.worktree-approval-dialog')).toHaveText(expect.stringContaining('codex'));
+    const queued = await callMcp(
+      config,
+      sessionId,
+      { receiptId: pendingReceiptId, accessKey: pendingAccessKey },
+      'agent_status',
+    );
+    expect(JSON.parse(queued.content[0].text)).toMatchObject({ state: 'queued' });
     await $('.worktree-approval-actions button:last-child').click();
     const newResult = await spawnNew;
     expect(newResult.isError).not.toBe(true);
@@ -144,12 +178,53 @@ describe('provider selected agent spawn', () => {
         threadId: z.string(),
         worktreeId: z.string(),
         path: z.string(),
+        receiptId: z.string(),
+        accessKey: z.string(),
+        sourceId: z.string(),
+        targetId: z.string(),
       })
       .parse(JSON.parse(newResult.content[0].text));
     expect(started.status).toBe('started');
+    expect(started.receiptId).toBe(pendingReceiptId);
+    expect(started.accessKey).toBe(pendingAccessKey);
     expect(started.threadId).toMatch(/^acp:codex:/);
     expect(started.worktreeId).toBe(started.path);
+    expect(started.targetId).toBe(started.threadId);
+    expect(started.sourceId).toBe(`acp:${sourceThread.agent}:${sessionId}`);
     expect(existsSync(started.path)).toBe(true);
+
+    const completed = await callMcp(
+      config,
+      sessionId,
+      { receiptId: started.receiptId, accessKey: started.accessKey, timeoutMs: 10_000 },
+      'agent_wait',
+    );
+    expect(completed.isError).not.toBe(true);
+    expect(JSON.parse(completed.content[0].text)).toMatchObject({
+      receiptId: started.receiptId,
+      sourceId: started.sourceId,
+      targetId: started.targetId,
+      worktreeId: started.worktreeId,
+      state: 'completed',
+      timedOut: false,
+    });
+    const result = await callMcp(
+      config,
+      sessionId,
+      { receiptId: started.receiptId, accessKey: started.accessKey },
+      'agent_result',
+    );
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      state: 'completed',
+      result: expect.stringContaining('Clipboard received: Clipboard fixture delegate'),
+    });
+    const wrongKey = await callMcp(
+      config,
+      sessionId,
+      { receiptId: started.receiptId, accessKey: 'wrong-key' },
+      'agent_result',
+    );
+    expect(wrongKey.isError).toBe(true);
 
     const spawnShared = callMcp(config, sessionId, {
       provider: 'claude',
@@ -192,9 +267,9 @@ describe('provider selected agent spawn', () => {
       provider: 'opencode',
       prompt: 'Clipboard fixture OpenCode',
       target: { kind: 'existing', path },
-    }).then((result) => {
+    }).then((spawnResponse) => {
       openCodeFinished = true;
-      return result;
+      return spawnResponse;
     });
     await browser.waitUntil(
       async () => openCodeFinished || (await $('.worktree-approval-dialog').isDisplayed()),
@@ -221,6 +296,17 @@ describe('provider selected agent spawn', () => {
     }
 
     await browser.refresh();
+    await expect($('.agent-launches button')).toBeEnabled();
+    const restoredResult = await callMcp(
+      config,
+      sessionId,
+      { receiptId: started.receiptId, accessKey: started.accessKey },
+      'agent_result',
+    );
+    expect(JSON.parse(restoredResult.content[0].text)).toMatchObject({
+      state: 'completed',
+      result: expect.stringContaining('Clipboard received: Clipboard fixture delegate'),
+    });
     const rawRestored = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
     const restored = z.array(agentThread).parse(JSON.parse(rawRestored ?? '[]'));
     expect(
@@ -229,6 +315,130 @@ describe('provider selected agent spawn', () => {
           `acp:codex:${thread.sessionId}` === started.threadId && thread.directory === started.path,
       ),
     ).toBe(true);
+  });
+
+  it('reports waiting, failure, timeout, and lost in-flight history', async () => {
+    const path = realpathSync(repository);
+    const saved = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
+    const sourceThread = z
+      .array(agentThread)
+      .parse(JSON.parse(saved ?? '[]'))
+      .find((thread) => thread.directory === path);
+    if (!sourceThread) throw new Error('Source thread was not restored');
+    const sessionId = sourceThread.sessionId;
+    const config = await browser.tauri.execute(
+      async ({ core }, input) => core.invoke<McpConfig>('browser_mcp_config', input),
+      { directory: path, agent: sourceThread.agent },
+    );
+    const spawnWaiting = callMcp(config, sessionId, {
+      provider: 'claude',
+      prompt: 'Delayed approval',
+      target: { kind: 'existing', path },
+    });
+    await expect($('.worktree-approval-dialog')).toBeDisplayed();
+    await $('.worktree-approval-actions button:last-child').click();
+    const waitingLaunch = z
+      .object({ receiptId: z.string(), accessKey: z.string() })
+      .parse(JSON.parse((await spawnWaiting).content[0].text));
+    const timeout = await callMcp(
+      config,
+      sessionId,
+      { receiptId: waitingLaunch.receiptId, accessKey: waitingLaunch.accessKey, timeoutMs: 0 },
+      'agent_wait',
+    );
+    expect(JSON.parse(timeout.content[0].text)).toMatchObject({
+      state: 'working',
+      timedOut: true,
+    });
+    const waiting = await callMcp(
+      config,
+      sessionId,
+      { receiptId: waitingLaunch.receiptId, accessKey: waitingLaunch.accessKey, timeoutMs: 5_000 },
+      'agent_wait',
+    );
+    expect(JSON.parse(waiting.content[0].text)).toMatchObject({
+      state: 'waiting',
+      timedOut: false,
+    });
+    const hidden = await callMcp(
+      config,
+      'different-source',
+      { receiptId: waitingLaunch.receiptId, accessKey: waitingLaunch.accessKey },
+      'agent_result',
+    );
+    expect(hidden.isError).toBe(true);
+
+    const spawnFailure = callMcp(config, sessionId, {
+      provider: 'claude',
+      prompt: 'Prompt failure',
+      target: { kind: 'existing', path },
+    });
+    await expect($('.worktree-approval-dialog')).toBeDisplayed();
+    await $('.worktree-approval-actions button:last-child').click();
+    const failedLaunch = z
+      .object({ receiptId: z.string(), accessKey: z.string() })
+      .parse(JSON.parse((await spawnFailure).content[0].text));
+    const failed = await callMcp(
+      config,
+      sessionId,
+      { receiptId: failedLaunch.receiptId, accessKey: failedLaunch.accessKey, timeoutMs: 5_000 },
+      'agent_wait',
+    );
+    expect(JSON.parse(failed.content[0].text)).toMatchObject({
+      state: 'failed',
+      error: expect.stringContaining('Fixture prompt failed'),
+    });
+
+    await browser.refresh();
+    await expect($('.agent-launches button')).toBeEnabled();
+    const reconciled = await callMcp(
+      config,
+      sessionId,
+      { receiptId: waitingLaunch.receiptId, accessKey: waitingLaunch.accessKey },
+      'agent_status',
+    );
+    expect(['waiting', 'failed']).toContain(JSON.parse(reconciled.content[0].text).state);
+
+    const staleId = randomUUID();
+    const staleKey = randomUUID();
+    const setting = await browser.execute(
+      (sourceId, receiptId, accessKey) => {
+        const key = 'sai-agent-spawn-receipts';
+        const receipts: Array<Record<string, unknown>> = JSON.parse(
+          localStorage.getItem(key) ?? '[]',
+        );
+        const source = receipts.find((item) => item.receiptId === sourceId);
+        if (!source) throw new Error('Waiting receipt was not persisted');
+        receipts.unshift({
+          ...source,
+          receiptId,
+          accessKey,
+          requestId: receiptId,
+          turnId: crypto.randomUUID(),
+          state: 'working',
+        });
+        const value = JSON.stringify(receipts);
+        localStorage.setItem(key, value);
+        return value;
+      },
+      waitingLaunch.receiptId,
+      staleId,
+      staleKey,
+    );
+    await browser.tauri.execute(
+      async ({ core }, value) =>
+        core.invoke('save_setting', { key: 'sai-agent-spawn-receipts', value }),
+      setting,
+    );
+    await browser.refresh();
+    await expect($('.agent-launches button')).toBeEnabled();
+    const unavailable = await callMcp(
+      config,
+      sessionId,
+      { receiptId: staleId, accessKey: staleKey },
+      'agent_status',
+    );
+    expect(JSON.parse(unavailable.content[0].text)).toMatchObject({ state: 'unavailable' });
   });
 
   it('reports setup failure without creating an agent thread', async () => {
@@ -261,14 +471,15 @@ describe('provider selected agent spawn', () => {
       'failing setup',
     ]);
     const saved = await browser.execute(() => localStorage.getItem('sail-agent-threads'));
-    const sessionId = z
+    const sourceThread = z
       .array(agentThread)
       .parse(JSON.parse(saved ?? '[]'))
-      .find((thread) => thread.directory === path)?.sessionId;
-    if (!sessionId) throw new Error('Source thread was not restored');
+      .find((thread) => thread.directory === path);
+    if (!sourceThread) throw new Error('Source thread was not restored');
+    const sessionId = sourceThread.sessionId;
     const config = await browser.tauri.execute(
-      async ({ core }, directory) => core.invoke<McpConfig>('browser_mcp_config', { directory }),
-      path,
+      async ({ core }, input) => core.invoke<McpConfig>('browser_mcp_config', input),
+      { directory: path, agent: sourceThread.agent },
     );
     const spawnNew = callMcp(config, sessionId, {
       provider: 'claude',

@@ -99,9 +99,10 @@ export interface AgentEvent {
 export interface AgentActivity {
   alive: boolean;
   active: string[];
+  activeTurns: Record<string, string>;
   waiting: string[];
   sessions: string[];
-  finished: Record<string, { status: 'done' | 'failed'; notify: boolean }>;
+  finished: Record<string, { status: 'done' | 'failed'; notify: boolean; turnId: string }>;
 }
 
 export interface AcpPendingInboxItem {
