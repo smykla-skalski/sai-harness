@@ -1,4 +1,4 @@
-import { browser, $, expect } from '@wdio/globals';
+import { browser, $, $$, expect } from '@wdio/globals';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -179,18 +179,18 @@ describe('ACP agent threads', () => {
     await browser.keys('Escape');
     await expect($('.agent-permission')).not.toBeDisplayed();
     await expect($('.agent-busy')).not.toBeDisplayed();
-    await expect($('.agent-tool')).toHaveText(expect.stringContaining('cancelled'));
+    await expect($('.agent-tool-group')).toHaveText(expect.stringContaining('cancelled'));
 
     await $('.agent-composer textarea').setValue('Slow cancel');
     await $('.agent-actions button').click();
     await expect($('.agent-permission')).toBeDisplayed();
     await browser.keys('Escape');
-    await expect($('.agent-tool')).toHaveText(expect.stringContaining('stopping'));
+    await expect($('.agent-tool-current')).toHaveText(expect.stringContaining('stopping'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
       expect.stringContaining('working'),
     );
-    await expect($('.agent-tool')).toHaveText(expect.stringContaining('cancelled'));
+    await expect($('.agent-tool-group')).toHaveText(expect.stringContaining('cancelled'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
 
     await $('.agent-composer textarea').setValue('Long answer');
@@ -233,5 +233,27 @@ describe('ACP agent threads', () => {
     await expect($('.option-menu')).toHaveText(
       expect.stringContaining('No choices available for this model or agent.'),
     );
+  });
+
+  it('keeps agent messages and failures visible around grouped tool activity', async () => {
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Activity failure demo');
+    await $('.agent-actions button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('I recovered from the read failure'),
+    );
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    const group = $('.agent-tool-group');
+    await expect($$('.agent-tool-group')).toBeElementsArrayOfSize(2);
+    await expect(group).toHaveText(expect.stringContaining('2 actions'));
+    await expect(group).toHaveText(expect.stringContaining('Failed'));
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('The first read failed. I’m searching another path.'),
+    );
+    await group.$('summary').click();
+    await expect(group.$$('.agent-tool-item')).toBeElementsArrayOfSize(2);
+    await group.$('.agent-tool-item summary').click();
+    await expect(group).toHaveText(expect.stringContaining('Could not read the first path.'));
   });
 });

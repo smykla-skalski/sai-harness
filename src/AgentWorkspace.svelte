@@ -785,14 +785,16 @@
     {/snippet}
     {#each displayEntries as entry (entry.id)}
       {#if entry.type === 'tool-group'}
-        {#if isBusy && entry.id === displayEntries.at(-1)?.id}
+        {#if isBusy && (entry.id === displayEntries.at(-1)?.id || entry.tools.some(toolRunning))}
           {#if entry.tools.length > 1}
             <details class="agent-tool-group">
-              <summary
-                >{entry.tools.length - 1} earlier {entry.tools.length === 2
-                  ? 'action'
-                  : 'actions'}</summary
-              >
+              <summary>
+                {entry.tools.length - 1} earlier {entry.tools.length === 2 ? 'action' : 'actions'}
+                {#if entry.tools.slice(0, -1).some(toolRunning)}<span>Running</span>{/if}
+                {#if entry.tools.slice(0, -1).some(toolFailed)}<span class="agent-tool-error"
+                    >Failed</span
+                  >{/if}
+              </summary>
               <div class="agent-tool-list">
                 {#each entry.tools.slice(0, -1) as tool (tool.id)}
                   {@render toolRow(tool)}
@@ -812,6 +814,10 @@
             <summary>
               <span>{entry.tools.length} {entry.tools.length === 1 ? 'action' : 'actions'}</span>
               <span class="agent-tool-group-last">{entry.tools.at(-1)?.title}</span>
+              {#if entry.tools.at(-1)?.status !== 'completed' && !toolFailed(entry.tools.at(-1)!)}<span
+                  >{entry.tools.at(-1)?.status.replaceAll('_', ' ')}</span
+                >{/if}
+              {#if entry.tools.slice(0, -1).some(toolRunning)}<span>Running</span>{/if}
               {#if entry.tools.some(toolFailed)}<span class="agent-tool-error">Failed</span>{/if}
             </summary>
             <div class="agent-tool-list">

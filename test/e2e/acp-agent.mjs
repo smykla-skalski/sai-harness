@@ -202,7 +202,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     const user = { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } };
     sessions.get(sessionId).history.push(user);
     update(sessionId, user);
-    if (text === 'Activity demo') {
+    if (text === 'Activity demo' || text === 'Activity failure demo') {
+      const failureDemo = text === 'Activity failure demo';
       const record = (value) => {
         sessions.get(sessionId).history.push(value);
         update(sessionId, value);
@@ -224,8 +225,27 @@ for await (const line of createInterface({ input: process.stdin })) {
         },
       });
       setTimeout(() => record(tool('Read files', 'in_progress')), 300);
-      setTimeout(() => record(tool('Read files', 'completed', 'Found 12 source files.')), 1300);
+      setTimeout(
+        () =>
+          record(
+            tool(
+              'Read files',
+              failureDemo ? 'failed' : 'completed',
+              failureDemo ? 'Could not read the first path.' : 'Found 12 source files.',
+            ),
+          ),
+        1300,
+      );
       setTimeout(() => record(tool('Search references', 'in_progress')), 1600);
+      if (failureDemo)
+        setTimeout(
+          () =>
+            record({
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'The first read failed. I’m searching another path.' },
+            }),
+          1900,
+        );
       setTimeout(() => record(tool('Search references', 'completed', 'Found 4 references.')), 2600);
       setTimeout(() => record(tool('Run checks', 'in_progress')), 2900);
       setTimeout(() => record(tool('Run checks', 'completed', 'All checks passed.')), 3900);
@@ -234,7 +254,9 @@ for await (const line of createInterface({ input: process.stdin })) {
           sessionUpdate: 'agent_message_chunk',
           content: {
             type: 'text',
-            text: 'The checks passed. The tool details are available above.',
+            text: failureDemo
+              ? 'I recovered from the read failure. The tool details are available above.'
+              : 'The checks passed. The tool details are available above.',
           },
         });
         send({ id: message.id, result: { stopReason: 'end_turn' } });
