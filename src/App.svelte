@@ -409,7 +409,7 @@
   let diffComments = $state<Record<string, DiffComment[]>>({});
   let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
   let issuePrefills = $state<Record<string, { id: string; text: string }>>({});
-  let agentEntrySnapshots = $state<
+  let agentEntrySnapshots = $state.raw<
     Record<string, { sessionId: string | null; entries: AgentEntry[]; ready: boolean }>
   >({});
   $effect(() => {
