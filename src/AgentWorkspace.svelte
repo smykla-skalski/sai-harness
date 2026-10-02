@@ -22,6 +22,11 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { BrowserAttachment } from './lib/browser-pick';
+  import {
+    coordinationMessageForText,
+    coordinationPrompt,
+    type CoordinationMessage,
+  } from './lib/coordination';
 
   interface Props {
     agent: AgentId;
@@ -45,6 +50,7 @@
     onentrieschange?: (entries: AgentEntry[], sessionId: string | null, ready: boolean) => void;
     ephemeral?: boolean;
     seedContext?: string;
+    coordinationMessages?: CoordinationMessage[];
   }
   let {
     agent,
@@ -68,6 +74,7 @@
     onentrieschange,
     ephemeral = false,
     seedContext = '',
+    coordinationMessages = [],
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -89,6 +96,8 @@
   let visibleCount = $state(50);
   let historyLoaded = $state(true);
   let historyLoading = $state(false);
+  let historyAttempted = $state(false);
+  let showingEarlier = false;
   let expandedTools = $state<string[]>([]);
   const visibleEntries = $derived(entries.slice(-visibleCount));
   const displayEntries = $derived(groupAgentEntries(visibleEntries));
@@ -121,7 +130,11 @@
   let autoFollow = true;
   let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
-  const isBusy = $derived(busy || running);
+  const isBusy = $derived(busy || running || historyLoading);
+
+  $effect(() => {
+    if (ready && !busy && !running && !historyLoaded && !historyAttempted) void loadHistory();
+  });
   const modelOption = $derived(
     configOptions.find(
       (option) => /model/i.test(`${option.id} ${option.name}`) && option.type === 'select',
@@ -231,17 +244,28 @@
   }
 
   async function showEarlier() {
+    if (showingEarlier || entries.length <= visibleCount) return;
+    showingEarlier = true;
     const height = scroll.scrollHeight;
     const top = scroll.scrollTop;
+    const current = generation;
     visibleCount += 50;
     await tick();
+    if (current !== generation) {
+      showingEarlier = false;
+      return;
+    }
     scroll.scrollTop = top + scroll.scrollHeight - height;
+    showingEarlier = false;
+    if (scroll.scrollHeight <= scroll.clientHeight && entries.length > visibleCount)
+      void showEarlier();
   }
 
   async function loadHistory() {
     const id = activeSessionId;
-    if (!id || historyLoading || !ready || isBusy) return;
+    if (!id || historyLoading || !ready || busy || running || historyAttempted) return;
     const current = generation;
+    historyAttempted = true;
     historyLoading = true;
     replaying = true;
     replayEntries = [];
@@ -253,6 +277,13 @@
       historyLoaded = true;
       rememberTranscript();
       void follow();
+      await tick();
+      if (
+        current === generation &&
+        scroll.scrollHeight <= scroll.clientHeight &&
+        entries.length > visibleCount
+      )
+        void showEarlier();
     } catch (cause) {
       if (current === generation) error = describe(cause);
     } finally {
@@ -317,6 +348,7 @@
     expandedTools = [];
     historyLoaded = !id;
     historyLoading = false;
+    historyAttempted = false;
     configOptions = [];
     pickerOpen = null;
     creatingSession = null;
@@ -378,7 +410,11 @@
     } finally {
       if (current === generation) connecting = false;
     }
-    void follow();
+    if (current === generation) {
+      await follow();
+      if (scroll.scrollHeight <= scroll.clientHeight && entries.length > visibleCount)
+        void showEarlier();
+    }
   }
 
   $effect(() => {
@@ -735,31 +771,17 @@
     bind:this={scroll}
     onscroll={() => {
       autoFollow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+      if (scroll.scrollTop <= 80 && !historyLoading) void showEarlier();
     }}
     aria-label={`${name} conversation`}
   >
-    {#if entries.length === 0 && !connecting}
+    {#if entries.length === 0 && !connecting && !historyLoading}
       <div class="agent-welcome">
         <h1>Work with {name}</h1>
         <p>Describe the work. Sail will show messages, tools, and approvals here.</p>
       </div>
     {/if}
-    {#if thread?.sessionId && !historyLoaded}
-      <button
-        class="agent-history-button"
-        disabled={!ready || historyLoading || isBusy}
-        onclick={loadHistory}
-        >{historyLoading
-          ? 'Loading history…'
-          : entries.length
-            ? 'Load older messages'
-            : 'Load conversation history'}</button
-      >
-    {:else if entries.length > visibleCount}
-      <button class="agent-history-button" onclick={showEarlier}
-        >Show earlier messages ({entries.length - visibleCount} remaining)</button
-      >
-    {/if}
+    {#if historyLoading}<div class="agent-history-status" role="status">Loading history…</div>{/if}
     {#snippet toolRow(tool: AgentTool, revealed: boolean)}
       {#if revealed}
         <div class="agent-tool-item">
@@ -843,6 +865,10 @@
           </details>
         {/if}
       {:else}
+        {@const attribution =
+          entry.type === 'user'
+            ? coordinationMessageForText(entry.text, coordinationMessages)
+            : undefined}
         <article
           class:user-message={entry.type === 'user'}
           class:assistant-message={entry.type !== 'user'}
@@ -854,20 +880,37 @@
             class:user-avatar={entry.type === 'user'}
             class="avatar"
           >
-            {entry.type === 'user' ? 'You' : 'S.'}
+            {attribution ? '↗' : entry.type === 'user' ? 'You' : 'S.'}
           </div>
           <div class="message-body">
             <div class="message-author">
               {entry.type === 'user'
-                ? 'You'
+                ? attribution
+                  ? `From ${attribution.sender}`
+                  : 'You'
                 : entry.type === 'thought'
                   ? `${name} · thinking`
                   : name}
             </div>
-            <Markdown source={entry.text} />
+            <Markdown
+              source={attribution
+                ? entry.text.replace(coordinationPrompt(attribution), attribution.text)
+                : entry.text}
+            />
           </div>
         </article>
       {/if}
+    {/each}
+    {#each coordinationMessages.filter((message) => !entries.some((entry) => entry.type === 'user' && entry.text.includes(coordinationPrompt(message)))) as message (message.id)}
+      <article class="agent-message message user-message">
+        <div class="avatar user-avatar">↗</div>
+        <div class="message-body">
+          <div class="message-author">
+            From {message.sender}{message.delivered ? '' : ' · queued'}
+          </div>
+          <Markdown source={message.text} />
+        </div>
+      </article>
     {/each}
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
@@ -1039,7 +1082,7 @@
     overflow: auto;
     padding-inline: 20px;
   }
-  .agent-history-button {
+  .agent-history-status {
     display: block;
     margin: 12px auto 20px;
   }

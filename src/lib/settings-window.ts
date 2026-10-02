@@ -20,6 +20,10 @@ export type SettingsSnapshot = {
   agentsError: string;
   notificationsEnabled: boolean;
   notificationSound: boolean;
+  agentWorktreesEnabled: boolean;
+  agentStatusEnabled: boolean;
+  agentThreadListEnabled: boolean;
+  agentMessagesEnabled: boolean;
 };
 
 export type SettingsAction =
@@ -27,5 +31,9 @@ export type SettingsAction =
   | { type: 'binary'; value: string }
   | { type: 'notifications'; value: boolean }
   | { type: 'notification-sound'; value: boolean }
+  | { type: 'agent-worktrees'; value: boolean }
+  | { type: 'agent-status'; value: boolean }
+  | { type: 'agent-thread-list'; value: boolean }
+  | { type: 'agent-messages'; value: boolean }
   | { type: 'detect-agents' }
   | { type: 'restart-setup' };

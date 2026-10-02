@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
@@ -16,11 +16,27 @@ pub struct TerminalSize {
     rows: u16,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOpenParams {
+    id: String,
+    directory: String,
+    command: Option<String>,
+    size: TerminalSize,
+    attachment: String,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TerminalEvent {
     Output { data: Vec<u8> },
     Exit { code: u32 },
+}
+
+#[derive(Clone, Serialize)]
+struct TerminalExitNotice {
+    id: String,
+    code: u32,
 }
 
 struct TerminalOutput {
@@ -159,6 +175,8 @@ fn spawn(
     cols: u16,
     rows: u16,
     script: Option<&str>,
+    id: String,
+    app: AppHandle,
 ) -> Result<TerminalSession, String> {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -246,6 +264,7 @@ fn spawn(
                 let _ = channel.send(TerminalEvent::Exit { code });
             }
         }
+        let _ = app.emit("terminal:exit", TerminalExitNotice { id, code });
     });
     Ok(TerminalSession {
         directory,
@@ -259,14 +278,18 @@ fn spawn(
 
 #[tauri::command]
 pub fn terminal_open(
+    app: AppHandle,
     manager: State<'_, TerminalManager>,
-    id: String,
-    directory: String,
-    command: Option<String>,
-    size: TerminalSize,
-    attachment: String,
+    params: TerminalOpenParams,
     on_event: Channel<TerminalEvent>,
 ) -> Result<(), String> {
+    let TerminalOpenParams {
+        id,
+        directory,
+        command,
+        size,
+        attachment,
+    } = params;
     let TerminalSize { cols, rows } = size;
     if id.is_empty() {
         return Err("Terminal ID is required".to_string());
@@ -290,7 +313,14 @@ pub fn terminal_open(
         {
             return Err("Command is empty".to_string());
         }
-        let session = Arc::new(spawn(directory, cols, rows, command.as_deref())?);
+        let session = Arc::new(spawn(
+            directory,
+            cols,
+            rows,
+            command.as_deref(),
+            id.clone(),
+            app,
+        )?);
         sessions.insert(id, Arc::clone(&session));
         session
     };

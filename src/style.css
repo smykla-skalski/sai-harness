@@ -189,7 +189,6 @@ button:disabled {
   border-radius: 7px;
 }
 .project-repository-row:hover,
-.project-repository-row.active,
 .project-worktree-row:hover,
 .project-worktree-row.active {
   background: var(--shell-selected);
@@ -225,11 +224,23 @@ button:disabled {
   text-align: left;
   font: inherit;
   font-size: 11px;
+  cursor: pointer;
 }
 .project-worktree-row {
   display: flex;
   align-items: center;
   min-width: 0;
+}
+.project-worktree-list[hidden] {
+  display: none;
+}
+.project-worktree-status {
+  margin: 0 8px 4px 45px;
+  overflow: hidden;
+  color: var(--sui-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .project-worktree-pr {
   padding: 3px 4px;
@@ -294,10 +305,6 @@ button:disabled {
   white-space: nowrap;
 }
 .project-worktree-row.active .project-worktree-select {
-  color: var(--shell-selected-ink);
-  font-weight: 700;
-}
-.project-repository-row.active .project-repository-select {
   color: var(--shell-selected-ink);
   font-weight: 700;
 }
@@ -1291,20 +1298,6 @@ button:disabled {
   overflow: auto;
   padding: 28px max(28px, calc((100% - 740px) / 2));
 }
-.older-messages {
-  display: block;
-  margin: 0 auto 14px;
-  padding: 7px 12px;
-  border: 1px solid var(--shell-divider);
-  border-radius: 8px;
-  background: var(--sui-surface);
-  color: var(--sui-primary);
-  cursor: pointer;
-}
-.older-messages:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
 .welcome {
   display: flex;
   flex-direction: column;
@@ -2004,6 +1997,17 @@ button:disabled {
 
 .commands-header h2 {
   margin: 0;
+}
+.worktree-approval-prompt {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.worktree-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .commands-list {
   margin: 16px 0;

@@ -138,11 +138,11 @@ describe('split agent panes', () => {
     await $('.agent-launches button').click();
     await browser.keys(['Meta', 'd']);
     await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 2);
-    await $(`.project-repository-select[title="${realpathSync(repository)}"]`).click();
+    await $(`.project-default-worktree-select[title="${realpathSync(repository)}"]`).click();
     await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 3);
     await $(`.project-worktree-select[title="${realpathSync(worktree)}"]`).click();
     await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 2);
-    await $(`.project-repository-select[title="${realpathSync(repository)}"]`).click();
+    await $(`.project-default-worktree-select[title="${realpathSync(repository)}"]`).click();
     await browser.waitUntil(async () => (await $$('.pane-leaf')).length === 3);
     await $('button[aria-label="Close pane"]').click();
     expect((await $$('.pane-leaf')).length).toBe(2);

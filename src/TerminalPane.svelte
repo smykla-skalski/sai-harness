@@ -61,11 +61,13 @@
     let reportedExit: number | null = null;
     try {
       await invoke('terminal_open', {
-        id,
-        directory,
-        command: initialCommand,
-        size: { cols: terminal.cols, rows: terminal.rows },
-        attachment,
+        params: {
+          id,
+          directory,
+          command: initialCommand,
+          size: { cols: terminal.cols, rows: terminal.rows },
+          attachment,
+        },
         onEvent: channel((code) => (reportedExit = code)),
       });
       started = true;

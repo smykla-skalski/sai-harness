@@ -121,7 +121,7 @@ describe('shell terminal panes', () => {
         paths[0],
       ),
     );
-    await $(`.project-repository-select[title="${paths[1]}"]`).click();
+    await $(`.project-default-worktree-select[title="${paths[1]}"]`).click();
     await browser.keys(['Meta', 't']);
     await expect($('.terminal-screen .xterm')).toBeDisplayed();
     await sendCommand('pwd');
@@ -134,7 +134,7 @@ describe('shell terminal panes', () => {
         paths[1],
       ),
     );
-    await $(`.project-repository-select[title="${paths[0]}"]`).click();
+    await $(`.project-default-worktree-select[title="${paths[0]}"]`).click();
     await expect($('.terminal-screen .xterm')).toBeDisplayed();
     await browser.waitUntil(() =>
       browser.execute(
@@ -145,7 +145,7 @@ describe('shell terminal panes', () => {
         paths[0],
       ),
     );
-    await $(`.project-repository-select[title="${paths[1]}"]`).click();
+    await $(`.project-default-worktree-select[title="${paths[1]}"]`).click();
     await browser.waitUntil(() =>
       browser.execute(
         (path) =>
@@ -155,7 +155,7 @@ describe('shell terminal panes', () => {
         paths[1],
       ),
     );
-    await $(`.project-repository-select[title="${paths[0]}"]`).click();
+    await $(`.project-default-worktree-select[title="${paths[0]}"]`).click();
     await sendCommand('exit 7');
     await expect($('.terminal-exit')).toHaveText(expect.stringContaining('code 7'));
     await $('.terminal-exit button').click();

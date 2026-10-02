@@ -58,6 +58,7 @@ fn main() {
             "browser_close",
             "browser_focus",
             "browser_access_reply",
+            "agent_coordination_reply",
             "browser_project_access",
             "browser_mcp_config",
             "browser_pane_register",

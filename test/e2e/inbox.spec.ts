@@ -39,14 +39,14 @@ describe('pending requests across projects', () => {
     await $('.agent-composer textarea').setValue('First request');
     await $('.agent-actions button').click();
     await expect($('.agent-permission')).toBeDisplayed();
-    await $(`.project-repository-select[title="${paths[1]}"]`).click();
+    await $(`.project-default-worktree-select[title="${paths[1]}"]`).click();
     await expect($('.agent-launches button')).toBeEnabled();
     await $('.agent-launches button').click();
     await $('.agent-composer textarea').waitForEnabled();
     await $('.agent-composer textarea').setValue('Second request');
     await $('.agent-actions button').click();
     await expect($('.agent-permission')).toBeDisplayed();
-    await $(`.project-repository-select[title="${paths[0]}"]`).click();
+    await $(`.project-default-worktree-select[title="${paths[0]}"]`).click();
 
     await $('[aria-label="Pending requests"]').click();
     const entries = await $$('.inbox-item');

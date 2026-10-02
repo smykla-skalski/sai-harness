@@ -95,6 +95,7 @@ export interface AgentActivity {
   alive: boolean;
   active: string[];
   waiting: string[];
+  sessions: string[];
   finished: Record<string, { status: 'done' | 'failed'; notify: boolean }>;
 }
 

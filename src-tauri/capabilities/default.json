@@ -61,6 +61,7 @@
     "allow-browser-close",
     "allow-browser-focus",
     "allow-browser-access-reply",
+    "allow-agent-coordination-reply",
     "allow-browser-project-access",
     "allow-browser-mcp-config",
     "allow-browser-pane-register",

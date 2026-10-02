@@ -7,6 +7,7 @@ import {
   removeRepository,
   replaceRepositoryPath,
   setWorktreePullRequest,
+  setWorktreeStatus,
   ungroupedRepositories,
 } from '../src/lib/projects.ts';
 
@@ -32,6 +33,32 @@ await test('restores the current repository and ignores malformed saved groups',
     [['/first'], ['/second']],
   );
   assert.deepEqual(ungroupedRepositories(catalog), ['/current']);
+});
+
+await test('worktree status comments persist without changing sibling worktrees', () => {
+  const catalog = loadProjectCatalog(
+    JSON.stringify({
+      repositories: ['/repo'],
+      worktrees: {
+        '/repo': [
+          { path: '/one', branch: 'one' },
+          { path: '/two', branch: 'two' },
+        ],
+      },
+    }),
+    '/repo',
+  );
+  const updated = setWorktreeStatus(catalog, '/repo', '/one', '  Running tests  ');
+  assert.equal(updated.worktrees['/repo'][0].statusComment, 'Running tests');
+  assert.equal(updated.worktrees['/repo'][1].statusComment, undefined);
+  assert.equal(
+    loadProjectCatalog(JSON.stringify(updated), '/repo').worktrees['/repo'][0].statusComment,
+    'Running tests',
+  );
+  assert.equal(
+    setWorktreeStatus(updated, '/repo', '/one', '').worktrees['/repo'][0].statusComment,
+    undefined,
+  );
 });
 
 await test('moves repositories between named groups without losing saved entries', () => {
@@ -65,6 +92,30 @@ await test('canonicalizes a saved repository without losing its group', () => {
   const normalized = replaceRepositoryPath(catalog, '/var/repo', '/private/var/repo');
   assert.deepEqual(normalized.repositories, ['/private/var/repo']);
   assert.deepEqual(normalized.groups[0].repositories, ['/private/var/repo']);
+});
+
+await test('restores collapsed projects and follows repository path changes', () => {
+  const catalog = loadProjectCatalog(
+    JSON.stringify({
+      repositories: ['/repo'],
+      collapsedRepositories: ['/repo', '/missing', '/repo'],
+    }),
+    '',
+  );
+  assert.deepEqual(catalog.collapsedRepositories, ['/repo']);
+  const renamed = replaceRepositoryPath(catalog, '/repo', '/canonical/repo');
+  assert.deepEqual(renamed.collapsedRepositories, ['/canonical/repo']);
+  assert.equal(removeRepository(renamed, '/canonical/repo').collapsedRepositories, undefined);
+  const collision = replaceRepositoryPath(
+    {
+      ...catalog,
+      repositories: ['/repo', '/canonical/repo'],
+      collapsedRepositories: ['/repo', '/canonical/repo'],
+    },
+    '/repo',
+    '/canonical/repo',
+  );
+  assert.deepEqual(collision.collapsedRepositories, ['/canonical/repo']);
 });
 
 await test('keeps a created worktree beneath its repository after restart', () => {

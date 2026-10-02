@@ -31,6 +31,7 @@
     onrenamegroup: (id: string, name: string) => void;
     ondeletegroup: (id: string) => void;
     ontogglegroup: (id: string) => void;
+    ontogglerepository: (path: string) => void;
     onmoverepository: (path: string, groupID: string | null) => void;
     onremoverepository: (path: string) => void;
     oncreateworktree: (
@@ -77,6 +78,7 @@
     onrenamegroup,
     ondeletegroup,
     ontogglegroup,
+    ontogglerepository,
     onmoverepository,
     onremoverepository,
     oncreateworktree,
@@ -130,6 +132,15 @@
   let checkErrors = $state<Record<string, string>>({});
   let sendingCheck = $state<string | null>(null);
   let checking = false;
+  let collapsedRepositoryPaths = $derived(new Set(catalog.collapsedRepositories ?? []));
+
+  function repositoryCollapsed(path: string): boolean {
+    return collapsedRepositoryPaths.has(path);
+  }
+
+  function repositoryWorktreesID(path: string): string {
+    return `project-worktrees-${encodeURIComponent(path)}`;
+  }
 
   function checkState(check: PullRequestCheck) {
     if (
@@ -644,7 +655,6 @@
           {#each group.repositories as path (path)}
             <div class="project-repository">
               <div
-                class:active={path === directory}
                 class="project-repository-row"
                 role="group"
                 oncontextmenu={(event) =>
@@ -652,15 +662,18 @@
               >
                 <button
                   class="project-repository-select"
-                  aria-current={path === directory ? 'page' : undefined}
+                  aria-expanded={!repositoryCollapsed(path)}
+                  aria-controls={repositoryWorktreesID(path)}
                   title={path}
                   onmousedown={(event) => {
                     if (event.button === 2)
                       void openMenu({ kind: 'repository', path, groupID: group.id }, event);
                   }}
-                  onclick={() => onselect(path)}
+                  onclick={() => ontogglerepository(path)}
                   {disabled}
-                  ><span aria-hidden="true">⌁</span><span>{repositoryName(path)}</span></button
+                  ><span aria-hidden="true">{repositoryCollapsed(path) ? '▸' : '▾'}</span><span
+                    >{repositoryName(path)}</span
+                  ></button
                 >
                 <button
                   class="project-icon-button"
@@ -680,6 +693,125 @@
                       event,
                       event.currentTarget,
                     )}>⋯</button
+                >
+              </div>
+              <div
+                class="project-worktree-list"
+                id={repositoryWorktreesID(path)}
+                hidden={repositoryCollapsed(path)}
+              >
+                <div class:active={path === directory} class="project-worktree-row" role="group">
+                  <button
+                    class="project-worktree-select project-default-worktree-select"
+                    aria-label={`Open default worktree for ${repositoryName(path)}`}
+                    aria-current={path === directory ? 'page' : undefined}
+                    title={path}
+                    {disabled}
+                    onclick={() => onselect(path)}
+                    ><span aria-hidden="true">⑂</span><span>Default</span></button
+                  >
+                </div>
+                {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
+                    class:active={worktree.path === directory}
+                    class="project-worktree-row"
+                    role="group"
+                    oncontextmenu={(event) =>
+                      openMenu({ kind: 'worktree', repository: path, worktree }, event)}
+                  >
+                    <button
+                      class="project-worktree-select"
+                      aria-current={worktree.path === directory ? 'page' : undefined}
+                      title={worktree.path}
+                      {disabled}
+                      onmousedown={(event) => {
+                        if (event.button === 2)
+                          void openMenu({ kind: 'worktree', repository: path, worktree }, event);
+                      }}
+                      onclick={() => onselect(worktree.path)}
+                      ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
+                    >
+                    {@render checkBadge(worktree)}
+                    <button
+                      class="project-icon-button"
+                      aria-label={`Manage worktree ${worktree.branch}`}
+                      aria-haspopup="menu"
+                      aria-expanded={menu?.kind === 'worktree' &&
+                        menu.worktree.path === worktree.path}
+                      onclick={(event) =>
+                        openMenu(
+                          { kind: 'worktree', repository: path, worktree },
+                          event,
+                          event.currentTarget,
+                        )}>⋯</button
+                    >
+                  </div>
+                  {#if worktree.statusComment}<p class="project-worktree-status">
+                      {worktree.statusComment}
+                    </p>{/if}
+                  {@render checkFailures(path, worktree)}
+                {/each}
+              </div>
+            </div>
+          {:else}<p class="project-empty">No repositories</p>{/each}
+        {/if}
+      </div>
+    {/each}
+    {#if ungrouped.length || !catalog.groups.length}<div class="project-group">
+        <div class="project-group-heading"><span class="project-group-label">Ungrouped</span></div>
+        {#each ungrouped as path (path)}
+          <div class="project-repository">
+            <div
+              class="project-repository-row"
+              role="group"
+              oncontextmenu={(event) =>
+                openMenu({ kind: 'repository', path, groupID: null }, event)}
+            >
+              <button
+                class="project-repository-select"
+                aria-expanded={!repositoryCollapsed(path)}
+                aria-controls={repositoryWorktreesID(path)}
+                title={path}
+                onmousedown={(event) => {
+                  if (event.button === 2)
+                    void openMenu({ kind: 'repository', path, groupID: null }, event);
+                }}
+                onclick={() => ontogglerepository(path)}
+                {disabled}
+                ><span aria-hidden="true">{repositoryCollapsed(path) ? '▸' : '▾'}</span><span
+                  >{repositoryName(path)}</span
+                ></button
+              >
+              <button
+                class="project-icon-button"
+                aria-label={`Create worktree for ${repositoryName(path)}`}
+                title="Create worktree"
+                {disabled}
+                onclick={() => startWorktree(path)}>+</button
+              >
+              <button
+                class="project-icon-button"
+                aria-label={`Manage ${repositoryName(path)}`}
+                aria-haspopup="menu"
+                aria-expanded={menu?.kind === 'repository' && menu.path === path}
+                onclick={(event) =>
+                  openMenu({ kind: 'repository', path, groupID: null }, event, event.currentTarget)}
+                >⋯</button
+              >
+            </div>
+            <div
+              class="project-worktree-list"
+              id={repositoryWorktreesID(path)}
+              hidden={repositoryCollapsed(path)}
+            >
+              <div class:active={path === directory} class="project-worktree-row" role="group">
+                <button
+                  class="project-worktree-select project-default-worktree-select"
+                  aria-label={`Open default worktree for ${repositoryName(path)}`}
+                  aria-current={path === directory ? 'page' : undefined}
+                  title={path}
+                  {disabled}
+                  onclick={() => onselect(path)}
+                  ><span aria-hidden="true">⑂</span><span>Default</span></button
                 >
               </div>
               {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
@@ -716,88 +848,12 @@
                       )}>⋯</button
                   >
                 </div>
+                {#if worktree.statusComment}<p class="project-worktree-status">
+                    {worktree.statusComment}
+                  </p>{/if}
                 {@render checkFailures(path, worktree)}
               {/each}
             </div>
-          {:else}<p class="project-empty">No repositories</p>{/each}
-        {/if}
-      </div>
-    {/each}
-    {#if ungrouped.length || !catalog.groups.length}<div class="project-group">
-        <div class="project-group-heading"><span class="project-group-label">Ungrouped</span></div>
-        {#each ungrouped as path (path)}
-          <div class="project-repository">
-            <div
-              class:active={path === directory}
-              class="project-repository-row"
-              role="group"
-              oncontextmenu={(event) =>
-                openMenu({ kind: 'repository', path, groupID: null }, event)}
-            >
-              <button
-                class="project-repository-select"
-                aria-current={path === directory ? 'page' : undefined}
-                title={path}
-                onmousedown={(event) => {
-                  if (event.button === 2)
-                    void openMenu({ kind: 'repository', path, groupID: null }, event);
-                }}
-                onclick={() => onselect(path)}
-                {disabled}
-                ><span aria-hidden="true">⌁</span><span>{repositoryName(path)}</span></button
-              >
-              <button
-                class="project-icon-button"
-                aria-label={`Create worktree for ${repositoryName(path)}`}
-                title="Create worktree"
-                {disabled}
-                onclick={() => startWorktree(path)}>+</button
-              >
-              <button
-                class="project-icon-button"
-                aria-label={`Manage ${repositoryName(path)}`}
-                aria-haspopup="menu"
-                aria-expanded={menu?.kind === 'repository' && menu.path === path}
-                onclick={(event) =>
-                  openMenu({ kind: 'repository', path, groupID: null }, event, event.currentTarget)}
-                >⋯</button
-              >
-            </div>
-            {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
-                class:active={worktree.path === directory}
-                class="project-worktree-row"
-                role="group"
-                oncontextmenu={(event) =>
-                  openMenu({ kind: 'worktree', repository: path, worktree }, event)}
-              >
-                <button
-                  class="project-worktree-select"
-                  aria-current={worktree.path === directory ? 'page' : undefined}
-                  title={worktree.path}
-                  {disabled}
-                  onmousedown={(event) => {
-                    if (event.button === 2)
-                      void openMenu({ kind: 'worktree', repository: path, worktree }, event);
-                  }}
-                  onclick={() => onselect(worktree.path)}
-                  ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
-                >
-                {@render checkBadge(worktree)}
-                <button
-                  class="project-icon-button"
-                  aria-label={`Manage worktree ${worktree.branch}`}
-                  aria-haspopup="menu"
-                  aria-expanded={menu?.kind === 'worktree' && menu.worktree.path === worktree.path}
-                  onclick={(event) =>
-                    openMenu(
-                      { kind: 'worktree', repository: path, worktree },
-                      event,
-                      event.currentTarget,
-                    )}>⋯</button
-                >
-              </div>
-              {@render checkFailures(path, worktree)}
-            {/each}
           </div>
         {:else}<p class="project-empty">Add a repository to switch between projects.</p>{/each}
       </div>{/if}
