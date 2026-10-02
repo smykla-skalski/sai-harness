@@ -326,7 +326,7 @@ describe('visual layout audit', () => {
         `FUZZ_VISIBILITY_${seed}`,
         JSON.stringify(
           await browser.execute(() =>
-            ['.sidebar', '.projects', '.project-list', '.sidebar-sessions'].map((selector) => {
+            ['.sidebar', '.projects', '.project-list'].map((selector) => {
               const element = document.querySelector(selector)!;
               const rect = element.getBoundingClientRect();
               return { selector, height: rect.height, y: rect.y, bottom: rect.bottom };
@@ -360,28 +360,7 @@ describe('visual layout audit', () => {
       expect(findings.sidebarRight).toBeLessThanOrEqual(findings.viewportWidth + 1);
       expect(findings.footerBottom).toBeLessThanOrEqual(findings.viewportHeight + 1);
       expect(findings.overlapCount).toBe(0);
-      if (threads.length) {
-        const threadPosition = await browser.execute(() => {
-          const content = document.querySelector('.sidebar-content')!;
-          const last = [...document.querySelectorAll('.sidebar-sessions > .session-row')].at(-1);
-          if (!last) return null;
-          last.scrollIntoView({ block: 'end' });
-          const contentBox = content.getBoundingClientRect();
-          const row = last.getBoundingClientRect();
-          return {
-            contentTop: contentBox.top,
-            contentBottom: contentBox.bottom,
-            rowTop: row.top,
-            rowBottom: row.bottom,
-            scrollTop: content.scrollTop,
-          };
-        });
-        console.log(`FUZZ_THREAD_${seed}`, JSON.stringify(threadPosition));
-        await capture(`fuzz-${String(seed).padStart(2, '0')}-${width}-threads`);
-        expect(threadPosition).not.toBeNull();
-        expect(threadPosition!.rowTop).toBeGreaterThanOrEqual(threadPosition!.contentTop - 1);
-        expect(threadPosition!.rowBottom).toBeLessThanOrEqual(threadPosition!.contentBottom + 1);
-      }
+      await expect($('.sidebar-sessions')).not.toExist();
     });
   }
 });

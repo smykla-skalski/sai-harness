@@ -55,6 +55,22 @@ button:disabled {
   background: var(--shell-sidebar);
   border-right: 1px solid var(--shell-divider);
 }
+.app-shell[data-sidebar-visible='false'] .sidebar {
+  display: none;
+}
+.sidebar-toggle {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--sui-muted);
+  background: transparent;
+  font-size: 18px;
+}
+.sidebar-toggle:hover {
+  background: var(--shell-selected);
+}
 .brand {
   display: flex;
   align-items: center;
@@ -735,6 +751,13 @@ button:disabled {
   gap: 4px;
   padding: 0 12px 8px;
 }
+.topbar-actions .agent-launches {
+  flex-wrap: nowrap;
+  padding: 0;
+}
+.agent-menu-launch {
+  display: none;
+}
 .topbar {
   display: flex;
   align-items: center;
@@ -769,6 +792,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
   white-space: nowrap;
 }
 .session-usage {
@@ -1686,6 +1711,16 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 @media (max-width: 1050px) {
+  .topbar-actions .agent-launches {
+    display: none;
+  }
+  .agent-menu-launch {
+    display: inline-block;
+    border: 0;
+    color: var(--sui-muted);
+    background: transparent;
+    font: inherit;
+  }
   .sidebar {
     width: 195px;
     flex-basis: 195px;
@@ -1705,14 +1740,14 @@ button:disabled {
   .sidebar {
     display: none;
     position: absolute;
-    top: 80px;
+    top: var(--topbar-height, 80px);
     bottom: 0;
     z-index: 2;
     width: 100%;
     padding: 18px 12px;
     border-right: 0;
   }
-  .app-shell[data-mobile-view='sessions'] .sidebar {
+  .app-shell[data-mobile-view='sessions'][data-sidebar-visible='true'] .sidebar {
     display: flex;
   }
   .session-list {
@@ -1898,6 +1933,25 @@ button:disabled {
   color: var(--sui-foreground);
   background: var(--sui-canvas);
   box-shadow: 0 20px 60px #0005;
+}
+.rename-session-dialog {
+  width: min(360px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--shell-divider);
+  border-radius: 12px;
+  color: var(--sui-foreground);
+  background: var(--sui-canvas);
+}
+.rename-session-dialog form {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.rename-session-dialog label,
+.rename-session-dialog input {
+  display: block;
+  width: 100%;
 }
 .inbox-dialog::backdrop {
   background: #0008;

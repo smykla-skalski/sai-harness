@@ -7,6 +7,18 @@ import { join } from 'node:path';
 describe('ACP agent threads', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sail-acp-e2e-'));
 
+  async function selectClaudeThread(title: string) {
+    await browser.keys(['Meta', 'k']);
+    const search = $('[aria-label="Search command palette"]');
+    await search.setValue(repository.split('/').at(-1)!);
+    await browser.keys('Enter');
+    await $('[data-kind="worktree"]').click();
+    await search.setValue('Claude');
+    await browser.keys('Enter');
+    await search.setValue(title);
+    await browser.keys('Enter');
+  }
+
   before(() => {
     execFileSync('git', ['init', '-q', repository]);
   });
@@ -120,7 +132,7 @@ describe('ACP agent threads', () => {
     );
 
     try {
-      await $('.session-row .session-item[title="Do a small thing"]').click();
+      await selectClaudeThread('Do a small thing');
     } catch (cause) {
       console.error('ACP thread list diagnostic', {
         sidebar: await $('.sidebar').getText(),
@@ -140,7 +152,7 @@ describe('ACP agent threads', () => {
     );
     await browser.refresh();
     try {
-      await $('.session-row .session-item[title="Do a small thing"]').click();
+      await selectClaudeThread('Do a small thing');
     } catch (cause) {
       console.error('ACP reload diagnostic', {
         sidebar: await $('.sidebar').getText(),
@@ -166,26 +178,10 @@ describe('ACP agent threads', () => {
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Delayed approval');
     await $('.agent-actions button').click();
-    await $('.session-row .session-item[title="Delayed approval"]').waitForDisplayed({
-      timeout: 10_000,
-    });
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-launches button:nth-child(2)').click();
-    try {
-      await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
-        expect.stringMatching(/Running|Waiting for input/),
-      );
-    } catch (cause) {
-      await $('.session-row .session-item[title="Delayed approval"]').click();
-      console.error('ACP pending thread diagnostic', {
-        sidebar: await $('.sidebar').getText(),
-        workspace: await $('.agent-workspace').getText(),
-        threads: await browser.execute(() => localStorage.getItem('sail-agent-threads')),
-      });
-      throw cause;
-    }
     await browser.pause(1800);
-    await $('.session-row .session-item[title="Delayed approval"]').click();
+    await selectClaudeThread('Delayed approval');
     await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(
@@ -207,9 +203,7 @@ describe('ACP agent threads', () => {
     await browser.keys('Escape');
     await expect($('.agent-tool-current')).toHaveText(expect.stringContaining('stopping'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
-    await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
-      expect.stringContaining('working'),
-    );
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await expect($('.agent-tool-group')).toHaveText(expect.stringContaining('cancelled'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
 
@@ -317,5 +311,40 @@ describe('ACP agent threads', () => {
     await group.$('summary').click();
     await expect(group.$$('.agent-tool-item')).toBeElementsArrayOfSize(2);
     await expect(group).toHaveText(expect.stringContaining('Could not read the first path.'));
+  });
+
+  it('manages the focused split thread without removing the main thread', async () => {
+    await browser.execute((path) => {
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [], worktrees: {} }),
+      );
+      localStorage.removeItem('sai-pane-layouts');
+      localStorage.removeItem('sail-agent-threads');
+    }, realpathSync(repository));
+    await browser.refresh();
+    await $('.agent-launches button').click();
+    await $('.agent-composer textarea').setValue('Main action');
+    await $('.agent-actions button').click();
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Done: Main action'));
+    await browser.keys(['Meta', 'd']);
+    await expect($('.pane-leaf.focused [data-pane-picker]')).toBeDisplayed();
+    await $('.agent-launches button').click();
+    await $('.pane-leaf.focused .agent-composer textarea').setValue('Split action');
+    await $('.pane-leaf.focused .agent-actions button').click();
+    await $('.pane-leaf.focused .agent-permission button').click();
+    await expect($('.pane-leaf.focused .agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Split action'),
+    );
+    await $('[aria-label="Remove thread"]').click();
+    const titles = await browser.execute(() =>
+      JSON.parse(localStorage.getItem('sail-agent-threads') ?? '[]').map(
+        (thread: { title: string }) => thread.title,
+      ),
+    );
+    expect(titles).toContain('Main action');
+    expect(titles).not.toContain('Split action');
   });
 });

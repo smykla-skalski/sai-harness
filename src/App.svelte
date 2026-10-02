@@ -461,14 +461,10 @@
   let setupProbeCount = 0;
   let sessions = $state<SessionInfo[]>([]);
   let selectedSession = $state<SessionInfo | null>(null);
-  let sessionSearch = $state('');
-  let sessionCursor = $state<string | undefined>(undefined);
-  let nextSessionCursor = $state<string | null>(null);
-  let sessionPageHistory = $state<(string | undefined)[]>([]);
-  let sessionLoading = $state(false);
-  let activeSessionIDs = $state<string[]>([]);
   let editingSessionID = $state<string | null>(null);
   let editedTitle = $state('');
+  let renameSessionDialog: HTMLDialogElement;
+  let activeSessionIDs = $state<string[]>([]);
   let sessionID = $state<string | null>(null);
   let mainPickerDirectory = $state<string | null>(null);
   let showMainPicker = $derived.by(() => {
@@ -583,6 +579,7 @@
     );
   }
   let mobileView = $state<'sessions' | 'chat' | 'details'>('chat');
+  let sidebarVisible = $state(true);
   const viewStates = new SvelteMap<
     string,
     {
@@ -612,6 +609,9 @@
   let error = $state('');
   let chatScroll = $state<HTMLDivElement>();
   let sidebarElement: HTMLElement;
+  let sidebarToggleElement: HTMLButtonElement;
+  let topbarElement = $state<HTMLElement>();
+  let topbarHeight = $state(80);
   let chatArea: HTMLElement;
   let detailsArea = $state<HTMLElement>();
 
@@ -623,7 +623,16 @@
     return () => observer.disconnect();
   });
 
+  $effect(() => {
+    if (!topbarElement) return;
+    const element = topbarElement;
+    const observer = new ResizeObserver(() => (topbarHeight = element.offsetHeight));
+    observer.observe(element);
+    return () => observer.disconnect();
+  });
+
   async function showMobileView(view: 'sessions' | 'chat' | 'details') {
+    if (view === 'sessions') sidebarVisible = true;
     saveViewState();
     if (acpAgent) {
       agentChangesOpen = view === 'details';
@@ -823,6 +832,22 @@
     sessions.find((session) => session.id === sessionID) ??
       (selectedSession?.id === sessionID ? selectedSession : undefined),
   );
+  let actionAgentThread = $derived(
+    focusedPane === 'main'
+      ? acpThread
+      : focusedLeaf?.agent && focusedLeaf.agent !== 'opencode'
+        ? focusedLeaf.thread
+        : null,
+  );
+  let actionOpenCodeSession = $derived(
+    focusedPane === 'main'
+      ? acpAgent
+        ? null
+        : currentSession
+      : focusedLeaf?.agent === 'opencode' && focusedLeaf.thread
+        ? { id: focusedLeaf.thread.sessionId, title: focusedLeaf.thread.title }
+        : null,
+  );
   let focusedConversationTitle = $derived(
     focusedPane !== 'main'
       ? (focusedLeaf?.thread?.title ??
@@ -830,31 +855,6 @@
       : acpAgent
         ? (acpThread?.title ?? `New ${acpAgent} thread`)
         : (currentSession?.title ?? (newSessionMode === 'work' ? 'New work' : 'New session')),
-  );
-  let visibleSessions = $derived(
-    !sessionSearch.trim() &&
-      selectedSession &&
-      !sessions.some((session) => session.id === selectedSession?.id)
-      ? [selectedSession, ...sessions]
-      : sessions,
-  );
-  let visibleThreads = $derived(
-    [
-      ...visibleSessions.map((session) => ({
-        kind: 'opencode' as const,
-        session,
-        updated: session.time.updated,
-      })),
-      ...agentThreads
-        .filter(
-          (thread) =>
-            thread.directory === directory &&
-            `${thread.title} ${thread.agent}`
-              .toLowerCase()
-              .includes(sessionSearch.trim().toLowerCase()),
-        )
-        .map((thread) => ({ kind: 'acp' as const, thread, updated: thread.updated })),
-    ].toSorted((a, b) => b.updated - a.updated),
   );
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
@@ -2544,10 +2544,6 @@
     selectedSession = null;
     sessions = [];
     activeSessionIDs = [];
-    sessionSearch = '';
-    sessionCursor = undefined;
-    nextSessionCursor = null;
-    sessionPageHistory = [];
     resetTimeline();
     draft = '';
     running = false;
@@ -2734,89 +2730,72 @@
     if (!client || !directory) return;
     const source = client;
     const path = directory;
-    const search = sessionSearch.trim();
-    const cursor = sessionCursor;
     const current = ++sessionRefresh;
-    sessionLoading = true;
-    try {
-      async function collect(
-        pageCursor: string | undefined,
-        matches: SessionInfo[],
-        seen: Set<string>,
-      ): Promise<{ matches: SessionInfo[]; next: string | null }> {
-        const result = await source.session.list({
-          directory: path,
-          limit: 25,
-          order: 'desc',
-          parentID: null,
-          ...(search ? { search } : {}),
-          ...(pageCursor ? { cursor: pageCursor } : {}),
-        });
-        matches.push(
-          ...result.data.filter(
-            (session) => session.location.directory === path && !session.parentID,
-          ),
-        );
-        const following = result.cursor.next ?? null;
-        if (
-          matches.length >= 25 ||
-          !following ||
-          following === pageCursor ||
-          seen.has(following) ||
-          path !== directory ||
-          current !== sessionRefresh ||
-          search !== sessionSearch.trim() ||
-          cursor !== sessionCursor
-        ) {
-          return { matches, next: following };
-        }
-        seen.add(following);
-        return collect(following, matches, seen);
-      }
-      const { matches, next } = await collect(cursor, [], new Set());
+    async function collect(
+      pageCursor: string | undefined,
+      matches: SessionInfo[],
+      seen: Set<string>,
+    ): Promise<SessionInfo[]> {
+      const result = await source.session.list({
+        directory: path,
+        limit: 25,
+        order: 'desc',
+        parentID: null,
+        ...(pageCursor ? { cursor: pageCursor } : {}),
+      });
+      matches.push(
+        ...result.data.filter(
+          (session) => session.location.directory === path && !session.parentID,
+        ),
+      );
+      const following = result.cursor.next ?? null;
       if (
+        matches.length >= 25 ||
+        !following ||
+        following === pageCursor ||
+        seen.has(following) ||
         path !== directory ||
-        current !== sessionRefresh ||
-        search !== sessionSearch.trim() ||
-        cursor !== sessionCursor
-      )
-        return;
-      const active = await source.session.active();
-      if (path !== directory || current !== sessionRefresh) return;
-      sessions = matches;
-      nextSessionCursor = next;
-      activeSessionIDs = Object.keys(active);
-      running = !!sessionID && activeSessionIDs.includes(sessionID);
-      const selected = sessions.find((session) => session.id === sessionID);
-      if (selected) {
-        selectedSession = selected;
-        syncSessionChoice(selected);
-      } else if (sessionID) {
-        const requestedID = sessionID;
-        try {
-          const info = await client.session.get({ sessionID: requestedID });
-          if (path === directory && current === sessionRefresh && requestedID === sessionID) {
-            if (info.location.directory === path && !info.parentID) {
-              selectedSession = info;
-              syncSessionChoice(info);
-            } else {
-              clearSelectedSession();
-              error = 'This session does not belong to the selected repository.';
-            }
-          }
-        } catch (cause) {
-          if (
-            path === directory &&
-            current === sessionRefresh &&
-            requestedID === sessionID &&
-            isSessionNotFoundError(cause)
-          ) {
+        current !== sessionRefresh
+      ) {
+        return matches;
+      }
+      seen.add(following);
+      return collect(following, matches, seen);
+    }
+    const matches = await collect(undefined, [], new Set());
+    if (path !== directory || current !== sessionRefresh) return;
+    const active = await source.session.active();
+    if (path !== directory || current !== sessionRefresh) return;
+    sessions = matches;
+    activeSessionIDs = Object.keys(active);
+    running = !!sessionID && activeSessionIDs.includes(sessionID);
+    const selected = sessions.find((session) => session.id === sessionID);
+    if (selected) {
+      selectedSession = selected;
+      syncSessionChoice(selected);
+    } else if (sessionID) {
+      const requestedID = sessionID;
+      try {
+        const info = await client.session.get({ sessionID: requestedID });
+        if (path === directory && current === sessionRefresh && requestedID === sessionID) {
+          if (info.location.directory === path && !info.parentID) {
+            selectedSession = info;
+            syncSessionChoice(info);
+          } else {
             clearSelectedSession();
+            error = 'This session does not belong to the selected repository.';
           }
         }
+      } catch (cause) {
+        if (
+          path === directory &&
+          current === sessionRefresh &&
+          requestedID === sessionID &&
+          isSessionNotFoundError(cause)
+        ) {
+          clearSelectedSession();
+        }
       }
-    } finally {
-      if (current === sessionRefresh) sessionLoading = false;
     }
   }
 
@@ -4186,11 +4165,14 @@
         const usage = acpUsage(params?.update);
         if (usage?.rates && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
           agentRates = { ...agentRates, [event.agent]: usage.rates };
-        for (const thread of agentThreads.filter(
-          (item) => item.agent === event.agent && item.sessionId === sessionId,
-        )) {
-          const key = threadKey(thread);
-          if (usage) agentUsage = { ...agentUsage, [key]: { context: usage.context } };
+        if (usage) {
+          const nextUsage = { ...agentUsage };
+          for (const thread of agentThreads.filter(
+            (item) => item.agent === event.agent && item.sessionId === sessionId,
+          )) {
+            nextUsage[threadKey(thread)] = { context: usage.context };
+          }
+          agentUsage = nextUsage;
         }
       }
     }
@@ -4403,9 +4385,6 @@
         title: 'New plan',
       });
       if (current !== selection || path !== directory) return;
-      sessionSearch = '';
-      sessionCursor = undefined;
-      sessionPageHistory = [];
       await refreshSessions();
       if (current !== selection || path !== directory) return;
       selectedSession = session;
@@ -4572,35 +4551,10 @@
     }
   }
 
-  function changeSearch() {
-    sessionCursor = undefined;
-    sessionPageHistory = [];
-    void refreshSessions().catch((cause) => {
-      error = describe(cause);
-    });
-  }
-
-  function nextPage() {
-    if (!nextSessionCursor) return;
-    sessionPageHistory = [...sessionPageHistory, sessionCursor];
-    sessionCursor = nextSessionCursor;
-    void refreshSessions().catch((cause) => {
-      error = describe(cause);
-    });
-  }
-
-  function previousPage() {
-    if (!sessionPageHistory.length) return;
-    sessionCursor = sessionPageHistory[sessionPageHistory.length - 1];
-    sessionPageHistory = sessionPageHistory.slice(0, -1);
-    void refreshSessions().catch((cause) => {
-      error = describe(cause);
-    });
-  }
-
-  function startRename(session: SessionInfo) {
+  function startRename(session: { id: string; title?: string }) {
     editingSessionID = session.id;
     editedTitle = session.title ?? '';
+    renameSessionDialog.showModal();
   }
 
   async function saveRename() {
@@ -4625,13 +4579,14 @@
           nextLayout = updatePane(nextLayout, pane.id, { thread: { ...pane.thread, title } });
       if (nextLayout !== paneLayout) savePaneLayout(nextLayout);
       editingSessionID = null;
+      renameSessionDialog.close();
       await refreshSessions();
     } catch (cause) {
       error = describe(cause);
     }
   }
 
-  async function removeSession(session: SessionInfo) {
+  async function removeSession(session: { id: string; title?: string }) {
     if (!client) return;
     const e2eAnswer =
       import.meta.env.MODE === 'e2e' ? sessionStorage.getItem('sai-e2e-delete-answer') : null;
@@ -4662,7 +4617,6 @@
       if (nextLayout !== paneLayout) savePaneLayout(nextLayout);
       if (session.id === sessionID) clearSelectedSession();
       await refreshSessions();
-      if (!sessions.length && sessionPageHistory.length) previousPage();
     } catch (cause) {
       error = describe(cause);
     }
@@ -5338,6 +5292,17 @@
   function keydownWorkspace(event: KeyboardEvent) {
     if (
       event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 'b'
+    ) {
+      event.preventDefault();
+      if (!event.repeat && !document.querySelector('dialog[open]')) toggleSidebar();
+      return;
+    }
+    if (
+      event.metaKey &&
       event.shiftKey &&
       !event.ctrlKey &&
       !event.altKey &&
@@ -5527,6 +5492,20 @@
     void toggleChanges();
   }
 
+  function toggleSidebar() {
+    if (window.matchMedia('(max-width: 850px)').matches) {
+      if (mobileView === 'sessions' && sidebarVisible) {
+        void showMobileView('chat');
+      } else {
+        void showMobileView('sessions');
+      }
+      return;
+    }
+    sidebarVisible = !sidebarVisible;
+    if (!sidebarVisible && sidebarElement.contains(document.activeElement))
+      void tick().then(() => sidebarToggleElement.focus());
+  }
+
   function keyupWorkspace(event: KeyboardEvent) {
     if (event.key === 'Control') recentCycleKeys = null;
   }
@@ -5566,17 +5545,20 @@
   onfocus={focusWorkspace}
   onfocusin={cancelPendingPromptFocus}
 />
-<div class="app-shell" data-mobile-view={mobileView}>
+<div
+  class="app-shell"
+  data-mobile-view={mobileView}
+  data-sidebar-visible={sidebarVisible}
+  style={`--topbar-height: ${topbarHeight}px`}
+>
   <aside
+    id="project-sidebar"
     class="sidebar"
-    aria-label="Projects and sessions"
+    aria-label="Projects"
     tabindex="-1"
     bind:this={sidebarElement}
   >
     <div class="brand"><span class="brand-mark">S.</span><span>Sail</span></div>
-    <button class="inbox-launch" aria-label="Pending requests" onclick={openInbox}>
-      Waiting for you <span>{inboxItems.length}</span>
-    </button>
     <div class="sidebar-content">
       <ProjectSidebar
         catalog={projectCatalog}
@@ -5607,181 +5589,6 @@
         oncreatepullrequest={createProjectPullRequest}
         onsendchecklog={sendFailedCheckLog}
       />
-      <div class="sidebar-sessions">
-        <div class="session-heading">
-          <span class="label">AGENTS</span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onclick={newPlan}
-            disabled={!planReady || switching || sending}
-            title={planReady
-              ? 'Start an Architect plan'
-              : 'Complete Architect setup in OpenCode settings'}
-            aria-label="New plan">New plan</Button
-          >
-        </div>
-        <div class="agent-launches">
-          {#each agentAvailability as agent (agent.id)}
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={!directory || !agent.available}
-              title={agent.reason ?? `New ${agent.name} thread`}
-              onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
-            >
-          {/each}
-          <Button
-            size="sm"
-            variant="ghost"
-            onclick={newWork}
-            disabled={!workReady || switching || sending}>+ OpenCode</Button
-          >
-        </div>
-        <div class="session-heading"><span class="label">THREADS</span></div>
-        {#if directory}<input
-            class="session-search"
-            aria-label="Search sessions"
-            placeholder="Search sessions"
-            bind:value={sessionSearch}
-            oninput={changeSearch}
-          />{/if}
-        <nav class="session-list" aria-label="Sessions">
-          {#each visibleThreads as row (row.kind === 'acp' ? `acp:${row.thread.agent}:${row.thread.sessionId}` : `opencode:${row.session.id}`)}
-            {#if row.kind === 'acp'}
-              {@const thread = row.thread}
-              {@const attention = threadAttention[threadKey(thread)] ?? {
-                status: 'done',
-                unread: false,
-              }}
-              {@const active =
-                (focusedPane === 'main' &&
-                  acpAgent === thread.agent &&
-                  acpThread?.sessionId === thread.sessionId) ||
-                (focusedPane !== 'main' &&
-                  focusedLeaf?.agent === thread.agent &&
-                  focusedLeaf?.thread?.sessionId === thread.sessionId)}
-              <div class:active class="session-row">
-                <button
-                  class="session-item"
-                  aria-current={active ? 'page' : undefined}
-                  onclick={() => openAgent(thread.agent, thread)}
-                  title={thread.title}
-                >
-                  <span class="session-symbol">◇</span><span class="session-details"
-                    ><strong>{thread.title}</strong><small
-                      ><span
-                        class="thread-status-dot"
-                        class:working={attention.status === 'working'}
-                        class:waiting={attention.status === 'waiting'}
-                        class:failed={attention.status === 'failed'}
-                      ></span>{thread.agent}
-                      · {attention.status === 'waiting' ? 'Waiting for input' : attention.status}
-                      {#if agentUsage[threadKey(thread)]?.context !== undefined}
-                        · Context {agentUsage[threadKey(thread)].context}%
-                      {/if}</small
-                    >{#if agentRates[thread.agent]?.length}<small
-                        >{agentRates[thread.agent]
-                          .map((rate) => `${rate.label} ${rate.remaining}% left`)
-                          .join(' · ')}</small
-                      >{/if}</span
-                  >
-                  {#if attention.unread}<span
-                      class="thread-unread"
-                      role="status"
-                      aria-label="Unread activity"
-                    ></span>{/if}
-                </button>
-                <button
-                  class="session-action"
-                  aria-label={`Remove ${thread.title} from Sail`}
-                  onclick={() => removeAgentThread(thread)}>×</button
-                >
-              </div>
-            {:else}
-              {@const session = row.session}
-              {@const attention =
-                threadAttention[JSON.stringify(['opencode', directory, session.id])]}
-              {@const status =
-                attention?.status === 'waiting'
-                  ? 'waiting'
-                  : activeSessionIDs.includes(session.id)
-                    ? 'working'
-                    : (attention?.status ?? 'done')}
-              {@const active =
-                (!acpAgent && session.id === sessionID && focusedPane === 'main') ||
-                (focusedPane !== 'main' &&
-                  focusedLeaf?.agent === 'opencode' &&
-                  focusedLeaf?.thread?.sessionId === session.id)}
-              <div class:active class="session-row">
-                {#if editingSessionID === session.id}<div class="session-edit">
-                    <input
-                      aria-label="Session title"
-                      bind:value={editedTitle}
-                      onkeydown={(event) => {
-                        if (event.key === 'Enter') void saveRename();
-                        if (event.key === 'Escape') {
-                          event.preventDefault();
-                          editingSessionID = null;
-                        }
-                      }}
-                    />
-                    <button aria-label="Save title" onclick={saveRename}>✓</button>
-                    <button aria-label="Cancel rename" onclick={() => (editingSessionID = null)}
-                      >×</button
-                    >
-                  </div>{:else}<button
-                    class="session-item"
-                    aria-current={active ? 'page' : undefined}
-                    onclick={() => selectSession(session.id)}
-                    title={session.title ?? 'Untitled session'}
-                    ><span class="session-symbol">◇</span><span class="session-details"
-                      ><strong>{session.title ?? 'Untitled session'}</strong><small
-                        ><span
-                          class="thread-status-dot"
-                          class:working={status === 'working'}
-                          class:waiting={status === 'waiting'}
-                          class:failed={status === 'failed'}
-                        ></span>OpenCode · {status === 'waiting'
-                          ? 'Waiting for input'
-                          : status}</small
-                      ><small>Updated {new Date(session.time.updated).toLocaleString()}</small>
-                      {#if openCodeUsage[`${directory}:${session.id}`] !== undefined}<small
-                          >Context {openCodeUsage[`${directory}:${session.id}`]}%</small
-                        >{/if}</span
-                    >{#if attention?.unread}<span
-                        class="thread-unread"
-                        role="status"
-                        aria-label="Unread activity"
-                      ></span>{/if}</button
-                  ><button
-                    class="session-action"
-                    aria-label={`Rename ${session.title ?? 'session'}`}
-                    onclick={() => startRename(session)}>✎</button
-                  ><button
-                    class="session-action"
-                    aria-label={`Delete ${session.title ?? 'session'}`}
-                    onclick={() => removeSession(session)}>×</button
-                  >{/if}
-              </div>
-            {/if}
-          {:else}<p class="session-empty">
-              {sessionLoading
-                ? 'Loading sessions…'
-                : directory
-                  ? 'No threads found'
-                  : 'Choose a repository to begin'}
-            </p>{/each}
-        </nav>
-        {#if directory && (sessionPageHistory.length || nextSessionCursor)}<div
-            class="session-pages"
-          >
-            <button disabled={!sessionPageHistory.length || sessionLoading} onclick={previousPage}
-              >Previous</button
-            >
-            <button disabled={!nextSessionCursor || sessionLoading} onclick={nextPage}>Next</button>
-          </div>{/if}
-      </div>
     </div>
     <div class="sidebar-footer">
       <button
@@ -5810,10 +5617,18 @@
     </div>
   </aside>
   <div class="main-area">
-    <header class="topbar">
+    <header class="topbar" bind:this={topbarElement}>
+      <button
+        class="sidebar-toggle"
+        bind:this={sidebarToggleElement}
+        aria-label="Toggle project sidebar"
+        aria-controls="project-sidebar"
+        title="Toggle project sidebar (⌘B)"
+        onclick={toggleSidebar}>☰</button
+      >
       <nav class="mobile-switcher" aria-label="Workspace panels">
         <button aria-pressed={mobileView === 'sessions'} onclick={() => showMobileView('sessions')}
-          >Sessions</button
+          >Projects</button
         >
         <button aria-pressed={mobileView === 'chat'} onclick={() => showMobileView('chat')}
           >Chat</button
@@ -5834,6 +5649,61 @@
         ><span class="slash">/</span><strong>{focusedConversationTitle}</strong>
       </div>
       <div class="topbar-actions">
+        <Button variant="ghost" size="sm" aria-label="Pending requests" onclick={openInbox}
+          >Inbox ({inboxItems.length})</Button
+        >
+        {#if directory}<Button
+            variant="ghost"
+            size="sm"
+            onclick={newPlan}
+            disabled={!planReady || switching || sending}
+            aria-label="New plan"
+            title="Start an Architect plan">New plan</Button
+          >{/if}
+        {#if directory}<div class="agent-launches">
+            {#each agentAvailability as agent (agent.id)}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!agent.available}
+                title={agent.reason ?? `New ${agent.name} thread`}
+                onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
+              >
+            {/each}
+            <Button
+              size="sm"
+              variant="ghost"
+              onclick={newWork}
+              disabled={!workReady || switching || sending}>+ OpenCode</Button
+            >
+          </div>{/if}
+        {#if directory}<button
+            class="agent-menu-launch"
+            onclick={() =>
+              reopenCommandPalette({
+                kind: 'agents',
+                repository: selectedRepository(projectCatalog, directory) ?? directory,
+                directory,
+              })}>Agents</button
+          >{/if}
+        {#if actionAgentThread}<Button
+            variant="ghost"
+            size="sm"
+            aria-label="Remove thread"
+            onclick={() => {
+              if (actionAgentThread) removeAgentThread(actionAgentThread);
+            }}>Remove thread</Button
+          >{:else if actionOpenCodeSession}<Button
+            variant="ghost"
+            size="sm"
+            onclick={() => actionOpenCodeSession && startRename(actionOpenCodeSession)}
+            >Rename</Button
+          ><Button
+            variant="ghost"
+            size="sm"
+            onclick={() => actionOpenCodeSession && void removeSession(actionOpenCodeSession)}
+            >Delete</Button
+          >{/if}
         {#if !acpAgent && sessionID && openCodeUsage[`${directory}:${sessionID}`] !== undefined}<span
             class="session-usage">Context {openCodeUsage[`${directory}:${sessionID}`]}%</span
           >{/if}
@@ -6580,6 +6450,20 @@
     <button type="submit" disabled={!commandName.trim() || !commandText.trim()}
       >{editingCommand ? 'Save changes' : 'Save command'}</button
     >
+  </form>
+</dialog>
+<dialog class="rename-session-dialog" bind:this={renameSessionDialog} aria-label="Rename session">
+  <form
+    onsubmit={(event) => {
+      event.preventDefault();
+      void saveRename();
+    }}
+  >
+    <label
+      >Session title<input aria-label="Session title" bind:value={editedTitle} required /></label
+    >
+    <button type="button" onclick={() => renameSessionDialog.close()}>Cancel</button>
+    <button type="submit">Save</button>
   </form>
 </dialog>
 <dialog class="inbox-dialog" bind:this={inboxDialog} aria-label="Pending requests across projects">

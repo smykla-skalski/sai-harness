@@ -109,6 +109,36 @@ describe('project context menus', () => {
     await expect($('.project-group-label')).toHaveText('Ungrouped');
   });
 
+  it('shows and hides projects with Command B', async () => {
+    await browser.execute((path) => {
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [], worktrees: {} }),
+      );
+    }, realpathSync(repository));
+    await browser.refresh();
+    await browser.setWindowSize(1280, 850);
+    await expect($('.sidebar')).toBeDisplayed();
+    await expect($('.sidebar-sessions')).not.toExist();
+    await browser.keys(['Meta', 'b']);
+    await expect($('.sidebar')).not.toBeDisplayed();
+    await $('[aria-label="Toggle project sidebar"]').click();
+    await expect($('.sidebar')).toBeDisplayed();
+
+    await browser.setWindowSize(320, 500);
+    await $('.mobile-switcher button:first-child').click();
+    await expect($('.sidebar')).toBeDisplayed();
+    const bounds = await browser.execute(() => ({
+      topbarBottom: document.querySelector('.topbar')!.getBoundingClientRect().bottom,
+      sidebarTop: document.querySelector('.sidebar')!.getBoundingClientRect().top,
+    }));
+    expect(bounds.sidebarTop).toBeGreaterThanOrEqual(bounds.topbarBottom - 1);
+    await browser.keys(['Meta', 'b']);
+    await expect($('.sidebar')).not.toBeDisplayed();
+    await expect($('.app-shell')).toHaveAttribute('data-mobile-view', 'chat');
+  });
+
   it('toggles worktrees while keeping the default checkout under its project', async () => {
     const path = realpathSync(repository);
     const linked = join(path, 'linked');
