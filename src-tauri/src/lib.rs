@@ -995,24 +995,27 @@ struct RegisteredWorktree {
 #[tauri::command]
 fn registered_worktrees(repository: String) -> Result<Vec<RegisteredWorktree>, String> {
     let repository = validate_repository(repository)?;
-    let listed = git_reference(Path::new(&repository), &["worktree", "list", "--porcelain"])
-        .ok_or("Cannot inspect repository worktrees.")?;
+    let listed = git_reference(
+        Path::new(&repository),
+        &["worktree", "list", "--porcelain", "-z"],
+    )
+    .ok_or("Cannot inspect repository worktrees.")?;
     Ok(parse_registered_worktrees(&listed))
 }
 
 fn parse_registered_worktrees(listed: &str) -> Vec<RegisteredWorktree> {
     listed
-        .split("\n\n")
+        .split("\0\0")
         .filter_map(|entry| {
             let path = entry
-                .lines()
+                .split('\0')
                 .find_map(|line| line.strip_prefix("worktree "))?;
             let branch = entry
-                .lines()
+                .split('\0')
                 .find_map(|line| line.strip_prefix("branch refs/heads/"))
                 .map(str::to_string);
             let prunable = entry
-                .lines()
+                .split('\0')
                 .any(|line| line == "prunable" || line.starts_with("prunable "));
             Some(RegisteredWorktree {
                 path: path.to_string(),
@@ -1403,9 +1406,9 @@ mod tests {
     #[test]
     fn parses_registered_and_prunable_worktrees() {
         let present = std::env::temp_dir();
-        let missing = present.join(format!("sail-missing-{}", uuid::Uuid::new_v4()));
+        let missing = present.join(format!("sail-missing-\n{}", uuid::Uuid::new_v4()));
         let listed = format!(
-            "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\ndetached\nprunable gitdir missing\n",
+            "worktree {}\0HEAD abc\0branch refs/heads/main\0\0worktree {}\0HEAD def\0detached\0prunable gitdir missing\0\0",
             present.display(),
             missing.display()
         );
@@ -1414,6 +1417,7 @@ mod tests {
         assert_eq!(worktrees[0].branch.as_deref(), Some("main"));
         assert!(worktrees[0].present);
         assert_eq!(worktrees[1].branch, None);
+        assert_eq!(worktrees[1].path, missing.to_string_lossy());
         assert!(!worktrees[1].present);
     }
 
