@@ -11,16 +11,21 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadProjectCatalog } from '../../src/lib/projects.ts';
 
 describe('responsive worktree operations', () => {
   const repository = realpathSync(mkdtempSync(join(tmpdir(), 'sail-responsive-worktree-')));
+  const secondRepository = realpathSync(mkdtempSync(join(tmpdir(), 'sail-responsive-second-')));
   const name = repository.split('/').at(-1)!;
 
   before(async () => {
     execFileSync('git', ['init', '-q', repository]);
     const config = join(repository, '.sail');
     mkdirSync(config);
-    writeFileSync(join(config, 'worktree.json'), JSON.stringify({ archive: 'sleep 2' }));
+    writeFileSync(
+      join(config, 'worktree.json'),
+      JSON.stringify({ setup: 'pwd > setup-path.txt', archive: 'sleep 2' }),
+    );
     execFileSync('git', ['-C', repository, 'add', '.sail/worktree.json']);
     execFileSync('git', [
       '-C',
@@ -38,17 +43,36 @@ describe('responsive worktree operations', () => {
     const hook = join(repository, '.git', 'hooks', 'post-checkout');
     writeFileSync(hook, '#!/bin/sh\nsleep 8\n');
     chmodSync(hook, 0o755);
-    await browser.execute((path) => {
-      localStorage.setItem('sai-directory', path);
-      localStorage.setItem(
-        'sai-project-catalog',
-        JSON.stringify({
-          repositories: [path],
-          groups: [],
-          worktrees: {},
-        }),
-      );
-    }, repository);
+    execFileSync('git', ['init', '-q', secondRepository]);
+    execFileSync('git', [
+      '-C',
+      secondRepository,
+      '-c',
+      'user.name=Sail Test',
+      '-c',
+      'user.email=sail@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'baseline',
+    ]);
+    await browser.execute(
+      (path, second) => {
+        localStorage.setItem('sai-directory', path);
+        localStorage.setItem(
+          'sai-project-catalog',
+          JSON.stringify({
+            repositories: [path, second],
+            groups: [],
+            worktrees: {},
+          }),
+        );
+      },
+      repository,
+      secondRepository,
+    );
     await browser.refresh();
     await expect($(`.project-default-worktree-select[title="${repository}"]`)).toBeDisplayed();
   });
@@ -56,6 +80,7 @@ describe('responsive worktree operations', () => {
   after(async () => {
     await browser.execute(() => localStorage.clear());
     rmSync(repository, { recursive: true, force: true });
+    rmSync(secondRepository, { recursive: true, force: true });
   });
 
   async function submitWorktree(branch: string, base?: string) {
@@ -77,6 +102,7 @@ describe('responsive worktree operations', () => {
         'page',
       );
       await expect($('.project-worktree-status')).toHaveText('Creating worktree');
+      await $(`.project-default-worktree-select[title="${secondRepository}"]`).click();
     } catch (cause) {
       console.error('Creation progress diagnostic', {
         sidebar: await $('.sidebar').getText(),
@@ -89,12 +115,21 @@ describe('responsive worktree operations', () => {
       throw cause;
     }
     await expect($('.project-worktree-pending')).not.toExist();
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(() => localStorage.getItem('sai-directory')))?.endsWith(
-          '/slow-create',
-        ) ?? false,
+    expect(await browser.execute(() => localStorage.getItem('sai-directory'))).toBe(
+      secondRepository,
     );
+    const catalog = loadProjectCatalog(
+      await browser.execute(() => localStorage.getItem('sai-project-catalog')),
+      repository,
+    );
+    const createdPath = (catalog.worktrees[repository] ?? []).find(
+      (worktree) => worktree.branch === 'slow-create',
+    )?.path;
+    if (!createdPath) throw new Error('Created worktree missing from catalog');
+    expect(existsSync(join(secondRepository, 'setup-path.txt'))).toBe(false);
+    expect(existsSync(join(createdPath, 'setup-path.txt'))).toBe(false);
+    await $(`.project-worktree-select[title="${createdPath}"]`).click();
+    await browser.waitUntil(() => existsSync(join(createdPath, 'setup-path.txt')));
   });
 
   it('shows creation failure and lets the user retry', async () => {

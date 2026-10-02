@@ -173,8 +173,19 @@
     baseRef: string | null;
     agent: string | null;
     issue: GitHubIssue | null;
+    initialDirectory: string;
   };
   const worktreeCreationRequests = new SvelteMap<string, WorktreeCreationRequest>();
+  type CreatedWorktree = { path: string; branch: string; base: string; setup: string };
+  const pendingWorktreeStarts = new SvelteMap<
+    string,
+    {
+      repository: string;
+      created: CreatedWorktree;
+      agent: string | null;
+      issuePrompt: string | null;
+    }
+  >();
   let savedCommands = $state<SavedCommand[]>(loadSavedCommands(getSetting('sai-saved-commands')));
   let pendingCommands = $state<Record<string, string>>({});
   let browserAccessDisabled = $state(
@@ -2268,7 +2279,15 @@
     issue: GitHubIssue | null,
   ): Promise<string> {
     const id = crypto.randomUUID();
-    const request = { repository: path, name, destinationParent, baseRef, agent, issue };
+    const request = {
+      repository: path,
+      name,
+      destinationParent,
+      baseRef,
+      agent,
+      issue,
+      initialDirectory: directory,
+    };
     worktreeCreationRequests.set(id, request);
     worktreeCreations = [...worktreeCreations, { id, repository: path, name, stage: 'Preparing' }];
     saveProjectCatalog({
@@ -2287,7 +2306,9 @@
     worktreeCreations = worktreeCreations.map((creation) =>
       creation.id === id ? { ...creation, stage: 'Preparing', error: undefined } : creation,
     );
-    void runWorktreeCreation(id, request).catch(() => undefined);
+    const retry = { ...request, initialDirectory: directory };
+    worktreeCreationRequests.set(id, retry);
+    void runWorktreeCreation(id, retry).catch(() => undefined);
   }
 
   function dismissWorktreeCreation(id: string) {
@@ -2302,7 +2323,7 @@
   ): Promise<string> {
     const { repository: path, name, destinationParent, baseRef, agent, issue } = request;
     let issuePrompt: string | null;
-    let created: { path: string; branch: string; base: string; setup: string };
+    let created: CreatedWorktree;
     try {
       const currentIssue = issue
         ? await invoke<GitHubIssue>('open_issue', { repository: path, number: issue.number })
@@ -2327,17 +2348,32 @@
     }
     worktreeCreations = worktreeCreations.filter((creation) => creation.id !== id);
     worktreeCreationRequests.delete(id);
+    if (created.setup || agent)
+      pendingWorktreeStarts.set(created.path, { repository: path, created, agent, issuePrompt });
     saveProjectCatalog({
       ...addWorktree(projectCatalog, path, created),
       collapsedRepositories: projectCatalog.collapsedRepositories?.filter(
         (repository) => repository !== path,
       ),
     });
-    try {
-      await loadProject(created.path);
-    } catch (cause) {
-      error = describe(cause);
+    if (directory === request.initialDirectory) {
+      try {
+        await loadProject(created.path);
+      } catch (cause) {
+        error = describe(cause);
+      }
     }
+    return created.path;
+  }
+
+  function finishCreatedWorktree(start: {
+    repository: string;
+    created: CreatedWorktree;
+    agent: string | null;
+    issuePrompt: string | null;
+  }) {
+    const { repository: path, created, agent, issuePrompt } = start;
+    if (directory !== created.path) return;
     const startAgent = () => {
       if (directory !== created.path) return;
       if (agent === 'opencode') {
@@ -2361,7 +2397,11 @@
     };
     if (created.setup) {
       const paneId = splitFocusedPane('row', 'terminal', created.setup);
-      if (!paneId) return created.path;
+      if (!paneId) {
+        saveProjectCatalog(setWorktreeSetupStatus(projectCatalog, path, created.path, 'failed'));
+        error = 'Could not open a terminal for worktree setup.';
+        return;
+      }
       terminalExitWaiters.set(paneId, (code) => {
         saveProjectCatalog(
           setWorktreeSetupStatus(
@@ -2374,10 +2414,9 @@
         if (code === 0) startAgent();
         else if (code >= 0) error = `Worktree setup exited with code ${code}.`;
       });
-      return created.path;
+      return;
     }
     startAgent();
-    return created.path;
   }
 
   $effect(() => {
@@ -2395,6 +2434,7 @@
     path: string;
     branch: string;
   } | null>(null);
+  const deletingWorktreeRequests = new SvelteSet<string>();
 
   async function deleteProjectWorktree(
     repository: string,
@@ -2402,7 +2442,21 @@
     branch: string,
     force = false,
   ) {
-    if (worktreeDeletions[path]) return;
+    if (deletingWorktreeRequests.has(path)) return;
+    deletingWorktreeRequests.add(path);
+    try {
+      await deleteProjectWorktreeOnce(repository, path, branch, force);
+    } finally {
+      deletingWorktreeRequests.delete(path);
+    }
+  }
+
+  async function deleteProjectWorktreeOnce(
+    repository: string,
+    path: string,
+    branch: string,
+    force: boolean,
+  ) {
     let config: WorktreeConfig | null;
     try {
       config = await invoke<WorktreeConfig | null>('worktree_config', { worktree: path });
@@ -2471,6 +2525,7 @@
       delete paneLayouts[path];
       persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
+      pendingWorktreeStarts.delete(path);
       error = '';
     } catch (cause) {
       if (wasSelected && directory === repository) await loadProject(path);
@@ -2595,6 +2650,16 @@
   }
 
   async function loadProject(path: string, recordRestoredThread = true) {
+    const expectedSelection = selection + 1;
+    await hydrateProject(path, recordRestoredThread);
+    if (directory !== path || selection !== expectedSelection) return;
+    const start = pendingWorktreeStarts.get(path);
+    if (!start) return;
+    pendingWorktreeStarts.delete(path);
+    finishCreatedWorktree(start);
+  }
+
+  async function hydrateProject(path: string, recordRestoredThread = true) {
     if (directory !== path) {
       sideChat = null;
       agentEntrySnapshots = {};
