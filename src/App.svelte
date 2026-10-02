@@ -490,7 +490,9 @@
   let renameSessionDialog: HTMLDialogElement;
   let activeSessionIDs = $state<string[]>([]);
   let sessionID = $state<string | null>(null);
-  let mainPickerDirectory = $state<string | null>(null);
+  let mainPickerDirectory = $state<string | null>(
+    getSetting(`sai-main-pane-empty:${savedDirectory}`) === 'true' ? savedDirectory : null,
+  );
   let showMainPicker = $derived.by(() => {
     const panes = leaves(paneLayout);
     const main = panes[0];
@@ -1422,7 +1424,12 @@
     await reconcileNativeActivity();
     if (current !== selection || path !== directory) return;
     if (!workReady && !planReady) return;
-    if (acpAgent || leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)) return;
+    if (
+      acpAgent ||
+      getSetting(`sai-main-pane-empty:${path}`) === 'true' ||
+      leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)
+    )
+      return;
     const saved = getSetting(`sai-session:${path}`);
     const initial = sessionID ?? saved ?? sessions[0]?.id;
     if (initial && initial !== sessionID) {
@@ -2765,6 +2772,7 @@
       delete paneLayouts[path];
       persistPaneLayouts();
       removeSetting(`sai-session:${path}`);
+      removeSetting(`sai-main-pane-empty:${path}`);
       error = '';
     } catch (cause) {
       if (directory !== path) await loadProject(path);
@@ -2898,6 +2906,7 @@
     error = '';
     const current = ++selection;
     directory = path;
+    mainPickerDirectory = getSetting(`sai-main-pane-empty:${path}`) === 'true' ? path : null;
     browserAccessDisabled = getSetting(`sai-browser-disabled:${path}`) === 'true';
     focusedPane = leaves(paneLayouts[path] ?? mainPane())[0]?.id ?? 'main';
     setSetting('sai-directory', path);
@@ -2954,7 +2963,11 @@
     try {
       await refreshSessions();
       if (current !== selection) return;
-      if (leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)) return;
+      if (
+        getSetting(`sai-main-pane-empty:${directory}`) === 'true' ||
+        leaves(paneLayout).some((pane) => pane.id === 'main' && !!pane.kind)
+      )
+        return;
       const saved = getSetting(`sai-session:${directory}`);
       if (saved && (await restoreSession(saved))) return;
       if (current !== selection) return;
@@ -2982,6 +2995,7 @@
     )
       return;
     mainPickerDirectory = path;
+    setSetting(`sai-main-pane-empty:${path}`, 'true');
     focusPaneForTyping('main');
     await tick();
     setTimeout(() => {
@@ -3769,9 +3783,27 @@
     setSetting('sai-pane-layouts', JSON.stringify(paneLayouts));
   }
 
+  function clearMainPaneEmpty() {
+    mainPickerDirectory = null;
+    removeSetting(`sai-main-pane-empty:${directory}`);
+  }
+
+  function showEmptyMainPane() {
+    ++selection;
+    acpAgent = null;
+    acpThread = null;
+    if (sessionID) clearSelectedSession();
+    newSessionMode = null;
+    savePaneLayout(mainPane());
+    mainPickerDirectory = directory;
+    setSetting(`sai-main-pane-empty:${directory}`, 'true');
+  }
+
   function savePaneLayout(layout: Pane) {
     paneLayouts = { ...paneLayouts, [directory]: layout };
     persistPaneLayouts();
+    const main = leaves(layout).find((pane) => pane.id === 'main');
+    if (main?.agent || main?.kind) clearMainPaneEmpty();
   }
 
   function paneSpan(id: string, axis: 'row' | 'column') {
@@ -4037,7 +4069,8 @@
     let layout = closePane(paneLayout, id);
     if (!('direction' in layout) && layout.id === 'main')
       layout = { id: 'main', agent: acpAgent, thread: acpThread };
-    savePaneLayout(layout);
+    if (id === 'main' && !('direction' in layout) && layout.id === 'main') showEmptyMainPane();
+    else savePaneLayout(layout);
     changesPanes = changesPanes.filter((item) => item !== id);
     focusPaneForTyping(leaves(layout)[0]?.id ?? 'main');
   }
@@ -4062,12 +4095,10 @@
         void invoke('terminal_close', {
           id: terminalRuntimeId(directory, leaves(paneLayout)[0].id),
         });
-      acpAgent = null;
-      acpThread = null;
-      savePaneLayout(mainPane());
+      showEmptyMainPane();
       changesPanes = [];
-    } else if (sessionID) {
-      clearSelectedSession();
+    } else if (sessionID || newSessionMode) {
+      showEmptyMainPane();
     }
     focusPaneForTyping('main');
   }
@@ -4728,6 +4759,7 @@
       return;
     }
     sessionID = id;
+    clearMainPaneEmpty();
     detailsOpen = true;
     selectedSession = info;
     syncSessionChoice(info);
@@ -4787,6 +4819,7 @@
     acpAgent = null;
     acpThread = null;
     savePaneLayout(updatePane(paneLayout, 'main', { agent: null, thread: null, kind: undefined }));
+    clearMainPaneEmpty();
     saveViewState();
     ++selection;
     sessionID = null;
