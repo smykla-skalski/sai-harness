@@ -28,7 +28,10 @@ impl AcpTerminalManager {
                 active
                     .values()
                     .filter_map(|terminal| {
-                        let child = terminal.child.lock().ok()?;
+                        let mut child = terminal.child.lock().ok()?;
+                        if child.try_wait().ok()?.is_some() {
+                            return None;
+                        }
                         Some((terminal.directory.clone(), child.id()))
                     })
                     .collect()
