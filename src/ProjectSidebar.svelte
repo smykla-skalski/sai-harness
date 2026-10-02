@@ -307,9 +307,8 @@
   function chooseIssue(issue: GitHubIssue) {
     selectedIssue = issue;
     worktreeName = issueBranch(issue);
-    worktreeAgent ||= openCodeAvailable
-      ? 'opencode'
-      : (agents.find((agent) => agent.available)?.id ?? '');
+    worktreeAgent ||=
+      agents.find((agent) => agent.available)?.id ?? (openCodeAvailable ? 'opencode' : '');
     void tick().then(() => worktreeNameInput?.focus());
   }
 

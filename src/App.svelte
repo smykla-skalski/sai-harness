@@ -227,6 +227,7 @@
   let diffComments = $state<Record<string, DiffComment[]>>({});
   let pendingAgentBatches = $state<Record<string, { id: string; text: string }>>({});
   let issuePrefills = $state<Record<string, { id: string; text: string }>>({});
+  let pendingOpenCodeIssue = $state<{ path: string; text: string } | null>(null);
   const batchWaiters = new SvelteMap<
     string,
     { resolve: () => void; reject: (error: Error) => void }
@@ -1247,6 +1248,9 @@
         if (workReady) {
           newWork();
           if (issuePrompt) draft = issuePrompt;
+        } else if (issuePrompt) {
+          pendingOpenCodeIssue = { path: created.path, text: issuePrompt };
+          error = 'Complete OpenCode setup in this worktree. The issue draft will open when ready.';
         } else error = 'Complete OpenCode setup in this worktree before starting an agent.';
       } else if (agent) {
         if (issuePrompt)
@@ -1270,6 +1274,15 @@
     }
     startAgent();
   }
+
+  $effect(() => {
+    const pending = pendingOpenCodeIssue;
+    if (!pending || directory !== pending.path || !workReady || switching || sending) return;
+    pendingOpenCodeIssue = null;
+    newWork();
+    draft = pending.text;
+    focusPaneForTyping('main');
+  });
 
   async function deleteProjectWorktree(repository: string, path: string, branch: string) {
     let config: WorktreeConfig | null;
