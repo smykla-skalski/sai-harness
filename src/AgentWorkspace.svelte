@@ -510,6 +510,7 @@
       return;
     }
     const sentImages = external ? [] : [...images];
+    const turnAgent = agent;
     const current = generation;
     const turnId = crypto.randomUUID();
     activeTurnId = turnId;
@@ -560,7 +561,7 @@
           ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
           : text;
       const result = await acp.prompt(
-        agent,
+        turnAgent,
         id!,
         promptText,
         turnId,

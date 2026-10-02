@@ -155,6 +155,7 @@ describe('ACP agent threads', () => {
     );
 
     await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Claude'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Delayed approval');
     await $('.agent-actions button').click();
@@ -163,9 +164,19 @@ describe('ACP agent threads', () => {
     });
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-launches button:nth-child(2)').click();
-    await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
-      expect.stringMatching(/Running|Waiting for input/),
-    );
+    try {
+      await expect($('.session-row .session-item[title="Delayed approval"]')).toHaveText(
+        expect.stringMatching(/Running|Waiting for input/),
+      );
+    } catch (cause) {
+      await $('.session-row .session-item[title="Delayed approval"]').click();
+      console.error('ACP pending thread diagnostic', {
+        sidebar: await $('.sidebar').getText(),
+        workspace: await $('.agent-workspace').getText(),
+        threads: await browser.execute(() => localStorage.getItem('sail-agent-threads')),
+      });
+      throw cause;
+    }
     await browser.pause(1800);
     await $('.session-row .session-item[title="Delayed approval"]').click();
     await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
