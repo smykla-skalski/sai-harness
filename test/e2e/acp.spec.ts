@@ -47,13 +47,32 @@ describe('ACP agent threads', () => {
       });
       throw cause;
     }
+    await expect($('.agent-picker-controls')).toHaveText(expect.stringContaining('Model'));
+    await expect($('.agent-picker-controls')).toHaveText(expect.stringContaining('Effort'));
+    await $('.agent-composer textarea').setValue('/model');
+    await browser.keys('Enter');
+    await expect($('.option-menu[role="listbox"]')).toBeDisplayed();
+    await browser.keys('ArrowDown');
+    await browser.keys('Enter');
+    await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
+      expect.stringContaining('Fast model'),
+    );
+    await $('.agent-composer textarea').setValue('/effort');
+    await browser.keys('Enter');
+    await browser.keys('ArrowDown');
+    await browser.keys('Enter');
+    await expect($('.option-trigger[aria-label="Choose effort"]')).toHaveText(
+      expect.stringContaining('High'),
+    );
     await $('.agent-composer textarea').setValue('Do a small thing');
     await $('.agent-actions button').click();
-    await expect($('.agent-config select')).toHaveValue('test');
     await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Done: Do a small thing'),
+    );
+    await expect($('.option-trigger[aria-label="Choose model"]')).toHaveText(
+      expect.stringContaining('Fast model'),
     );
     writeFileSync(join(repository, 'agent-change.txt'), 'Changed by agent\n');
     await $('.topbar-actions button[title="Toggle Changes (⌘L)"]').click();
@@ -73,6 +92,12 @@ describe('ACP agent threads', () => {
     await $('.agent-actions button').click();
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Done: Try Codex'));
+    await $('.agent-picker-controls .option-trigger[aria-label="Choose effort"]').click();
+    await browser.keys('ArrowDown');
+    await browser.keys('Enter');
+    await expect($('.option-trigger[aria-label="Choose effort"]')).toHaveText(
+      expect.stringContaining('High'),
+    );
 
     try {
       await $('.session-row .session-item[title="Do a small thing"]').click();

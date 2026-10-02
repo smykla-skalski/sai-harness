@@ -4,6 +4,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import OptionPicker from './OptionPicker.svelte';
   import {
     acp,
     updateEntries,
@@ -72,6 +73,9 @@
   let entries = $state<AgentEntry[]>([]);
   let permissions = $state<AgentPermission[]>([]);
   let configOptions = $state<AgentConfigOption[]>([]);
+  let pickerOpen = $state<'model' | 'effort' | null>(null);
+  let creatingSession = $state<Promise<AgentThread> | null>(null);
+  let settingConfig = $state<Promise<void> | null>(null);
   let authMethods = $state<AgentAuthMethod[]>([]);
   let authNeeded = $state(false);
   let authenticating = $state(false);
@@ -84,6 +88,18 @@
   let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
   const isBusy = $derived(busy || running);
+  const modelOption = $derived(
+    configOptions.find(
+      (option) => /model/i.test(`${option.id} ${option.name}`) && option.type === 'select',
+    ),
+  );
+  const effortOption = $derived(
+    configOptions.find(
+      (option) =>
+        /effort|reasoning|thinking/i.test(`${option.id} ${option.name}`) &&
+        option.type === 'select',
+    ),
+  );
 
   async function focusPromptWhenReady() {
     await tick();
@@ -176,6 +192,9 @@
     activeSessionId = id;
     entries = [];
     configOptions = [];
+    pickerOpen = null;
+    creatingSession = null;
+    settingConfig = null;
     authNeeded = false;
     busy = false;
     stopRequested = false;
@@ -217,6 +236,46 @@
     const id = thread?.sessionId ?? null;
     if (mounted && selectedThreadId !== id) void activate(id);
   });
+
+  async function ensureSession(title: string): Promise<AgentThread> {
+    if (activeSessionId) {
+      return thread ?? { agent, sessionId: activeSessionId, directory, title, updated: Date.now() };
+    }
+    if (creatingSession) return creatingSession;
+    const current = generation;
+    creatingSession = (async () => {
+      const session = await acp.create(agent, directory);
+      if (current !== generation) throw new Error('Agent pane closed while creating the thread.');
+      configOptions = session.configOptions ?? [];
+      activeSessionId = session.sessionId;
+      selectedThreadId = session.sessionId;
+      const created: AgentThread = {
+        agent,
+        sessionId: session.sessionId,
+        directory,
+        title,
+        updated: Date.now(),
+      };
+      oncreated(created);
+      return created;
+    })();
+    try {
+      return await creatingSession;
+    } finally {
+      creatingSession = null;
+    }
+  }
+
+  async function openPicker(kind: 'model' | 'effort') {
+    pickerOpen = kind;
+    if (!ready || !directory || activeSessionId) return;
+    try {
+      await ensureSession('New thread');
+    } catch (cause) {
+      error = describe(cause);
+      authNeeded = /auth|login|sign.?in/i.test(error);
+    }
+  }
 
   onMount(() => {
     let disposed = false;
@@ -275,6 +334,12 @@
   async function send(externalText?: string) {
     const external = externalText !== undefined;
     const text = (externalText ?? draft).trim();
+    const command = text.toLowerCase();
+    if (!external && (command === '/model' || command === '/effort')) {
+      draft = '';
+      await openPicker(command.slice(1) as 'model' | 'effort');
+      return;
+    }
     if (!text || !ready || isBusy || !directory) {
       if (external) throw new Error('Wait for the current agent turn.');
       return;
@@ -296,26 +361,13 @@
       images = [];
     }
     try {
-      if (!activeSessionId) {
-        const session = await acp.create(agent, directory);
-        if (current !== generation) {
-          if (external) throw new Error('Agent pane closed before comments were sent.');
-          return;
-        }
-        configOptions = session.configOptions ?? [];
-        activeSessionId = session.sessionId;
-        selectedThreadId = session.sessionId;
-        const created: AgentThread = {
-          agent,
-          sessionId: session.sessionId,
-          directory,
-          title: text.slice(0, 60),
-          updated: Date.now(),
-        };
-        activityThread = created;
-        oncreated(created);
-        onstatus(created, 'working');
-      }
+      if (!activeSessionId) activityThread = await ensureSession(text.slice(0, 60));
+      else if (activityThread?.title === 'New thread')
+        activityThread = { ...activityThread, title: text.slice(0, 60) };
+      if (current !== generation) return;
+      if (activityThread) onstatus(activityThread, 'working');
+      if (settingConfig) await settingConfig;
+      if (activityThread) onactivity(activityThread);
       const id = activeSessionId;
       if (stopRequested) {
         notifyOnDone = false;
@@ -401,18 +453,28 @@
     }
   }
 
-  async function setConfig(configId: string, value: string) {
+  function setConfig(configId: string, value: string) {
     if (!activeSessionId) return;
-    try {
-      const result = await acp.setConfig(agent, activeSessionId, configId, value);
-      configOptions =
-        result.configOptions ??
-        configOptions.map((option) =>
-          option.id === configId ? Object.assign({}, option, { currentValue: value }) : option,
-        );
-    } catch (cause) {
-      error = describe(cause);
-    }
+    const sessionId = activeSessionId;
+    const previous = settingConfig;
+    const task = (async () => {
+      if (previous) await previous;
+      try {
+        const result = await acp.setConfig(agent, sessionId, configId, value);
+        if (activeSessionId !== sessionId) return;
+        configOptions =
+          result.configOptions ??
+          configOptions.map((option) =>
+            option.id === configId ? Object.assign({}, option, { currentValue: value }) : option,
+          );
+      } catch (cause) {
+        error = describe(cause);
+      }
+    })();
+    settingConfig = task;
+    void task.finally(() => {
+      if (settingConfig === task) settingConfig = null;
+    });
   }
 
   async function authenticate(methodId: string) {
@@ -422,6 +484,7 @@
       await acp.authenticate(agent, methodId);
       authNeeded = false;
       if (activeSessionId) await activate(activeSessionId);
+      else if (pickerOpen) await ensureSession('New thread');
       else ready = true;
     } catch (cause) {
       error = describe(cause);
@@ -464,12 +527,12 @@
       <strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span>
     </div>
     <div class="agent-config">
-      {#each configOptions.filter((option) => option.type === 'select' && Array.isArray(option.options)) as option (option.id)}
+      {#each configOptions.filter((option) => option.type === 'select' && Array.isArray(option.options) && option.id !== modelOption?.id && option.id !== effortOption?.id) as option (option.id)}
         <label
           >{option.name}<select
             value={option.currentValue}
             disabled={isBusy}
-            onchange={(event) => void setConfig(option.id, event.currentTarget.value)}
+            onchange={(event) => setConfig(option.id, event.currentTarget.value)}
           >
             {#each option.options as choice (choice.value)}<option value={choice.value}
                 >{choice.name}</option
@@ -589,8 +652,37 @@
               ></span
             >{/each}
         </div>{/if}
+      <div class="agent-picker-controls">
+        <OptionPicker
+          label="Model"
+          value={modelOption?.currentValue}
+          options={modelOption?.options ?? []}
+          open={pickerOpen === 'model'}
+          disabled={!ready || isBusy || !directory}
+          loading={!!creatingSession}
+          onopen={() => void openPicker('model')}
+          onclose={() => (pickerOpen = null)}
+          onchoose={(value) => {
+            if (modelOption) void setConfig(modelOption.id, value);
+          }}
+        />
+        <OptionPicker
+          label="Effort"
+          value={effortOption?.currentValue}
+          options={effortOption?.options ?? []}
+          open={pickerOpen === 'effort'}
+          disabled={!ready || isBusy || !directory}
+          loading={!!creatingSession}
+          onopen={() => void openPicker('effort')}
+          onclose={() => (pickerOpen = null)}
+          onchoose={(value) => {
+            if (effortOption) void setConfig(effortOption.id, value);
+          }}
+        />
+      </div>
       <div class="agent-actions composer-bottom">
-        <span>Enter to send · Shift+Enter for newline</span><Button
+        <span>Enter to send · Shift+Enter for newline</span>
+        <Button
           onclick={() => void send()}
           disabled={!ready || isBusy || !draft.trim()}
           loading={isBusy}>Send ↗</Button
@@ -631,6 +723,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .agent-picker-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .agent-header .agent-config {
     display: flex;
@@ -705,10 +802,6 @@
     align-items: center;
     justify-content: space-between;
     margin-top: 8px;
-  }
-  .agent-actions span {
-    opacity: 0.6;
-    font-size: 0.8rem;
   }
   .agent-error {
     color: var(--danger, #d66);

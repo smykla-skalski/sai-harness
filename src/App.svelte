@@ -20,6 +20,7 @@
   import ProjectSidebar from './ProjectSidebar.svelte';
   import type { PullRequestCheck } from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
+  import OptionPicker from './OptionPicker.svelte';
   import PaneTree from './PaneTree.svelte';
   import InboxPanel from './InboxPanel.svelte';
   import {
@@ -221,6 +222,8 @@
   let planReady = $state(false);
   let selectedAgentID = $state('');
   let selectedModelKey = $state('');
+  let selectedVariant = $state('');
+  let modelPickerOpen = $state<'model' | 'effort' | null>(null);
   let newSessionMode = $state<'work' | null>(null);
   let attachedFiles = $state<string[]>([]);
   let pickedAttachments = $state<Record<string, BrowserAttachment>>({});
@@ -614,6 +617,15 @@
   }
 
   let chosenModel = $derived(setup?.models.find((model) => modelKey(model) === selectedModelKey));
+  let modelChoices = $derived(
+    (setup?.models ?? []).map((model) => ({
+      value: modelKey(model),
+      name: `${model.providerID} / ${model.name}`,
+    })),
+  );
+  let effortChoices = $derived(
+    (chosenModel?.variants ?? []).map((variant) => ({ value: variant.id, name: variant.id })),
+  );
   let showPlanPanel = $derived(!!snapshot.plan || !!snapshot.questions);
   let activeSideTab = $derived(
     showPlanPanel && sideTab === 'plan' ? 'plan' : sideTab === 'history' ? 'history' : 'changes',
@@ -2678,7 +2690,10 @@
 
   function syncSessionChoice(session: SessionInfo) {
     if (session.agent) selectedAgentID = session.agent;
-    if (session.model) selectedModelKey = modelKey(session.model);
+    if (session.model) {
+      selectedModelKey = modelKey(session.model);
+      selectedVariant = session.model.variant ?? '';
+    }
   }
 
   function newWork() {
@@ -2695,6 +2710,7 @@
     selectedAgentID =
       setup?.agents.find((agent) => agent.id !== 'architect')?.id ?? selectedAgentID;
     if (setup?.defaultModel) selectedModelKey = modelKey(setup.defaultModel);
+    selectedVariant = setup?.defaultModel?.variant ?? '';
     resetTimeline();
     snapshot = { plan: null, questions: null };
     diffs = [];
@@ -2769,7 +2785,9 @@
   async function chooseModel(key: string) {
     if (switching) return;
     const previous = selectedModelKey;
+    const previousVariant = selectedVariant;
     selectedModelKey = key;
+    selectedVariant = '';
     if (!client || !sessionID) return;
     const model = setup?.models.find((item) => modelKey(item) === key);
     if (!model) return;
@@ -2787,7 +2805,36 @@
       }
       await refreshSessions();
     } catch (cause) {
-      if (current === sessionID) selectedModelKey = previous;
+      if (current === sessionID) {
+        selectedModelKey = previous;
+        selectedVariant = previousVariant;
+      }
+      error = describe(cause);
+    } finally {
+      switching = false;
+    }
+  }
+
+  async function chooseEffort(variant: string) {
+    if (switching || !chosenModel) return;
+    const previous = selectedVariant;
+    selectedVariant = variant;
+    if (!client || !sessionID) return;
+    const current = sessionID;
+    switching = true;
+    try {
+      await client.session.switchModel({
+        sessionID: current,
+        model: { id: chosenModel.id, providerID: chosenModel.providerID, variant },
+      });
+      const info = await client.session.get({ sessionID: current });
+      if (current === sessionID) {
+        selectedSession = info;
+        syncSessionChoice(info);
+      }
+      await refreshSessions();
+    } catch (cause) {
+      if (current === sessionID) selectedVariant = previous;
       error = describe(cause);
     } finally {
       switching = false;
@@ -3311,6 +3358,12 @@
   }
 
   async function send() {
+    const command = draft.trim().toLowerCase();
+    if (command === '/model' || command === '/effort') {
+      draft = '';
+      modelPickerOpen = command.slice(1) as 'model' | 'effort';
+      return;
+    }
     if (!client || !canSend) return;
     let current = selection;
     const path = directory;
@@ -3330,7 +3383,11 @@
         const session = await client.session.create({
           agent: selectedAgentID || undefined,
           model: chosenModel
-            ? { id: chosenModel.id, providerID: chosenModel.providerID }
+            ? {
+                id: chosenModel.id,
+                providerID: chosenModel.providerID,
+                variant: selectedVariant || undefined,
+              }
             : undefined,
           location: { directory: path },
           metadata: { saiHarness: true },
@@ -4049,17 +4106,26 @@
                           >{/each}
                       </select></label
                     >
-                    <label
-                      >Model<select
-                        value={selectedModelKey}
-                        disabled={running || sending || switching || !workReady}
-                        onchange={(event) => void chooseModel(event.currentTarget.value)}
-                      >
-                        {#each setup?.models ?? [] as model (modelKey(model))}<option
-                            value={modelKey(model)}>{model.providerID} / {model.name}</option
-                          >{/each}
-                      </select></label
-                    >
+                    <OptionPicker
+                      label="Model"
+                      value={selectedModelKey}
+                      options={modelChoices}
+                      open={modelPickerOpen === 'model'}
+                      disabled={running || sending || switching || !workReady}
+                      onopen={() => (modelPickerOpen = 'model')}
+                      onclose={() => (modelPickerOpen = null)}
+                      onchoose={(value) => void chooseModel(value)}
+                    />
+                    <OptionPicker
+                      label="Effort"
+                      value={selectedVariant}
+                      options={effortChoices}
+                      open={modelPickerOpen === 'effort'}
+                      disabled={running || sending || switching || !workReady}
+                      onopen={() => (modelPickerOpen = 'effort')}
+                      onclose={() => (modelPickerOpen = null)}
+                      onchoose={(value) => void chooseEffort(value)}
+                    />
                   </div>
                   {#if attachedFiles.length}<div class="attachments">
                       {#each attachedFiles as path (path)}<span
