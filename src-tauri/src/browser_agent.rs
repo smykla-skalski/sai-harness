@@ -1078,7 +1078,14 @@ pub fn browser_pane_register(
     manager.pane(&directory, &pane_id, open)
 }
 
+const SAIL_SKILL: &str = include_str!("../../skills/sail/SKILL.md");
+
 const TOOLS: &[(&str, &str, &str)] = &[
+    (
+        "sail_skill",
+        "Read the Sail skill for using this session's worktree, agent, terminal, thread, and embedded browser tools.",
+        "",
+    ),
     (
         "worktree_list",
         "List this project's main checkout and known worktrees with their live state and known agent threads.",
@@ -1199,11 +1206,7 @@ pub fn run_mcp_stdio() {
         };
         let method = message.get("method").and_then(Value::as_str).unwrap_or("");
         let result = match method {
-            "initialize" => json!({
-                "protocolVersion":"2024-11-05",
-                "capabilities":{"tools":{}},
-                "serverInfo":{"name":"sail-browser","version":env!("CARGO_PKG_VERSION")}
-            }),
+            "initialize" => mcp_initialize(),
             "ping" => json!({}),
             "tools/list" => json!({"tools": TOOLS.iter().map(|(name, description, fields)| {
                 if *name == "agent_spawn" {
@@ -1259,7 +1262,19 @@ pub fn run_mcp_stdio() {
     }
 }
 
+fn mcp_initialize() -> Value {
+    json!({
+        "protocolVersion":"2024-11-05",
+        "capabilities":{"tools":{}},
+        "serverInfo":{"name":"sail-browser","version":env!("CARGO_PKG_VERSION")},
+        "instructions":SAIL_SKILL
+    })
+}
+
 fn call_bridge(params: &Value) -> Value {
+    if params.get("name").and_then(Value::as_str) == Some("sail_skill") {
+        return json!({"content":[{"type":"text","text":SAIL_SKILL}]});
+    }
     let port = match std::env::var("SAIL_BROWSER_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
@@ -1308,5 +1323,21 @@ mod picker_tests {
         manager.set_picker("browser-one", true).unwrap();
         manager.cancel_picker("browser-one");
         assert!(manager.take_picker("browser-one").is_err());
+    }
+}
+
+#[cfg(test)]
+mod skill_tests {
+    use super::{call_bridge, mcp_initialize, SAIL_SKILL, TOOLS};
+    use serde_json::json;
+
+    #[test]
+    fn skill_is_announced_and_readable_without_a_browser_bridge() {
+        assert_eq!(mcp_initialize()["instructions"], SAIL_SKILL);
+        assert!(TOOLS.iter().any(|(name, _, _)| *name == "sail_skill"));
+        assert_eq!(
+            call_bridge(&json!({"name":"sail_skill","arguments":{}}))["content"][0]["text"],
+            SAIL_SKILL
+        );
     }
 }
