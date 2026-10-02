@@ -319,6 +319,7 @@
       {#key `${directory}:${pane.id}`}
         <BrowserPane
           {pane}
+          {directory}
           onstate={(tabs, activeTab) => onbrowserstate(pane.id, tabs, activeTab)}
           onfocus={() => onfocus(pane.id)}
           {onshortcut}

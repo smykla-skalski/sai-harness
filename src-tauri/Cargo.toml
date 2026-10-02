@@ -26,4 +26,21 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 notify-rust = "4.18.1"
 portable-pty = "0.9.0"
 shell-words = "1.1.1"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
 nix = { version = "0.31", features = ["signal"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKSnapshotConfiguration", "block2"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0.2"
+cairo-rs = { version = "0.18", features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39.1"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }

@@ -119,6 +119,13 @@
   );
   let savedCommands = $state<SavedCommand[]>(loadSavedCommands(getSetting('sai-saved-commands')));
   let pendingCommands = $state<Record<string, string>>({});
+  let browserAccessDisabled = $state(
+    getSetting(`sai-browser-disabled:${savedDirectory}`) === 'true',
+  );
+  const openCodeBrowserServers = new SvelteSet<string>();
+  type BrowserMcpConfig = { command: string; args: string[]; env: Record<string, string> };
+  type BrowserAccessRequest = { id: string; sessionId: string; directory: string; origin?: string };
+  let browserApprovalQueue: Promise<unknown> = Promise.resolve();
   type WorktreeConfig = { setup: string; run: string; archive: string; copy: string[] };
   let selectedWorktreeConfig = $state<WorktreeConfig | null>(null);
   let configGeneration = 0;
@@ -682,6 +689,7 @@
 
   onMount(() => {
     let unlistenAgentEvents: (() => void) | undefined;
+    let unlistenBrowserAccess: (() => void) | undefined;
     let unlistenAgentTerminals: (() => void) | undefined;
     let unlistenNotificationClick: (() => void) | undefined;
     setTheme(dark);
@@ -690,6 +698,30 @@
     let stopCloseRequest: (() => void) | undefined;
     let stopPaneClose: (() => void) | undefined;
     if (isTauri()) {
+      void listen<BrowserAccessRequest>('browser:access-request', ({ payload }) => {
+        const previousApproval = browserApprovalQueue;
+        browserApprovalQueue = (async () => {
+          try {
+            await previousApproval;
+          } catch {
+            error = 'A previous browser approval could not be completed.';
+          }
+          let allow = false;
+          try {
+            allow = await ask(
+              payload.origin
+                ? `Allow agent thread ${payload.sessionId} to use ${payload.origin} in the browser pane?`
+                : `Allow agent thread ${payload.sessionId} to control the browser pane in ${payload.directory}?`,
+              { title: 'Agent browser access', kind: 'warning' },
+            );
+          } catch (cause) {
+            error = describe(cause);
+          } finally {
+            await invoke('browser_access_reply', { id: payload.id, allow });
+          }
+          return allow;
+        })();
+      }).then((unlisten) => (unlistenBrowserAccess = unlisten));
       void listen('pane:close', () => {
         if (!document.querySelector('dialog[open]')) closeCurrentPane();
       }).then((unlisten) => (stopPaneClose = unlisten));
@@ -788,6 +820,7 @@
       clearInterval(healthTimer);
       clearInterval(diffPollTimer);
       unlistenAgentEvents?.();
+      unlistenBrowserAccess?.();
       unlistenAgentTerminals?.();
       unlistenNotificationClick?.();
       cancelAnimationFrame(followFrame);
@@ -804,6 +837,32 @@
     await recoverRuntime();
   }
 
+  async function ensureOpenCodeBrowser(path: string) {
+    if (!client || openCodeBrowserServers.has(path)) return;
+    const config = await invoke<BrowserMcpConfig>('browser_mcp_config', { directory: path });
+    await client.mcp.add({
+      server: 'sail-browser',
+      location: { directory: path },
+      config: {
+        type: 'local',
+        command: [config.command, ...config.args],
+        environment: config.env,
+        codemode: false,
+      },
+    });
+    openCodeBrowserServers.add(path);
+  }
+
+  function toggleAgentBrowserAccess() {
+    if (!directory) return;
+    browserAccessDisabled = !browserAccessDisabled;
+    setSetting(`sai-browser-disabled:${directory}`, String(browserAccessDisabled));
+    void invoke('browser_project_access', {
+      directory,
+      enabled: !browserAccessDisabled,
+    }).catch((cause) => (error = describe(cause)));
+  }
+
   async function activateRuntime(info: RuntimeInfo) {
     const nextClient = connect(info);
     const server = await nextClient.server.info({ signal: AbortSignal.timeout(5000) });
@@ -813,10 +872,13 @@
     clearTimeout(recoveryTimer);
     eventController?.abort();
     client = nextClient;
+    openCodeBrowserServers.clear();
     activeBinary = info.binaryPath;
     runtimeState = 'connected';
     runtimeError = '';
     hasConnected = true;
+    if (directory)
+      await ensureOpenCodeBrowser(directory).catch((cause) => (error = describe(cause)));
     await resync().catch((cause) => {
       error = describe(cause);
     });
@@ -1293,6 +1355,7 @@
     error = '';
     const current = ++selection;
     directory = path;
+    browserAccessDisabled = getSetting(`sai-browser-disabled:${path}`) === 'true';
     focusedPane = leaves(paneLayouts[path] ?? mainPane())[0]?.id ?? 'main';
     setSetting('sai-directory', path);
     lastSetupProbe = 0;
@@ -1343,6 +1406,7 @@
     historyError = '';
     ++historyRefresh;
     historyLoading = false;
+    if (client) await ensureOpenCodeBrowser(path).catch((cause) => (error = describe(cause)));
     if (!client || !(await refreshSetup(path)) || current !== selection) return;
     draft = viewStates.get(viewKey())?.draft ?? '';
     if (acpAgent) return;
@@ -3534,6 +3598,14 @@
         >
       </div>
       <div class="topbar-actions">
+        {#if directory}<Button
+            variant="ghost"
+            size="sm"
+            aria-pressed={!browserAccessDisabled}
+            onclick={toggleAgentBrowserAccess}
+            title="Toggle agent browser access for this project"
+            >Agent browser {browserAccessDisabled ? 'off' : 'on'}</Button
+          >{/if}
         {#if selectedWorktreeConfig?.run}<Button
             variant="ghost"
             size="sm"

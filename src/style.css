@@ -938,10 +938,14 @@ button:disabled {
   min-height: 0;
 }
 .browser-loading,
+.browser-agent-action,
 .browser-error,
 .browser-empty {
   padding: 12px;
   font-size: 13px;
+}
+.browser-agent-action {
+  color: var(--sui-muted);
 }
 .browser-error {
   color: var(--sui-danger);

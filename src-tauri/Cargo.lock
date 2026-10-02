@@ -3127,8 +3127,15 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 name = "sail"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "block2",
+ "cairo-rs",
  "nix 0.31.3",
  "notify-rust",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "portable-pty",
  "reqwest",
  "serde",
@@ -3139,6 +3146,10 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-wdio",
  "tauri-plugin-wdio-webdriver",
+ "uuid",
+ "webkit2gtk",
+ "webview2-com 0.39.1",
+ "windows 0.62.2",
 ]
 
 [[package]]

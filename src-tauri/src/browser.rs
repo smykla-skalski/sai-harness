@@ -1,6 +1,7 @@
+use crate::browser_agent::BrowserManager;
 use serde::{Deserialize, Serialize};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
-use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, Window};
+use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, Window};
 
 #[derive(Clone, Copy, Deserialize)]
 pub struct BrowserBounds {
@@ -148,22 +149,33 @@ fn parse_url(value: &str) -> Result<tauri::Url, String> {
 #[tauri::command]
 pub async fn browser_open(
     window: Window,
+    manager: State<'_, BrowserManager>,
     label: String,
+    directory: String,
+    pane_id: String,
     url: String,
     bounds: BrowserBounds,
 ) -> Result<(), String> {
     validate_label(&label)?;
     let url = parse_url(&url)?;
     let bounds = bounds.validate()?.in_window(&window)?;
+    let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let navigation_window = window.clone();
         let load_window = window.clone();
         let navigation_label = label.clone();
         let load_label = label.clone();
+        let registration_label = label.clone();
+        let load_manager = manager.clone();
+        let navigation_manager = manager.clone();
+        let navigation_pane_id = pane_id.clone();
         let builder = WebviewBuilder::new(label, WebviewUrl::External(url))
             .initialization_script(SHORTCUT_SCRIPT)
             .on_navigation(move |url| {
                 if !["http", "https"].contains(&url.scheme()) {
+                    return false;
+                }
+                if !navigation_manager.allow_navigation(&navigation_pane_id, url) {
                     return false;
                 }
                 let _ = navigation_window.emit_to(
@@ -178,6 +190,7 @@ pub async fn browser_open(
             })
             .on_page_load(move |_, payload| {
                 if payload.event() == PageLoadEvent::Finished {
+                    load_manager.loaded(&load_label, payload.url().as_str());
                     let _ = load_window.emit_to(
                         "main",
                         "browser:loaded",
@@ -190,13 +203,16 @@ pub async fn browser_open(
             });
         #[cfg(target_os = "linux")]
         let builder = builder.initialization_script(CLOSE_SCRIPT);
-        window
-            .add_child(
-                builder,
-                LogicalPosition::new(bounds.x, bounds.y),
-                LogicalSize::new(bounds.width, bounds.height),
-            )
-            .map_err(|error| error.to_string())?;
+        manager.register(&directory, &pane_id, &registration_label)?;
+        let result = window.add_child(
+            builder,
+            LogicalPosition::new(bounds.x, bounds.y),
+            LogicalSize::new(bounds.width, bounds.height),
+        );
+        if let Err(error) = result {
+            manager.unregister(&registration_label);
+            return Err(error.to_string());
+        }
         Ok(())
     })
     .await
@@ -218,7 +234,13 @@ pub fn browser_bounds(window: Window, label: String, bounds: BrowserBounds) -> R
 }
 
 #[tauri::command]
-pub fn browser_navigate(window: Window, label: String, url: String) -> Result<(), String> {
+pub fn browser_navigate(
+    window: Window,
+    manager: State<'_, BrowserManager>,
+    label: String,
+    url: String,
+) -> Result<(), String> {
+    manager.clear_guard(&label);
     window
         .get_webview(validate_label(&label)?)
         .ok_or("Browser tab is closed")?
@@ -227,7 +249,12 @@ pub fn browser_navigate(window: Window, label: String, url: String) -> Result<()
 }
 
 #[tauri::command]
-pub fn browser_reload(window: Window, label: String) -> Result<(), String> {
+pub fn browser_reload(
+    window: Window,
+    manager: State<'_, BrowserManager>,
+    label: String,
+) -> Result<(), String> {
+    manager.clear_guard(&label);
     window
         .get_webview(validate_label(&label)?)
         .ok_or("Browser tab is closed")?
@@ -258,10 +285,22 @@ pub fn browser_devtools(window: Window, label: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn browser_close(window: Window, label: String) -> Result<(), String> {
+pub fn browser_close(
+    window: Window,
+    manager: State<'_, BrowserManager>,
+    label: String,
+) -> Result<(), String> {
+    manager.unregister(&label);
     if let Some(webview) = window.get_webview(validate_label(&label)?) {
         webview.close().map_err(|error| error.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_focus(manager: State<'_, BrowserManager>, label: String) -> Result<(), String> {
+    validate_label(&label)?;
+    manager.focus(&label);
     Ok(())
 }
 

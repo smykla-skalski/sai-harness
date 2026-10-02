@@ -12,11 +12,13 @@
 
   let {
     pane,
+    directory,
     onstate,
     onfocus,
     onshortcut,
   }: {
     pane: BrowserLeaf;
+    directory: string;
     onstate: (tabs: BrowserTab[], activeTab: string) => void;
     onfocus: () => void;
     onshortcut: (event: KeyboardEvent) => void;
@@ -26,6 +28,8 @@
   let address = $state('');
   let error = $state('');
   let loading = $state(false);
+  let agentAction = $state('');
+  let agentActionTimer: ReturnType<typeof setTimeout> | null = null;
   let liveLabel = $state<string | null>(null);
   let ready = $state(false);
   let mountedTab = '';
@@ -100,6 +104,12 @@
     timeout = null;
   }
 
+  function showAgentAction(action: string) {
+    if (agentActionTimer) clearTimeout(agentActionTimer);
+    agentAction = `Agent: ${action.replaceAll('_', ' ')}`;
+    agentActionTimer = setTimeout(() => (agentAction = ''), 3000);
+  }
+
   function beginLoading(url: string) {
     const label = liveLabel;
     if (!label) return;
@@ -143,7 +153,7 @@
     error = '';
     expectedUrl = url;
     try {
-      await invoke('browser_open', { label, url, bounds: bounds() });
+      await invoke('browser_open', { label, directory, paneId: pane.id, url, bounds: bounds() });
       if (!mounted || currentGeneration !== generation) {
         await invoke('browser_close', { label });
         return;
@@ -264,6 +274,15 @@
       attributeFilter: ['open'],
     });
     const unlisten = Promise.all([
+      listen<{ paneId: string; url: string }>('browser:agent-navigate', ({ payload }) => {
+        if (payload.paneId === pane.id) {
+          showAgentAction('navigate');
+          void navigate(payload.url);
+        }
+      }),
+      listen<{ label: string; action: string }>('browser:agent-action', ({ payload }) => {
+        if (payload.label === liveLabel) showAgentAction(payload.action);
+      }),
       listen<BrowserEvent>('browser:navigate', ({ payload }) => {
         if (payload.label !== liveLabel) return;
         beginLoading(payload.url);
@@ -286,6 +305,7 @@
       listen<BrowserShortcut>('browser:shortcut', ({ payload }) => {
         if (payload.label !== liveLabel) return;
         onfocus();
+        void invoke('browser_focus', { label: payload.label });
         if (payload.action === 'focus') return;
         const direction = payload.action.startsWith('arrow');
         const key = direction
@@ -294,15 +314,26 @@
         onshortcut(new KeyboardEvent('keydown', { key, metaKey: true, altKey: direction }));
       }),
     ]);
-    void unlisten.then(() => mountCurrent());
+    void unlisten.then(async () => {
+      if (!mounted) return false;
+      await invoke('browser_pane_register', { directory, paneId: pane.id, open: true });
+      if (mounted) await mountCurrent();
+      else await invoke('browser_pane_register', { directory, paneId: pane.id, open: false });
+      return true;
+    });
     window.addEventListener('resize', resize);
     return () => {
       mounted = false;
+      if (agentActionTimer) clearTimeout(agentActionTimer);
       ++generation;
       observer.disconnect();
       overlayObserver.disconnect();
       window.removeEventListener('resize', resize);
-      void unlisten.then((listeners) => listeners.forEach((stop) => stop()));
+      void unlisten.then(async (listeners) => {
+        listeners.forEach((stop) => stop());
+        await invoke('browser_pane_register', { directory, paneId: pane.id, open: false });
+        return true;
+      });
       void closeLive();
     };
   });
@@ -373,6 +404,7 @@
     >
   </form>
   {#if loading}<p class="browser-loading" role="status">Loading…</p>{/if}
+  {#if agentAction}<p class="browser-agent-action" role="status">{agentAction}</p>{/if}
   {#if error}<div class="browser-error" role="alert">
       <p>{error}</p>
       <button onclick={() => void mountCurrent()}>Retry</button>

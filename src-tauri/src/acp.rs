@@ -645,6 +645,7 @@ pub fn acp_pending_permissions(
 #[tauri::command]
 pub async fn acp_new_session(
     manager: State<'_, AgentManager>,
+    browser: State<'_, crate::browser_agent::BrowserManager>,
     agent: String,
     cwd: String,
 ) -> Result<Value, String> {
@@ -652,7 +653,11 @@ pub async fn acp_new_session(
         return Err("Repository directory does not exist.".into());
     }
     let runtime = connection(&manager, &agent)?;
+    let browser = browser.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let config = browser.config(&cwd, None)?;
+        let mcp_server = json!({"name":"sail-browser","command":config.command,"args":config.args,
+            "env":config.env.iter().map(|(name,value)| json!({"name":name,"value":value})).collect::<Vec<_>>()});
         let _serial = runtime
             .session_creation
             .lock()
@@ -663,7 +668,7 @@ pub async fn acp_new_session(
             .map_err(|error| error.to_string())? = Some(PathBuf::from(&cwd));
         let result = runtime.request(
             "session/new",
-            json!({"cwd":cwd,"mcpServers":[]}),
+            json!({"cwd":cwd,"mcpServers":[mcp_server]}),
             Duration::from_secs(60),
         );
         *runtime
@@ -672,6 +677,7 @@ pub async fn acp_new_session(
             .map_err(|error| error.to_string())? = None;
         let result = result?;
         if let Some(id) = result.get("sessionId").and_then(Value::as_str) {
+            browser.identify(&config.token, id);
             runtime
                 .session_directories
                 .lock()
@@ -687,12 +693,17 @@ pub async fn acp_new_session(
 #[tauri::command]
 pub async fn acp_load_session(
     manager: State<'_, AgentManager>,
+    browser: State<'_, crate::browser_agent::BrowserManager>,
     agent: String,
     cwd: String,
     session_id: String,
 ) -> Result<Value, String> {
     let runtime = connection(&manager, &agent)?;
+    let browser = browser.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let config = browser.config(&cwd, Some(&session_id))?;
+        let mcp_server = json!({"name":"sail-browser","command":config.command,"args":config.args,
+            "env":config.env.iter().map(|(name,value)| json!({"name":name,"value":value})).collect::<Vec<_>>()});
         runtime
             .session_directories
             .lock()
@@ -700,7 +711,7 @@ pub async fn acp_load_session(
             .insert(session_id.clone(), PathBuf::from(&cwd));
         let result = runtime.request(
             "session/load",
-            json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[]}),
+            json!({"cwd":cwd,"sessionId":session_id,"mcpServers":[mcp_server]}),
             Duration::from_secs(60),
         );
         if result.is_err() {

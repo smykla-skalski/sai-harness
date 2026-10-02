@@ -1,0 +1,966 @@
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, State};
+use uuid::Uuid;
+
+#[derive(Clone)]
+struct Page {
+    directory: PathBuf,
+    pane_id: String,
+    label: String,
+    loaded_url: Option<String>,
+}
+
+#[derive(Clone)]
+struct PaneRef {
+    directory: PathBuf,
+    id: String,
+}
+
+struct Client {
+    directory: PathBuf,
+    session: Option<String>,
+}
+
+#[derive(Default)]
+struct Inner {
+    port: Mutex<u16>,
+    pages: Mutex<Vec<Page>>,
+    page_ready: Condvar,
+    panes: Mutex<Vec<PaneRef>>,
+    clients: Mutex<HashMap<String, Client>>,
+    targets: Mutex<HashMap<String, String>>,
+    guards: Mutex<HashMap<String, String>>,
+    blocked: Mutex<HashMap<String, String>>,
+    grants: Mutex<HashSet<String>>,
+    origins: Mutex<HashSet<(String, String)>>,
+    pending: Mutex<HashMap<String, mpsc::Sender<bool>>>,
+    policies: Mutex<HashMap<PathBuf, bool>>,
+}
+
+#[derive(Clone, Default)]
+pub struct BrowserManager(Arc<Inner>);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessRequest {
+    id: String,
+    session_id: String,
+    directory: String,
+    origin: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NavigateRequest {
+    pane_id: String,
+    url: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ActionEvent {
+    label: String,
+    action: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolRequest {
+    token: String,
+    session_id: Option<String>,
+    name: String,
+    arguments: Value,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub token: String,
+}
+
+impl BrowserManager {
+    pub fn config(&self, directory: &str, session: Option<&str>) -> Result<McpConfig, String> {
+        let directory = PathBuf::from(directory)
+            .canonicalize()
+            .map_err(|error| format!("Cannot find browser project: {error}"))?;
+        let token = Uuid::new_v4().to_string();
+        self.0
+            .clients
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(
+                token.clone(),
+                Client {
+                    directory,
+                    session: session.map(str::to_string),
+                },
+            );
+        let port = *self.0.port.lock().map_err(|error| error.to_string())?;
+        if port == 0 {
+            return Err("Browser tool bridge is unavailable.".into());
+        }
+        Ok(McpConfig {
+            command: std::env::current_exe()
+                .map_err(|error| error.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+            args: vec!["--browser-mcp".into()],
+            env: HashMap::from([
+                ("SAIL_BROWSER_PORT".into(), port.to_string()),
+                ("SAIL_BROWSER_TOKEN".into(), token.clone()),
+            ]),
+            token,
+        })
+    }
+
+    pub fn identify(&self, token: &str, session: &str) {
+        if let Ok(mut clients) = self.0.clients.lock() {
+            if let Some(client) = clients.get_mut(token) {
+                client.session = Some(session.to_string());
+            }
+        }
+    }
+
+    pub fn register(&self, directory: &str, pane_id: &str, label: &str) -> Result<(), String> {
+        let directory = PathBuf::from(directory)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let mut pages = self.0.pages.lock().map_err(|error| error.to_string())?;
+        pages.retain(|page| page.label != label);
+        pages.push(Page {
+            directory,
+            pane_id: pane_id.to_string(),
+            label: label.to_string(),
+            loaded_url: None,
+        });
+        self.0.page_ready.notify_all();
+        Ok(())
+    }
+
+    pub fn loaded(&self, label: &str, url: &str) {
+        if let Ok(mut pages) = self.0.pages.lock() {
+            if let Some(page) = pages.iter_mut().find(|page| page.label == label) {
+                page.loaded_url = Some(url.to_string());
+                self.0.page_ready.notify_all();
+            }
+        }
+    }
+
+    pub fn allow_navigation(&self, pane_id: &str, url: &tauri::Url) -> bool {
+        let allowed = match self.0.guards.lock() {
+            Ok(guards) => guards.get(pane_id).cloned(),
+            Err(_) => return false,
+        };
+        let Some(allowed) = allowed else {
+            return true;
+        };
+        if url.origin().ascii_serialization() == allowed {
+            return true;
+        }
+        if let Ok(mut blocked) = self.0.blocked.lock() {
+            blocked.insert(pane_id.to_string(), url.to_string());
+        }
+        false
+    }
+
+    fn blocked_navigation(&self, pane_id: &str) -> Result<(), String> {
+        if let Some(url) = self
+            .0
+            .blocked
+            .lock()
+            .map_err(|error| error.to_string())?
+            .remove(pane_id)
+        {
+            return Err(format!(
+                "External navigation to {url} needs approval. Use the navigate tool with that URL."
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn clear_guard(&self, label: &str) {
+        if let Ok(pages) = self.0.pages.lock() {
+            if let Some(page) = pages.iter().find(|page| page.label == label) {
+                if let Ok(mut guards) = self.0.guards.lock() {
+                    guards.remove(&page.pane_id);
+                }
+                if let Ok(mut blocked) = self.0.blocked.lock() {
+                    blocked.remove(&page.pane_id);
+                }
+            }
+        }
+    }
+
+    fn guard(&self, pane_id: &str, origin: String) -> Result<(), String> {
+        self.0
+            .blocked
+            .lock()
+            .map_err(|error| error.to_string())?
+            .remove(pane_id);
+        self.0
+            .guards
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(pane_id.to_string(), origin);
+        Ok(())
+    }
+
+    fn loading(&self, label: &str) {
+        if let Ok(mut pages) = self.0.pages.lock() {
+            if let Some(page) = pages.iter_mut().find(|page| page.label == label) {
+                page.loaded_url = None;
+            }
+        }
+    }
+
+    fn wait_loaded(&self, pane_id: &str) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut pages = self.0.pages.lock().map_err(|error| error.to_string())?;
+        loop {
+            if pages
+                .iter()
+                .rev()
+                .find(|page| page.pane_id == pane_id)
+                .is_some_and(|page| page.loaded_url.is_some())
+            {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("Browser page did not finish loading. Check the browser pane.".into());
+            }
+            let (next, _) = self
+                .0
+                .page_ready
+                .wait_timeout(pages, remaining)
+                .map_err(|error| error.to_string())?;
+            pages = next;
+        }
+    }
+
+    pub fn unregister(&self, label: &str) {
+        if let Ok(mut pages) = self.0.pages.lock() {
+            let pane_id = pages
+                .iter()
+                .find(|page| page.label == label)
+                .map(|page| page.pane_id.clone());
+            pages.retain(|page| page.label != label);
+            if let Some(pane_id) = pane_id {
+                if let Ok(mut guards) = self.0.guards.lock() {
+                    guards.remove(&pane_id);
+                }
+                if let Ok(mut blocked) = self.0.blocked.lock() {
+                    blocked.remove(&pane_id);
+                }
+            }
+            self.0.page_ready.notify_all();
+        }
+    }
+
+    pub fn pane(&self, directory: &str, id: &str, open: bool) -> Result<(), String> {
+        let directory = PathBuf::from(directory)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let mut panes = self.0.panes.lock().map_err(|error| error.to_string())?;
+        panes.retain(|pane| pane.directory != directory || pane.id != id);
+        if open {
+            panes.push(PaneRef {
+                directory,
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn focus(&self, label: &str) {
+        if let Ok(mut pages) = self.0.pages.lock() {
+            if let Some(index) = pages.iter().position(|page| page.label == label) {
+                let page = pages.remove(index);
+                pages.push(page);
+            }
+        }
+    }
+
+    fn ask(
+        &self,
+        app: &AppHandle,
+        session: &str,
+        directory: &Path,
+        origin: Option<&str>,
+    ) -> Result<(), String> {
+        let id = Uuid::new_v4().to_string();
+        let (sender, receiver) = mpsc::channel();
+        self.0
+            .pending
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(id.clone(), sender);
+        let event = AccessRequest {
+            id: id.clone(),
+            session_id: session.to_string(),
+            directory: directory.to_string_lossy().into_owned(),
+            origin: origin.map(str::to_string),
+        };
+        if let Err(error) = app.emit_to("main", "browser:access-request", event) {
+            self.0
+                .pending
+                .lock()
+                .ok()
+                .and_then(|mut map| map.remove(&id));
+            return Err(error.to_string());
+        }
+        let granted = receiver
+            .recv_timeout(Duration::from_secs(120))
+            .unwrap_or(false);
+        self.0
+            .pending
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(&id));
+        if granted {
+            Ok(())
+        } else {
+            Err("Browser access was denied or timed out.".into())
+        }
+    }
+
+    fn authorize(
+        &self,
+        app: &AppHandle,
+        session: &str,
+        directory: &Path,
+        origin: Option<&str>,
+    ) -> Result<(), String> {
+        let policy = self
+            .0
+            .policies
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get(directory)
+            .copied();
+        if policy == Some(false)
+            || (policy.is_none()
+                && crate::settings::load_settings(app.clone())?
+                    .get(&format!("sai-browser-disabled:{}", directory.display()))
+                    .is_some_and(|value| value == "true"))
+        {
+            return Err("Agent browser access is disabled for this project.".into());
+        }
+        let key = format!("{}:{session}", directory.display());
+        if !self
+            .0
+            .grants
+            .lock()
+            .map_err(|error| error.to_string())?
+            .contains(&key)
+        {
+            self.ask(app, session, directory, None)?;
+            self.0
+                .grants
+                .lock()
+                .map_err(|error| error.to_string())?
+                .insert(key.clone());
+        }
+        if let Some(origin) = origin {
+            let origin_key = (key, origin.to_string());
+            if !self
+                .0
+                .origins
+                .lock()
+                .map_err(|error| error.to_string())?
+                .contains(&origin_key)
+            {
+                self.ask(app, session, directory, Some(origin))?;
+                self.0
+                    .origins
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .insert(origin_key);
+            }
+        }
+        if self
+            .0
+            .policies
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get(directory)
+            == Some(&false)
+        {
+            return Err("Agent browser access is disabled for this project.".into());
+        }
+        Ok(())
+    }
+
+    fn perform(&self, app: &AppHandle, request: ToolRequest) -> Result<Value, String> {
+        let clients = self.0.clients.lock().map_err(|error| error.to_string())?;
+        let client = clients
+            .get(&request.token)
+            .ok_or("Unknown browser tool connection.")?;
+        let directory = client.directory.clone();
+        let session = request
+            .session_id
+            .as_deref()
+            .or(client.session.as_deref())
+            .unwrap_or(&request.token)
+            .to_string();
+        drop(clients);
+        let target_key = format!("{}:{session}", request.token);
+        let chosen_pane = self
+            .0
+            .targets
+            .lock()
+            .map_err(|error| error.to_string())?
+            .get(&target_key)
+            .cloned();
+        if request.name == "navigate" {
+            let target = required(&request.arguments, "url")?;
+            let url = tauri::Url::parse(target).map_err(|error| error.to_string())?;
+            if !["http", "https"].contains(&url.scheme()) {
+                return Err("Browser URL must use HTTP or HTTPS.".into());
+            }
+            let has_page = self
+                .0
+                .pages
+                .lock()
+                .map_err(|error| error.to_string())?
+                .iter()
+                .any(|page| page.directory == directory);
+            let has_pane = self
+                .0
+                .panes
+                .lock()
+                .map_err(|error| error.to_string())?
+                .iter()
+                .any(|pane| pane.directory == directory);
+            if !has_page && !has_pane {
+                return Err(
+                    "No browser pane is open in this worktree. Open a browser pane first.".into(),
+                );
+            }
+            let external = match url.host_str() {
+                Some("localhost" | "127.0.0.1" | "::1") => None,
+                _ => Some(url.origin().ascii_serialization()),
+            };
+            self.authorize(app, &session, &directory, external.as_deref())?;
+            let page = self
+                .0
+                .pages
+                .lock()
+                .map_err(|error| error.to_string())?
+                .iter()
+                .rev()
+                .find(|page| {
+                    page.directory == directory
+                        && chosen_pane.as_ref().is_none_or(|id| &page.pane_id == id)
+                })
+                .cloned();
+            let pane_id;
+            if let Some(page) = page {
+                pane_id = page.pane_id.clone();
+                let webview = app
+                    .get_webview(&page.label)
+                    .ok_or("Browser pane is closed.")?;
+                self.loading(&page.label);
+                self.guard(&pane_id, url.origin().ascii_serialization())?;
+                let _ = app.emit_to(
+                    "main",
+                    "browser:agent-action",
+                    ActionEvent {
+                        label: page.label,
+                        action: request.name.clone(),
+                    },
+                );
+                webview.navigate(url).map_err(|error| error.to_string())?;
+            } else {
+                let pane = self
+                    .0
+                    .panes
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .iter()
+                    .rev()
+                    .find(|pane| {
+                        pane.directory == directory
+                            && chosen_pane.as_ref().is_none_or(|id| &pane.id == id)
+                    })
+                    .cloned()
+                    .ok_or(
+                        "No browser pane is open in this worktree. Open a browser pane first.",
+                    )?;
+                pane_id = pane.id.clone();
+                self.guard(&pane_id, url.origin().ascii_serialization())?;
+                app.emit_to(
+                    "main",
+                    "browser:agent-navigate",
+                    NavigateRequest {
+                        pane_id: pane.id,
+                        url: target.to_string(),
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            self.0
+                .targets
+                .lock()
+                .map_err(|error| error.to_string())?
+                .insert(target_key, pane_id.clone());
+            self.wait_loaded(&pane_id)?;
+            return Ok(json!({"url":target}));
+        }
+        let page = self
+            .0
+            .pages
+            .lock()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .rev()
+            .find(|page| {
+                page.directory == directory
+                    && chosen_pane.as_ref().is_none_or(|id| &page.pane_id == id)
+            })
+            .cloned()
+            .ok_or("No browser pane is open in this worktree. Open a browser pane first.")?;
+        self.blocked_navigation(&page.pane_id)?;
+        self.0
+            .targets
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(target_key, page.pane_id.clone());
+        let webview = app
+            .get_webview(&page.label)
+            .ok_or("Browser pane is closed. Open a browser pane first.")?;
+        let target = webview
+            .url()
+            .map_err(|error| error.to_string())?
+            .to_string();
+        let url = tauri::Url::parse(&target).map_err(|error| error.to_string())?;
+        if !["http", "https"].contains(&url.scheme()) {
+            return Err("Browser URL must use HTTP or HTTPS.".into());
+        }
+        let external = match url.host_str() {
+            Some("localhost" | "127.0.0.1" | "::1") => None,
+            _ => Some(url.origin().ascii_serialization()),
+        };
+        self.authorize(app, &session, &directory, external.as_deref())?;
+        if request.name == "run_script" {
+            self.authorize(
+                app,
+                &session,
+                &directory,
+                Some("external sites through page actions"),
+            )?;
+        }
+        if matches!(request.name.as_str(), "click" | "type") {
+            self.guard(&page.pane_id, url.origin().ascii_serialization())?;
+        }
+        let _ = app.emit_to(
+            "main",
+            "browser:agent-action",
+            ActionEvent {
+                label: page.label.clone(),
+                action: request.name.clone(),
+            },
+        );
+        let result = match request.name.as_str() {
+            "read_page" => evaluate(&webview, "({title:document.title,url:location.href,text:document.body?.innerText.slice(0,50000)??''})"),
+            "click" => {
+                let selector = required(&request.arguments, "selector")?;
+                evaluate(&webview, &format!("(()=>{{const el=document.querySelector({});if(!el)throw Error('Element not found');el.scrollIntoView();el.click();return {{clicked:true,url:location.href}}}})()", json!(selector)))
+            }
+            "type" => {
+                let selector = required(&request.arguments, "selector")?;
+                let value = required(&request.arguments, "text")?;
+                evaluate(&webview, &format!("(()=>{{const el=document.querySelector({});if(!el)throw Error('Element not found');el.focus();if('value' in el){{const setter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),'value')?.set;setter?.call(el,{});el.dispatchEvent(new Event('input',{{bubbles:true}}));el.dispatchEvent(new Event('change',{{bubbles:true}}));}}else if(el.isContentEditable){{el.textContent={};el.dispatchEvent(new InputEvent('input',{{bubbles:true}}));}}else throw Error('Element is not editable');return {{typed:true}}}})()", json!(selector), json!(value), json!(value)))
+            }
+            "run_script" => {
+                let script = required(&request.arguments, "script")?;
+                evaluate(&webview, &format!("(()=>{{{script}}})()"))
+            }
+            "screenshot" => {
+                let png = screenshot(&webview)?;
+                if png.len() > 20 * 1024 * 1024 {
+                    return Err("Browser snapshot exceeds 20 MiB.".into());
+                }
+                Ok(json!({"content":[{"type":"image","data":base64::engine::general_purpose::STANDARD.encode(png),"mimeType":"image/png"}]}))
+            }
+            _ => Err("Unknown browser action.".into()),
+        };
+        self.blocked_navigation(&page.pane_id)?;
+        result
+    }
+}
+
+fn required<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{name} is required"))
+}
+
+fn evaluate(webview: &tauri::Webview, script: &str) -> Result<Value, String> {
+    let script = format!("(()=>{{try{{return {{ok:true,value:{script}}}}}catch(error){{return {{ok:false,error:String(error)}}}}}})()");
+    let (sender, receiver) = mpsc::sync_channel(1);
+    webview
+        .eval_with_callback(script, move |result| {
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    let result = receiver
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| "Browser script timed out.".to_string())?;
+    let result: Value = serde_json::from_str(&result).map_err(|error| error.to_string())?;
+    if result.get("ok") == Some(&Value::Bool(false)) {
+        return Err(result
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("Browser script failed.")
+            .to_string());
+    }
+    Ok(result.get("value").cloned().unwrap_or(Value::Null))
+}
+
+#[cfg(target_os = "macos")]
+fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
+    use objc2::runtime::AnyObject;
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSImage,
+    };
+    use objc2_foundation::NSDictionary;
+    use objc2_web_kit::WKWebView;
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    webview
+        .with_webview(move |platform| {
+            let block = block2::RcBlock::new(move |image: *mut NSImage, _error| {
+                let result = (|| -> Result<Vec<u8>, String> {
+                    let image = unsafe { image.as_ref() }.ok_or("Browser snapshot failed.")?;
+                    let tiff = image
+                        .TIFFRepresentation()
+                        .ok_or("Browser snapshot is empty.")?;
+                    let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)
+                        .ok_or("Cannot encode browser snapshot.")?;
+                    let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::new();
+                    let png = unsafe {
+                        bitmap.representationUsingType_properties(
+                            NSBitmapImageFileType::PNG,
+                            &properties,
+                        )
+                    }
+                    .ok_or("Cannot encode browser snapshot as PNG.")?;
+                    Ok(png.to_vec())
+                })();
+                let _ = sender.send(result);
+            });
+            let view = unsafe { &*(platform.inner() as *const WKWebView) };
+            unsafe { view.takeSnapshotWithConfiguration_completionHandler(None, &block) };
+        })
+        .map_err(|error| error.to_string())?;
+    receiver
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| "Browser snapshot timed out.".to_string())?
+}
+
+#[cfg(target_os = "linux")]
+fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
+    use webkit2gtk::prelude::*;
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    webview
+        .with_webview(move |platform| {
+            platform.inner().snapshot(
+                webkit2gtk::SnapshotRegion::Visible,
+                webkit2gtk::SnapshotOptions::NONE,
+                None::<&webkit2gtk::gio::Cancellable>,
+                move |result| {
+                    let result = result
+                        .map_err(|error| error.to_string())
+                        .and_then(|surface| {
+                            let mut png = Vec::new();
+                            surface
+                                .write_to_png(&mut png)
+                                .map_err(|error| error.to_string())?;
+                            Ok(png)
+                        });
+                    let _ = sender.send(result);
+                },
+            );
+        })
+        .map_err(|error| error.to_string())?;
+    receiver
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| "Browser snapshot timed out.".to_string())?
+}
+
+#[cfg(windows)]
+fn screenshot(webview: &tauri::Webview) -> Result<Vec<u8>, String> {
+    use webview2_com::{
+        CapturePreviewCompletedHandler,
+        Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+    };
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::Com::{
+        StructuredStorage::CreateStreamOnHGlobal, STREAM_SEEK_END, STREAM_SEEK_SET,
+    };
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    webview
+        .with_webview(move |platform| {
+            let result = (|| -> Result<(), String> {
+                let controller = platform.controller();
+                let core =
+                    unsafe { controller.CoreWebView2() }.map_err(|error| error.to_string())?;
+                let stream = unsafe { CreateStreamOnHGlobal(HGLOBAL(std::ptr::null_mut()), true) }
+                    .map_err(|error| error.to_string())?;
+                let capture = stream.clone();
+                let callback_sender = sender.clone();
+                let handler = CapturePreviewCompletedHandler::create(Box::new(move |status| {
+                    let result = (|| -> Result<Vec<u8>, String> {
+                        status.ok().map_err(|error| error.to_string())?;
+                        let mut length = 0u64;
+                        unsafe { capture.Seek(0, STREAM_SEEK_END, Some(&mut length)) }
+                            .map_err(|error| error.to_string())?;
+                        if length > 20 * 1024 * 1024 {
+                            return Err("Browser snapshot exceeds 20 MiB.".into());
+                        }
+                        unsafe { capture.Seek(0, STREAM_SEEK_SET, None) }
+                            .map_err(|error| error.to_string())?;
+                        let mut png = vec![0u8; length as usize];
+                        let mut read = 0u32;
+                        unsafe {
+                            capture.Read(png.as_mut_ptr().cast(), png.len() as u32, Some(&mut read))
+                        }
+                        .ok()
+                        .map_err(|error| error.to_string())?;
+                        png.truncate(read as usize);
+                        Ok(png)
+                    })();
+                    let _ = callback_sender.send(result);
+                    Ok(())
+                }));
+                unsafe {
+                    core.CapturePreview(
+                        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                        &stream,
+                        &handler,
+                    )
+                }
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                let _ = sender.send(Err(error));
+            }
+        })
+        .map_err(|error| error.to_string())?;
+    receiver
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| "Browser snapshot timed out.".to_string())?
+}
+
+pub fn start_bridge(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let manager = app.state::<BrowserManager>().inner().clone();
+    *manager.0.port.lock().map_err(|error| error.to_string())? = listener.local_addr()?.port();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let manager = manager.clone();
+            let app = app.clone();
+            std::thread::spawn(move || handle_stream(&manager, &app, stream));
+        }
+    });
+    Ok(())
+}
+
+fn handle_stream(manager: &BrowserManager, app: &AppHandle, mut stream: TcpStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let mut line = String::new();
+    let result = BufReader::new(&mut stream).read_line(&mut line);
+    let response = match result {
+        Ok(size) if size > 0 && size < 256 * 1024 => {
+            match serde_json::from_str::<ToolRequest>(&line) {
+                Ok(request) => {
+                    let image = request.name == "screenshot";
+                    match manager.perform(app, request) {
+                        Ok(value) if image => value,
+                        Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
+                        Err(error) => {
+                            json!({"content":[{"type":"text","text":error}],"isError":true})
+                        }
+                    }
+                }
+                Err(error) => {
+                    json!({"content":[{"type":"text","text":error.to_string()}],"isError":true})
+                }
+            }
+        }
+        _ => {
+            json!({"content":[{"type":"text","text":"Invalid browser tool request."}],"isError":true})
+        }
+    };
+    let _ = serde_json::to_writer(&mut stream, &response);
+    let _ = stream.write_all(b"\n");
+}
+
+#[tauri::command]
+pub fn browser_access_reply(
+    manager: State<'_, BrowserManager>,
+    id: String,
+    allow: bool,
+) -> Result<(), String> {
+    if let Some(sender) = manager
+        .0
+        .pending
+        .lock()
+        .map_err(|error| error.to_string())?
+        .remove(&id)
+    {
+        let _ = sender.send(allow);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_project_access(
+    manager: State<'_, BrowserManager>,
+    directory: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let directory = PathBuf::from(directory)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let mut policies = manager
+        .0
+        .policies
+        .lock()
+        .map_err(|error| error.to_string())?;
+    policies.insert(directory, enabled);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_mcp_config(
+    manager: State<'_, BrowserManager>,
+    directory: String,
+) -> Result<McpConfig, String> {
+    manager.config(&directory, None)
+}
+
+#[tauri::command]
+pub fn browser_pane_register(
+    manager: State<'_, BrowserManager>,
+    directory: String,
+    pane_id: String,
+    open: bool,
+) -> Result<(), String> {
+    manager.pane(&directory, &pane_id, open)
+}
+
+const TOOLS: &[(&str, &str, &str)] = &[
+    (
+        "navigate",
+        "Navigate the open Sail browser pane to an HTTP or HTTPS URL.",
+        "url",
+    ),
+    (
+        "read_page",
+        "Read the current page title, URL, and visible text.",
+        "",
+    ),
+    (
+        "screenshot",
+        "Capture the current browser pane as an image.",
+        "",
+    ),
+    ("click", "Click an element selected with CSS.", "selector"),
+    (
+        "type",
+        "Type text into an editable element selected with CSS.",
+        "selector,text",
+    ),
+    (
+        "run_script",
+        "Run JavaScript in the current browser page; use return to send a value.",
+        "script",
+    ),
+];
+
+pub fn run_mcp_stdio() {
+    let input = std::io::stdin();
+    let mut output = std::io::stdout().lock();
+    for line in input.lock().lines().map_while(Result::ok) {
+        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(id) = message.get("id") else {
+            continue;
+        };
+        let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        let result = match method {
+            "initialize" => json!({
+                "protocolVersion":"2024-11-05",
+                "capabilities":{"tools":{}},
+                "serverInfo":{"name":"sail-browser","version":env!("CARGO_PKG_VERSION")}
+            }),
+            "ping" => json!({}),
+            "tools/list" => json!({"tools": TOOLS.iter().map(|(name, description, fields)| {
+                let properties: serde_json::Map<String, Value> = fields.split(',').filter(|field| !field.is_empty()).map(|field| (field.to_string(), json!({"type":"string"}))).collect();
+                json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":properties.keys().collect::<Vec<_>>()}})
+            }).collect::<Vec<_>>() }),
+            "tools/call" => call_bridge(message.get("params").unwrap_or(&Value::Null)),
+            _ => json!({"error":"Unknown MCP method."}),
+        };
+        let response = json!({"jsonrpc":"2.0","id":id,"result":result});
+        if serde_json::to_writer(&mut output, &response).is_err() {
+            break;
+        }
+        if output.write_all(b"\n").is_err() || output.flush().is_err() {
+            break;
+        }
+    }
+}
+
+fn call_bridge(params: &Value) -> Value {
+    let port = match std::env::var("SAIL_BROWSER_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+    {
+        Some(port) => port,
+        None => {
+            return json!({"content":[{"type":"text","text":"Sail browser bridge is unavailable."}],"isError":true})
+        }
+    };
+    let token = std::env::var("SAIL_BROWSER_TOKEN").unwrap_or_default();
+    let request = json!({
+        "token":token,
+        "sessionId":params.pointer("/_meta/sessionID").and_then(Value::as_str),
+        "name":params.get("name").and_then(Value::as_str),
+        "arguments":params.get("arguments").cloned().unwrap_or_else(|| json!({})),
+    });
+    let response = (|| -> Result<Value, String> {
+        let mut stream =
+            TcpStream::connect(("127.0.0.1", port)).map_err(|error| error.to_string())?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(150)))
+            .map_err(|error| error.to_string())?;
+        serde_json::to_writer(&mut stream, &request).map_err(|error| error.to_string())?;
+        stream.write_all(b"\n").map_err(|error| error.to_string())?;
+        let mut line = String::new();
+        BufReader::new(stream)
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        serde_json::from_str(&line).map_err(|error| error.to_string())
+    })();
+    response.unwrap_or_else(|error| json!({"content":[{"type":"text","text":format!("Sail browser bridge: {error}")}],"isError":true}))
+}

@@ -49,6 +49,7 @@ mod acp;
 mod acp_terminal;
 mod attention;
 mod browser;
+pub mod browser_agent;
 mod github;
 mod settings;
 mod terminal;
@@ -753,6 +754,7 @@ fn local_plugin_version(path: String) -> Option<String> {
 pub fn run() {
     let builder = tauri::Builder::default()
         .setup(|_app| {
+            browser_agent::start_bridge(_app.handle())?;
             #[cfg(any(target_os = "macos", windows))]
             configure_pane_menu(_app.handle())?;
             Ok(())
@@ -761,6 +763,7 @@ pub fn run() {
         .manage(acp::AgentManager::default())
         .manage(acp_terminal::AcpTerminalManager::default())
         .manage(terminal::TerminalManager::default())
+        .manage(browser_agent::BrowserManager::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             settings::load_settings,
@@ -804,8 +807,13 @@ pub fn run() {
             browser::browser_visibility,
             browser::browser_devtools,
             browser::browser_close,
+            browser::browser_focus,
             browser::browser_shortcut,
-            browser::browser_route
+            browser::browser_route,
+            browser_agent::browser_access_reply,
+            browser_agent::browser_project_access,
+            browser_agent::browser_mcp_config,
+            browser_agent::browser_pane_register
         ]);
     #[cfg(feature = "e2e")]
     let builder = builder
