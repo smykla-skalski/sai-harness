@@ -209,7 +209,21 @@ describe('ACP agent threads', () => {
     ).toBe(true);
     expect(
       await browser.execute(() => document.querySelector('.agent-conversation')?.scrollTop ?? -1),
-    ).toBe(beforeReply);
+    ).toBeGreaterThan(beforeReply);
+
+    await $('.agent-composer textarea').setValue('Activity demo');
+    await $('.agent-actions button').click();
+    await expect($('.agent-tool-current')).toBeDisplayed();
+    await browser.execute(() => {
+      const conversation = document.querySelector('.agent-conversation');
+      if (conversation) conversation.scrollTop = 0;
+    });
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('The checks passed. The tool details are available above.'),
+    );
+    expect(
+      await browser.execute(() => document.querySelector('.agent-conversation')?.scrollTop),
+    ).toBe(0);
 
     await $('.agent-launches button').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
