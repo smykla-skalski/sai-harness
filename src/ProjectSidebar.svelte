@@ -22,6 +22,9 @@
     disabled: boolean;
     agents: AgentAvailability[];
     openCodeAvailable: boolean;
+    worktreeDialogRequest: { id: string; path: string } | null;
+    onworktreecreated: (repository: string, path: string) => void;
+    onworktreecancelled: (repository: string) => void;
     onselect: (path: string) => void;
     onaddrepository: (groupID: string | null) => void;
     onaddgroup: (name: string) => void;
@@ -65,6 +68,9 @@
     disabled,
     agents,
     openCodeAvailable,
+    worktreeDialogRequest,
+    onworktreecreated,
+    onworktreecancelled,
     onselect,
     onaddrepository,
     onaddgroup,
@@ -89,6 +95,9 @@
   let menuY = $state(0);
   let menuTrigger: HTMLElement | null = null;
   let creatingWorktreeFor = $state<string | null>(null);
+  let worktreeFromPalette = $state(false);
+  let worktreeCreated = false;
+  let lastWorktreeRequest = '';
   let worktreeDialog: HTMLDialogElement;
   let worktreeNameInput = $state<HTMLInputElement>();
   let worktreeName = $state('');
@@ -302,16 +311,26 @@
     void tick().then(() => addGroupButton?.focus());
   }
 
-  async function startWorktree(path: string) {
+  $effect(() => {
+    const request = worktreeDialogRequest;
+    if (!request || request.id === lastWorktreeRequest) return;
+    lastWorktreeRequest = request.id;
+    void startWorktree(request.path, true);
+  });
+
+  async function startWorktree(path: string, fromPalette = false) {
     creatingWorktreeFor = path;
+    worktreeFromPalette = fromPalette;
+    worktreeCreated = false;
     worktreeName = '';
     worktreeDestination = null;
     worktreeBase = '';
     worktreeAgentTouched = false;
     const savedAgent = getSetting('sai-worktree-agent') ?? '';
     worktreeAgent =
-      (savedAgent === 'opencode' && openCodeAvailable) ||
-      agents.some((agent) => agent.id === savedAgent && agent.available)
+      !fromPalette &&
+      ((savedAgent === 'opencode' && openCodeAvailable) ||
+        agents.some((agent) => agent.id === savedAgent && agent.available))
         ? savedAgent
         : '';
     worktreeError = '';
@@ -323,7 +342,7 @@
     await tick();
     worktreeDialog.showModal();
     worktreeNameInput?.focus();
-    void loadIssues(path);
+    if (!fromPalette) void loadIssues(path);
   }
 
   async function loadIssues(repository: string) {
@@ -377,16 +396,22 @@
     worktreeBusy = true;
     worktreeError = '';
     try {
+      const fromPalette = worktreeFromPalette;
       await oncreateworktree(
         path,
         worktreeName.trim(),
         worktreeDestination,
         worktreeBase.trim() || null,
-        worktreeAgent || null,
-        selectedIssue,
+        fromPalette ? null : worktreeAgent || null,
+        fromPalette ? null : selectedIssue,
       );
-      setSetting('sai-worktree-agent', worktreeAgent);
+      if (!fromPalette) setSetting('sai-worktree-agent', worktreeAgent);
+      worktreeCreated = true;
       worktreeDialog.close();
+      if (fromPalette) {
+        await tick();
+        onworktreecreated(path, directory);
+      }
     } catch (cause) {
       worktreeError = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -887,9 +912,17 @@
     if (worktreeBusy) event.preventDefault();
   }}
   onclose={() => {
+    const repository = creatingWorktreeFor;
+    const returnToPalette = worktreeFromPalette && !worktreeCreated;
     creatingWorktreeFor = null;
+    worktreeFromPalette = false;
     clearTimeout(issueSearchTimer);
     ++issueSearchGeneration;
+    if (returnToPalette && repository)
+      void tick().then(() => {
+        onworktreecancelled(repository);
+        return undefined;
+      });
   }}
 >
   {#if creatingWorktreeFor}<form
@@ -912,32 +945,36 @@
           disabled={worktreeBusy}>×</button
         >
       </div>
-      <label
-        >Open GitHub issue <span>(optional)</span>
-        <input
-          aria-label="Search open GitHub issues"
-          placeholder="Search by title or number"
-          bind:value={issueQuery}
-          oninput={() => searchIssues(creatingWorktreeFor!)}
-          onkeydown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              clearTimeout(issueSearchTimer);
-              void loadIssues(creatingWorktreeFor!);
-            }
-          }}
-          disabled={worktreeBusy}
-        />
-      </label>
-      {#if issueLoading}<p class="worktree-issue-note" role="status">Searching issues…</p>{/if}
-      {#if issueError}<p class="worktree-error" role="status">{issueError}</p>{/if}
-      {#if !issueLoading && !issueError && !issueResults.length}<p
+      {#if !worktreeFromPalette}<label
+          >Open GitHub issue <span>(optional)</span>
+          <input
+            aria-label="Search open GitHub issues"
+            placeholder="Search by title or number"
+            bind:value={issueQuery}
+            oninput={() => searchIssues(creatingWorktreeFor!)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                clearTimeout(issueSearchTimer);
+                void loadIssues(creatingWorktreeFor!);
+              }
+            }}
+            disabled={worktreeBusy}
+          />
+        </label>{/if}
+      {#if issueLoading && !worktreeFromPalette}<p class="worktree-issue-note" role="status">
+          Searching issues…
+        </p>{/if}
+      {#if issueError && !worktreeFromPalette}<p class="worktree-error" role="status">
+          {issueError}
+        </p>{/if}
+      {#if !worktreeFromPalette && !issueLoading && !issueError && !issueResults.length}<p
           class="worktree-issue-note"
           role="status"
         >
           No open issues found.
         </p>{/if}
-      {#if !issueError && !issueLoading && issueResults.length}<div
+      {#if !worktreeFromPalette && !issueError && !issueLoading && issueResults.length}<div
           class="worktree-issue-results"
           aria-label="Open GitHub issues"
         >
@@ -949,7 +986,7 @@
               disabled={worktreeBusy}>#{issue.number} {issue.title}</button
             >{/each}
         </div>{/if}
-      {#if selectedIssue}<p class="worktree-issue-note">
+      {#if !worktreeFromPalette && selectedIssue}<p class="worktree-issue-note">
           Selected #{selectedIssue.number}: {selectedIssue.title}
           <button type="button" onclick={() => (selectedIssue = null)} disabled={worktreeBusy}
             >Clear</button
@@ -974,21 +1011,23 @@
           disabled={worktreeBusy}
         />
       </label>
-      <label
-        >Start with agent
-        <select
-          aria-label="Agent for new worktree"
-          bind:value={worktreeAgent}
-          onchange={() => (worktreeAgentTouched = true)}
-          disabled={worktreeBusy}
-        >
-          <option value="">Choose after creation</option>
-          <option value="opencode" disabled={!openCodeAvailable}>OpenCode</option>
-          {#each agents as agent (agent.id)}<option value={agent.id} disabled={!agent.available}
-              >{agent.name}</option
-            >{/each}
-        </select>
-      </label>
+      {#if !worktreeFromPalette}<label
+          >Start with agent
+          <select
+            aria-label="Agent for new worktree"
+            bind:value={worktreeAgent}
+            onchange={() => (worktreeAgentTouched = true)}
+            disabled={worktreeBusy}
+          >
+            <option value="">Choose after creation</option>
+            <option value="opencode" disabled={!openCodeAvailable}>OpenCode</option>
+            {#each agents as agent (agent.id)}<option value={agent.id} disabled={!agent.available}
+                >{agent.name}</option
+              >{/each}
+          </select>
+        </label>{:else}<p class="worktree-issue-note">
+          Choose an agent and session after creation.
+        </p>{/if}
       {#if selectedIssue && !worktreeAgent}<p class="worktree-issue-note" role="status">
           Choose an available agent to start this issue.
         </p>{/if}

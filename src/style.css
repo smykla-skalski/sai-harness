@@ -1769,6 +1769,35 @@ button:disabled {
 .command-palette::backdrop {
   background: #0008;
 }
+.palette-path {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 14px 0;
+  color: var(--shell-muted);
+  font-size: 12px;
+}
+.palette-path button,
+.palette-path strong {
+  overflow: hidden;
+  max-width: 32%;
+  padding: 3px 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-path button.current,
+.palette-path strong {
+  color: var(--sui-foreground);
+  font-weight: 700;
+}
+.palette-path button:hover {
+  color: var(--sui-primary);
+}
 .inbox-dialog {
   width: min(680px, calc(100vw - 32px));
   max-height: min(80vh, 760px);
@@ -1905,6 +1934,14 @@ button:disabled {
   background: var(--shell-selected);
   color: var(--shell-selected-ink);
 }
+.palette-entry:disabled {
+  color: var(--shell-muted);
+  cursor: default;
+  opacity: 0.65;
+}
+.palette-entry:disabled:hover {
+  background: transparent;
+}
 .palette-entry span:first-child {
   min-width: 0;
 }
@@ -1922,6 +1959,17 @@ button:disabled {
 }
 .palette-empty {
   padding: 18px;
+}
+.palette-status,
+.palette-error {
+  margin: 5px 12px 10px;
+  font-size: 12px;
+}
+.palette-status {
+  color: var(--shell-muted);
+}
+.palette-error {
+  color: var(--sui-danger);
 }
 .commands-dialog {
   width: min(520px, calc(100vw - 32px));

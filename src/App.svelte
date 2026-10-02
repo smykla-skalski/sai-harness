@@ -32,9 +32,11 @@
     type InboxItem,
   } from './lib/inbox';
   import {
-    newestAvailableThread,
+    locationName,
     searchCommandPalette,
     type PaletteEntry,
+    type PaletteOpenCodeSession,
+    type PaletteStep,
   } from './lib/command-palette';
   import {
     loadRecentThreadKeys,
@@ -189,21 +191,19 @@
   let recentJumpGeneration = 0;
   let paletteQuery = $state('');
   let paletteIndex = $state(0);
+  let paletteStep = $state<PaletteStep>({ kind: 'projects' });
+  let paletteOpenCodeSessions = $state<PaletteOpenCodeSession[]>([]);
+  let paletteLoading = $state(false);
+  let paletteBusy = $state(false);
+  let paletteError = $state('');
+  let paletteSessionGeneration = 0;
+  let paletteSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let paletteWorktreeRequest = $state<{ id: string; path: string } | null>(null);
   let promptFocusPane = $state<string | null>(null);
   let paletteDialog: HTMLDialogElement;
   let paletteInput: HTMLInputElement;
   let palettePreviousFocus: HTMLElement | null = null;
   let restorePaletteFocus = true;
-  const paletteEntries = $derived(
-    searchCommandPalette(
-      projectCatalog,
-      agentThreads,
-      agentAvailability,
-      directory,
-      paletteQuery,
-      savedCommands,
-    ),
-  );
   let runningAgentThreads = $state<Record<string, boolean>>({});
   const savedPaneLayouts = loadPaneLayouts(getSetting('sai-pane-layouts'));
   let paneLayouts = $state<Record<string, Pane>>(savedPaneLayouts);
@@ -217,6 +217,22 @@
   let acpAgent = $state<AgentId | null>(initialMainPane?.agent ?? null);
   let acpThread = $state<AgentThread | null>(initialMainPane?.thread ?? null);
   let runtimeState = $state<'starting' | 'connected' | 'error'>('starting');
+  const paletteRepository = $derived('repository' in paletteStep ? paletteStep.repository : '');
+  const paletteLocation = $derived('directory' in paletteStep ? paletteStep.directory : '');
+  const paletteAgentID = $derived('agent' in paletteStep ? paletteStep.agent : '');
+  const paletteEntries = $derived(
+    searchCommandPalette({
+      step: paletteStep,
+      query: paletteQuery,
+      catalog: projectCatalog,
+      currentDirectory: directory,
+      agents: agentAvailability,
+      threads: agentThreads,
+      openCodeAvailable: runtimeState === 'connected',
+      openCodeSessions: paletteOpenCodeSessions,
+      commands: savedCommands,
+    }),
+  );
   let runtimeError = $state('');
   let workReady = $state(false);
   let planReady = $state(false);
@@ -1802,13 +1818,18 @@
     ++recentJumpGeneration;
     palettePreviousFocus = document.activeElement as HTMLElement | null;
     restorePaletteFocus = true;
+    paletteStep = { kind: 'projects' };
     paletteQuery = '';
     paletteIndex = 0;
+    paletteError = '';
+    paletteOpenCodeSessions = [];
     paletteDialog.showModal();
     void tick().then(() => paletteInput.focus());
   }
 
   function closeCommandPalette(restore = true) {
+    clearTimeout(paletteSearchTimer);
+    ++paletteSessionGeneration;
     restorePaletteFocus = restore;
     paletteDialog.close();
   }
@@ -1816,6 +1837,92 @@
   function commandPaletteClosed() {
     if (restorePaletteFocus) palettePreviousFocus?.focus();
     palettePreviousFocus = null;
+  }
+
+  function setPaletteStep(step: PaletteStep) {
+    clearTimeout(paletteSearchTimer);
+    ++paletteSessionGeneration;
+    paletteStep = step;
+    paletteQuery = '';
+    paletteError = '';
+    paletteOpenCodeSessions = [];
+    paletteLoading = false;
+    paletteIndex = 0;
+    if (step.kind === 'sessions' && step.agent === 'opencode')
+      void loadPaletteOpenCodeSessions(step.directory, '');
+    void tick().then(() => {
+      paletteIndex = Math.max(
+        0,
+        paletteEntries.findIndex((entry) => !entry.disabled),
+      );
+      paletteInput.focus();
+      return undefined;
+    });
+  }
+
+  function backCommandPalette() {
+    const step = paletteStep;
+    if (step.kind === 'sessions')
+      setPaletteStep({ kind: 'agents', repository: step.repository, directory: step.directory });
+    else if (step.kind === 'agents')
+      setPaletteStep({ kind: 'worktrees', repository: step.repository });
+    else if (step.kind === 'worktrees') setPaletteStep({ kind: 'projects' });
+  }
+
+  async function loadPaletteOpenCodeSessions(path: string, search: string) {
+    const source = client;
+    if (!source) {
+      paletteLoading = false;
+      paletteError = 'OpenCode is unavailable.';
+      return;
+    }
+    const generation = ++paletteSessionGeneration;
+    paletteLoading = true;
+    paletteError = '';
+    try {
+      const result = await source.session.list({
+        directory: path,
+        limit: 50,
+        order: 'desc',
+        parentID: null,
+        ...(search.trim() ? { search: search.trim() } : {}),
+      });
+      if (generation === paletteSessionGeneration)
+        paletteOpenCodeSessions = result.data.map((session) => ({
+          id: session.id,
+          title: session.title ?? 'Untitled session',
+          directory: session.location.directory,
+          parentID: session.parentID ?? null,
+          updated: session.time.updated,
+        }));
+    } catch (cause) {
+      if (generation === paletteSessionGeneration) paletteError = describe(cause);
+    } finally {
+      if (generation === paletteSessionGeneration) paletteLoading = false;
+    }
+  }
+
+  function updatePaletteQuery(value: string) {
+    paletteQuery = value;
+    paletteIndex = 0;
+    paletteError = '';
+    clearTimeout(paletteSearchTimer);
+    if (paletteStep.kind === 'sessions' && paletteStep.agent === 'opencode') {
+      ++paletteSessionGeneration;
+      paletteOpenCodeSessions = [];
+      paletteLoading = true;
+      const path = paletteStep.directory;
+      paletteSearchTimer = setTimeout(() => void loadPaletteOpenCodeSessions(path, value), 180);
+    }
+    scrollToActivePaletteEntry();
+  }
+
+  function reopenCommandPalette(step: PaletteStep) {
+    if (paletteDialog.open || document.querySelector('dialog[open]')) return;
+    palettePreviousFocus = document.activeElement as HTMLElement | null;
+    restorePaletteFocus = true;
+    paletteDialog.showModal();
+    setPaletteStep(step);
   }
 
   function saveCommands(commands: SavedCommand[]) {
@@ -1871,58 +1978,100 @@
   }
 
   async function choosePaletteEntry(entry: PaletteEntry | null) {
-    if (entry?.kind === 'command' && entry.command) {
+    if (!entry || entry.disabled || paletteBusy) return;
+    if (entry.kind === 'command' && entry.command) {
       runSavedCommand(entry.command);
       return;
     }
-    const target = entry?.directory ?? directory;
-    const thread =
-      entry?.kind === 'thread'
-        ? entry.thread
-        : entry?.kind === 'location'
-          ? newestAvailableThread(agentThreads, agentAvailability, target, entry.agent)
+    const step = paletteStep;
+    if (step.kind === 'projects' && entry.kind === 'project' && entry.directory) {
+      setPaletteStep({ kind: 'worktrees', repository: entry.directory });
+      return;
+    }
+    if (step.kind === 'worktrees' && entry.kind === 'worktree' && entry.directory) {
+      setPaletteStep({ kind: 'agents', repository: step.repository, directory: entry.directory });
+      return;
+    }
+    if (step.kind === 'worktrees' && entry.kind === 'new-worktree') {
+      closeCommandPalette(false);
+      paletteWorktreeRequest = { id: crypto.randomUUID(), path: step.repository };
+      return;
+    }
+    if (step.kind === 'agents' && entry.kind === 'agent' && entry.agent) {
+      setPaletteStep({
+        kind: 'sessions',
+        repository: step.repository,
+        directory: step.directory,
+        agent: entry.agent,
+      });
+      return;
+    }
+    if (step.kind !== 'sessions') return;
+    if (!['new-session', 'thread', 'opencode-session'].includes(entry.kind)) return;
+    paletteBusy = true;
+    paletteError = '';
+    try {
+      const target = step.directory;
+      let expectedProjectLoad = projectLoadGeneration;
+      if (target !== directory) {
+        const pending = loadProject(target, false);
+        expectedProjectLoad = projectLoadGeneration;
+        await pending;
+      }
+      if (expectedProjectLoad !== projectLoadGeneration || !directory) return;
+      if (step.agent === 'opencode' && entry.kind === 'new-session' && !workReady)
+        throw new Error('Complete OpenCode setup in this worktree before starting a session.');
+      const thread =
+        entry.kind === 'thread' && entry.thread
+          ? agentThreads.find(
+              (item) =>
+                item.directory === directory &&
+                item.agent === entry.thread?.agent &&
+                item.sessionId === entry.thread.sessionId,
+            )
           : null;
-    const agent =
-      entry?.agent ?? thread?.agent ?? agentAvailability.find((item) => item.available)?.id;
-    if (!target || !agent) {
-      error = 'Choose a project and install an agent to start a thread.';
-      return;
+      if (entry.kind === 'thread' && !thread)
+        throw new Error('This session is no longer available.');
+      closeCommandPalette(false);
+      focusMainPane();
+      if (step.agent === 'opencode') {
+        if (entry.kind === 'new-session') newWork();
+        else if (entry.kind === 'opencode-session' && entry.sessionId)
+          await selectSession(entry.sessionId);
+      } else if (entry.kind === 'new-session') openAgent(step.agent);
+      else if (entry.kind === 'thread' && thread) openAgent(step.agent, thread);
+      focusPaneForTyping('main');
+    } catch (cause) {
+      paletteError = describe(cause);
+    } finally {
+      paletteBusy = false;
     }
-    if (!agentAvailability.some((item) => item.id === agent && item.available)) {
-      error = `${agent} is unavailable. Choose another agent.`;
-      return;
-    }
-    closeCommandPalette(false);
-    let expectedProjectLoad = projectLoadGeneration;
-    if (target !== directory) {
-      const pending = loadProject(target, false);
-      expectedProjectLoad = projectLoadGeneration;
-      await pending;
-    }
-    if (expectedProjectLoad !== projectLoadGeneration || !directory) return;
-    const selectedThread = thread
-      ? (agentThreads.find(
-          (item) =>
-            item.directory === directory &&
-            item.agent === thread.agent &&
-            item.sessionId === thread.sessionId,
-        ) ?? null)
-      : null;
-    focusMainPane();
-    openAgent(agent, selectedThread);
-    focusPaneForTyping('main');
   }
 
   function keydownCommandPalette(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
       closeCommandPalette();
+    } else if (
+      (event.key === 'Backspace' || event.key === 'ArrowLeft') &&
+      !paletteQuery &&
+      paletteStep.kind !== 'projects'
+    ) {
+      event.preventDefault();
+      backCommandPalette();
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       if (!paletteEntries.length) return;
-      paletteIndex =
-        (paletteIndex + (event.key === 'ArrowDown' ? 1 : -1) + paletteEntries.length) %
-        paletteEntries.length;
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      for (let offset = 1; offset <= paletteEntries.length; offset++) {
+        const index =
+          (paletteIndex + direction * offset + paletteEntries.length * offset) %
+          paletteEntries.length;
+        if (!paletteEntries[index]?.disabled) {
+          paletteIndex = index;
+          break;
+        }
+      }
       scrollToActivePaletteEntry();
     } else if (event.key === 'Enter') {
       event.preventDefault();
@@ -3723,6 +3872,11 @@
           !agentAvailability.some((agent) => agent.available)}
         agents={agentAvailability}
         openCodeAvailable={runtimeState === 'connected'}
+        worktreeDialogRequest={paletteWorktreeRequest}
+        onworktreecreated={(repository, path) =>
+          reopenCommandPalette({ kind: 'agents', repository, directory: path })}
+        onworktreecancelled={(repository) =>
+          reopenCommandPalette({ kind: 'worktrees', repository })}
         onselect={(path) => {
           if (path !== directory) void loadProject(path);
         }}
@@ -4350,52 +4504,107 @@
 <dialog
   class="command-palette"
   bind:this={paletteDialog}
-  aria-label="Jump to project, thread, or command"
+  aria-label="Command palette"
   onclose={commandPaletteClosed}
 >
+  <nav class="palette-path" aria-label="Command palette path">
+    <button
+      class:current={paletteStep.kind === 'projects'}
+      onclick={() => setPaletteStep({ kind: 'projects' })}>Projects</button
+    >
+    {#if paletteStep.kind !== 'projects'}
+      <span aria-hidden="true">›</span><button
+        class:current={paletteStep.kind === 'worktrees'}
+        title={paletteRepository}
+        onclick={() => setPaletteStep({ kind: 'worktrees', repository: paletteRepository })}
+        >{locationName(paletteRepository)}</button
+      >
+    {/if}
+    {#if paletteStep.kind === 'agents' || paletteStep.kind === 'sessions'}
+      <span aria-hidden="true">›</span><button
+        class:current={paletteStep.kind === 'agents'}
+        title={paletteLocation}
+        onclick={() =>
+          setPaletteStep({
+            kind: 'agents',
+            repository: paletteRepository,
+            directory: paletteLocation,
+          })}
+        >{paletteLocation === paletteRepository
+          ? 'Main checkout'
+          : ((projectCatalog.worktrees[paletteRepository] ?? []).find(
+              (worktree) => worktree.path === paletteLocation,
+            )?.branch ?? locationName(paletteLocation))}</button
+      >
+    {/if}
+    {#if paletteStep.kind === 'sessions'}
+      <span aria-hidden="true">›</span><strong
+        >{paletteAgentID === 'opencode'
+          ? 'OpenCode'
+          : (agentAvailability.find((agent) => agent.id === paletteAgentID)?.name ??
+            paletteAgentID)}</strong
+      >
+    {/if}
+  </nav>
   <div class="palette-search">
     <input
       bind:this={paletteInput}
       value={paletteQuery}
-      aria-label="Search projects, worktrees, threads, and commands"
-      placeholder="Jump to project, thread, or command…"
-      oninput={(event) => {
-        paletteQuery = event.currentTarget.value;
-        paletteIndex = 0;
-        scrollToActivePaletteEntry();
-      }}
+      aria-label="Search command palette"
+      placeholder={paletteStep.kind === 'projects'
+        ? 'Search projects or commands…'
+        : paletteStep.kind === 'worktrees'
+          ? 'Search worktrees…'
+          : paletteStep.kind === 'agents'
+            ? 'Choose an agent…'
+            : 'New or existing session…'}
+      oninput={(event) => updatePaletteQuery(event.currentTarget.value)}
       onkeydown={keydownCommandPalette}
     />
-    <kbd>Esc</kbd>
+    <kbd>{paletteStep.kind === 'projects' ? 'Esc' : '⌫ back'}</kbd>
   </div>
   <div class="palette-results">
     {#each paletteEntries as entry, index (entry.id)}
       <button
         class="palette-entry"
+        data-kind={entry.kind}
         class:active={index === paletteIndex}
         aria-current={index === paletteIndex ? 'true' : undefined}
+        disabled={entry.disabled || paletteBusy}
         onclick={() => void choosePaletteEntry(entry)}
       >
         <span><strong>{entry.label}</strong><small>{entry.detail}</small></span>
         <span class="palette-kind"
-          >{entry.kind === 'thread'
-            ? 'Thread'
-            : entry.kind === 'command'
-              ? 'Command'
-              : 'Project'}</span
+          >{entry.kind === 'project'
+            ? 'Project'
+            : entry.kind === 'worktree'
+              ? 'Worktree'
+              : entry.kind === 'new-worktree'
+                ? 'Create'
+                : entry.kind === 'agent'
+                  ? 'Agent'
+                  : entry.kind === 'command'
+                    ? 'Command'
+                    : entry.kind === 'new-session'
+                      ? 'New'
+                      : 'Session'}</span
         >
       </button>
     {:else}
       <div class="palette-empty">
-        <p>No matches for “{paletteQuery}”.</p>
-        <button
-          disabled={!directory || !agentAvailability.some((agent) => agent.available)}
-          onclick={() => void choosePaletteEntry(null)}
-        >
-          Start a thread in the current project
-        </button>
+        <p>{paletteLoading ? 'Loading sessions…' : `No matches for “${paletteQuery}”.`}</p>
+        {#if paletteStep.kind === 'projects' && !projectCatalog.repositories.length}<button
+            onclick={() => {
+              closeCommandPalette(false);
+              void chooseProject();
+            }}>Add repository…</button
+          >{/if}
       </div>
     {/each}
+    {#if paletteLoading && paletteEntries.length}<p class="palette-status" role="status">
+        Loading sessions…
+      </p>{/if}
+    {#if paletteError}<p class="palette-error" role="alert">{paletteError}</p>{/if}
   </div>
 </dialog>
 <dialog class="commands-dialog" bind:this={agentTerminalsDialog} aria-label="Agent terminals">

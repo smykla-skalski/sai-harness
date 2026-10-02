@@ -2,36 +2,54 @@ import type { AgentAvailability, AgentId, AgentThread } from './acp';
 import type { ProjectCatalog } from './projects';
 import { commandsForDirectory, type SavedCommand } from './saved-commands.ts';
 
+export type PaletteStep =
+  | { kind: 'projects' }
+  | { kind: 'worktrees'; repository: string }
+  | { kind: 'agents'; repository: string; directory: string }
+  | { kind: 'sessions'; repository: string; directory: string; agent: AgentId };
+
 export type PaletteEntry = {
   id: string;
-  kind: 'location' | 'thread' | 'command';
-  directory: string;
+  kind:
+    | 'project'
+    | 'worktree'
+    | 'new-worktree'
+    | 'agent'
+    | 'new-session'
+    | 'thread'
+    | 'opencode-session'
+    | 'command';
   label: string;
   detail: string;
-  agent: AgentId | null;
-  thread: AgentThread | null;
+  disabled?: boolean;
+  directory?: string;
+  agent?: AgentId;
+  thread?: AgentThread;
+  sessionId?: string;
   command?: SavedCommand;
 };
 
-export function newestAvailableThread(
-  threads: AgentThread[],
-  agents: AgentAvailability[],
-  directory: string,
-  agentId: AgentId | null,
-): AgentThread | null {
-  return (
-    threads
-      .filter(
-        (thread) =>
-          thread.directory === directory &&
-          (!agentId || thread.agent === agentId) &&
-          agents.some((agent) => agent.id === thread.agent && agent.available),
-      )
-      .toSorted((a, b) => b.updated - a.updated)[0] ?? null
-  );
-}
+export type PaletteOpenCodeSession = {
+  id: string;
+  title: string;
+  directory: string;
+  parentID: string | null;
+  updated: number;
+};
 
-function name(path: string): string {
+export type PaletteSearch = {
+  step: PaletteStep;
+  query: string;
+  catalog: ProjectCatalog;
+  currentDirectory: string;
+  agents: AgentAvailability[];
+  threads: AgentThread[];
+  openCodeAvailable: boolean;
+  openCodeSessions: PaletteOpenCodeSession[];
+  commands: SavedCommand[];
+};
+
+export function locationName(path: string): string {
   return path.split(/[\\/]/).findLast((part) => part.length > 0) ?? path;
 }
 
@@ -41,116 +59,161 @@ function fuzzyScore(text: string, query: string): number | null {
   const direct = haystack.indexOf(needle);
   if (direct >= 0) return direct;
   let previous = -1;
-  let score = 0;
+  let gapScore = 0;
   for (const character of needle) {
     const index = haystack.indexOf(character, previous + 1);
     if (index < 0) return null;
-    score += index - previous - 1;
+    gapScore += index - previous - 1;
     previous = index;
   }
-  return score;
+  return gapScore;
 }
 
-export function searchCommandPalette(
-  catalog: ProjectCatalog,
-  threads: AgentThread[],
-  agents: AgentAvailability[],
-  currentDirectory: string,
+function score(text: string, query: string): number | null {
+  return query
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .reduce<number | null>((total, term) => {
+      const match = fuzzyScore(text, term);
+      return total === null || match === null ? null : total + match;
+    }, 0);
+}
+
+function rank(
+  entries: PaletteEntry[],
   query: string,
-  commands: SavedCommand[] = [],
+  searchText = (entry: PaletteEntry) => `${entry.label} ${entry.detail}`,
 ): PaletteEntry[] {
-  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  const selectedAgent = agents.find(
-    (agent) => agent.available && terms.some((term) => agentMatches(agent, term)),
-  );
-  const searchTerms = selectedAgent
-    ? terms.filter((term) => !agentMatches(selectedAgent, term))
-    : terms;
-  const locations = catalog.repositories.flatMap((repository) => [
-    { directory: repository, label: name(repository), detail: repository },
-    ...(catalog.worktrees[repository] ?? []).map((worktree) => ({
-      directory: worktree.path,
-      label: worktree.branch,
-      detail: `${name(repository)} · ${worktree.path}`,
-    })),
-  ]);
-  const seen = new Set<string>();
-  const candidates: { entry: PaletteEntry; score: number }[] = [];
-  for (const location of locations) {
-    if (seen.has(location.directory)) continue;
-    seen.add(location.directory);
-    const score = searchTerms.reduce<number | null>((total, term) => {
-      const match = fuzzyScore(`${location.label} ${location.detail}`, term);
-      return total === null || match === null ? null : total + match;
-    }, 0);
-    if (score !== null)
-      candidates.push({
-        entry: {
-          id: `location:${location.directory}`,
-          kind: 'location',
-          directory: location.directory,
-          label: location.label,
-          detail: location.detail,
-          agent: selectedAgent?.id ?? null,
-          thread: null,
-        },
-        score: score + (location.directory === currentDirectory ? -2 : 0),
-      });
-  }
-  for (const thread of threads) {
-    if (!agents.some((agent) => agent.id === thread.agent && agent.available)) continue;
-    if (selectedAgent && thread.agent !== selectedAgent.id) continue;
-    const location = locations.find((item) => item.directory === thread.directory);
-    if (!location) continue;
-    const score = searchTerms.reduce<number | null>((total, term) => {
-      const match = fuzzyScore(`${thread.title} ${location.label} ${location.detail}`, term);
-      return total === null || match === null ? null : total + match;
-    }, 0);
-    if (score !== null)
-      candidates.push({
-        entry: {
-          id: `thread:${thread.agent}:${thread.directory}:${thread.sessionId}`,
-          kind: 'thread',
-          directory: thread.directory,
-          label: thread.title,
-          detail: `${location.label} · ${thread.agent}`,
-          agent: thread.agent,
-          thread,
-        },
-        score: score + (thread.directory === currentDirectory ? -1 : 0),
-      });
-  }
-  if (!selectedAgent) {
-    for (const command of commandsForDirectory(commands, catalog, currentDirectory)) {
-      const score = searchTerms.reduce<number | null>((total, term) => {
-        const match = fuzzyScore(`${command.name} ${command.command}`, term);
-        return total === null || match === null ? null : total + match;
-      }, 0);
-      if (score !== null)
-        candidates.push({
-          entry: {
-            id: `command:${command.id}`,
-            kind: 'command',
-            directory: currentDirectory,
-            label: command.name,
-            detail: command.project ? 'Project command' : 'Global command',
-            agent: null,
-            thread: null,
-            command,
-          },
-          score: score - 3,
-        });
-    }
-  }
-  return candidates
-    .toSorted(
-      (a, b) =>
-        a.score - b.score || Number(a.entry.kind === 'thread') - Number(b.entry.kind === 'thread'),
-    )
-    .slice(0, 30)
+  return entries
+    .flatMap((entry) => {
+      const matchScore = score(searchText(entry), query);
+      return matchScore === null ? [] : [{ entry, matchScore }];
+    })
+    .toSorted((a, b) => a.matchScore - b.matchScore)
+    .slice(0, 50)
     .map(({ entry }) => entry);
 }
 
-function agentMatches(agent: AgentAvailability, term: string): boolean {
-  return agent.id.toLowerCase() === term || agent.name.toLowerCase() === term;
+export function searchCommandPalette({
+  step,
+  query,
+  catalog,
+  currentDirectory,
+  agents,
+  threads,
+  openCodeAvailable,
+  openCodeSessions,
+  commands,
+}: PaletteSearch): PaletteEntry[] {
+  if (step.kind === 'projects') {
+    const repositories: PaletteEntry[] = catalog.repositories.map((repository) => {
+      const group = catalog.groups.find((item) => item.repositories.includes(repository));
+      return {
+        id: `project:${repository}`,
+        kind: 'project',
+        label: locationName(repository),
+        detail: `${group?.name ?? 'Ungrouped'} · ${repository}`,
+        directory: repository,
+      };
+    });
+    const projects = rank(repositories, query).toSorted(
+      (a, b) => Number(b.directory === currentDirectory) - Number(a.directory === currentDirectory),
+    );
+    const saved = rank(
+      commandsForDirectory(commands, catalog, currentDirectory).map((command) => ({
+        id: `command:${command.id}`,
+        kind: 'command',
+        label: command.name,
+        detail: command.project ? 'Project command' : 'Global command',
+        command,
+      })),
+      query,
+      (entry) => `${entry.label} ${entry.detail} ${entry.command?.command ?? ''}`,
+    );
+    return [...projects, ...saved].slice(0, 50);
+  }
+
+  if (step.kind === 'worktrees') {
+    const locations: PaletteEntry[] = [
+      {
+        id: `worktree:${step.repository}`,
+        kind: 'worktree',
+        label: 'Main checkout',
+        detail: step.repository,
+        directory: step.repository,
+      },
+      ...(catalog.worktrees[step.repository] ?? []).map((worktree) => ({
+        id: `worktree:${worktree.path}`,
+        kind: 'worktree' as const,
+        label: worktree.branch,
+        detail: worktree.path,
+        directory: worktree.path,
+      })),
+    ];
+    const create: PaletteEntry = {
+      id: `new-worktree:${step.repository}`,
+      kind: 'new-worktree',
+      label: 'Create new worktree…',
+      detail: `For ${locationName(step.repository)}`,
+    };
+    const newWorktree = !query.trim() || score(`${create.label} ${create.detail}`, query) !== null;
+    const worktrees = rank(locations, query);
+    return query.trim() ? [...(newWorktree ? [create] : []), ...worktrees] : [...worktrees, create];
+  }
+
+  if (step.kind === 'agents') {
+    return rank(
+      [
+        {
+          id: 'agent:opencode',
+          kind: 'agent',
+          label: 'OpenCode',
+          detail: openCodeAvailable ? 'Sail architect and work sessions' : 'OpenCode unavailable',
+          agent: 'opencode',
+          disabled: !openCodeAvailable,
+        },
+        ...agents.map((agent) => ({
+          id: `agent:${agent.id}`,
+          kind: 'agent' as const,
+          label: agent.name,
+          detail: agent.available ? 'Agent sessions' : (agent.reason ?? 'Unavailable'),
+          agent: agent.id,
+          disabled: !agent.available,
+        })),
+      ],
+      query,
+    );
+  }
+
+  const create: PaletteEntry = {
+    id: `new-session:${step.agent}:${step.directory}`,
+    kind: 'new-session',
+    label: 'New session',
+    detail: `Start with ${step.agent === 'opencode' ? 'OpenCode' : (agents.find((agent) => agent.id === step.agent)?.name ?? step.agent)}`,
+  };
+  const existing: PaletteEntry[] =
+    step.agent === 'opencode'
+      ? openCodeSessions
+          .filter((session) => session.directory === step.directory && !session.parentID)
+          .toSorted((a, b) => b.updated - a.updated)
+          .map((session) => ({
+            id: `opencode-session:${session.id}`,
+            kind: 'opencode-session',
+            label: session.title,
+            detail: new Date(session.updated).toLocaleString(),
+            sessionId: session.id,
+          }))
+      : threads
+          .filter((thread) => thread.directory === step.directory && thread.agent === step.agent)
+          .toSorted((a, b) => b.updated - a.updated)
+          .map((thread) => ({
+            id: `thread:${thread.agent}:${thread.directory}:${thread.sessionId}`,
+            kind: 'thread',
+            label: thread.title,
+            detail: new Date(thread.updated).toLocaleString(),
+            thread,
+          }));
+  const newSession = !query.trim() || score(create.label, query) !== null ? [create] : [];
+  return [...newSession, ...rank(existing, query)].slice(0, 50);
 }
