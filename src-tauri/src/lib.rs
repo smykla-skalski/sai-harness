@@ -1270,9 +1270,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::working_tree_revision;
     use super::{
         git_change_action, git_patch, repository_namespace, server_args, version_number,
-        working_tree_diff, working_tree_revision,
+        working_tree_diff,
     };
     use std::fs;
     use std::path::Path;
