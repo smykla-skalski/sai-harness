@@ -240,6 +240,49 @@ button:disabled {
 .project-worktree-pr:hover {
   text-decoration: underline;
 }
+.project-check-state {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--sui-muted);
+}
+.project-check-state.passing {
+  background: #3fb950;
+}
+.project-check-state.failing {
+  background: #f85149;
+}
+.project-check-state.pending {
+  background: #d29922;
+}
+.project-check-failures {
+  padding: 0 8px 5px 32px;
+  font-size: 11px;
+}
+.project-check-failure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+.project-check-failure a,
+.project-check-failure span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-check-failure button {
+  flex: 0 0 auto;
+  color: var(--sui-primary);
+  font-size: 11px;
+}
+.project-check-error {
+  margin: 0 8px 5px 32px;
+  color: var(--sui-danger);
+  font-size: 11px;
+}
 .project-worktree-select span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;

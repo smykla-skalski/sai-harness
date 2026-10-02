@@ -18,6 +18,7 @@
   import HistoryPanel from './HistoryPanel.svelte';
   import PromptPanel from './PromptPanel.svelte';
   import ProjectSidebar from './ProjectSidebar.svelte';
+  import type { PullRequestCheck } from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
   import PaneTree from './PaneTree.svelte';
   import InboxPanel from './InboxPanel.svelte';
@@ -1336,6 +1337,49 @@
     saveProjectCatalog(
       setWorktreePullRequest(projectCatalog, repository, worktree.path, pullRequest),
     );
+  }
+
+  async function sendFailedCheckLog(
+    repository: string,
+    worktree: ProjectWorktree,
+    check: PullRequestCheck,
+  ) {
+    const actionsJob = /^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+\/job\/\d+$/.test(
+      check.url,
+    );
+    const log = actionsJob
+      ? await invoke<string>('failed_check_log', {
+          repository,
+          worktree: worktree.path,
+          branch: worktree.branch,
+          url: check.url,
+        })
+      : 'This check has no GitHub Actions job log. Open the check link for details.';
+    const text = `Please investigate failed check “${check.name}” for ${worktree.branch}.\n${check.url}\n\n${log}`;
+    if (directory !== worktree.path) await loadProject(worktree.path);
+    if (directory !== worktree.path) throw new Error('Worktree changed before sending the logs.');
+    const pane = leaves(paneLayout).find((leaf) => leaf.agent && leaf.thread);
+    if (pane?.agent) {
+      await sendDiffComments(pane.id, diffCommentKey(pane.id), text);
+      return;
+    }
+    const thread = agentThreads.find((item) => item.directory === worktree.path);
+    if (thread) {
+      focusMainPane();
+      openAgent(thread.agent, thread);
+      await tick();
+      await sendDiffComments('main', diffCommentKey('main'), text);
+      return;
+    }
+    if (acpAgent) {
+      await sendDiffComments('main', diffCommentKey('main'), text);
+      return;
+    }
+    if (client && sessionID) {
+      await sendDiffComments('main', diffCommentKey('main'), text);
+      return;
+    }
+    throw new Error('Open an agent thread in this worktree before sending check logs.');
   }
 
   async function chooseProject(groupID: string | null = null) {
@@ -3589,6 +3633,7 @@
         oncreateworktree={createProjectWorktree}
         ondeleteworktree={deleteProjectWorktree}
         oncreatepullrequest={createProjectPullRequest}
+        onsendchecklog={sendFailedCheckLog}
       />
       <div class="sidebar-sessions">
         <div class="session-heading">

@@ -113,7 +113,7 @@
   });
 
   $effect(() => {
-    if (!externalPrompt || externalPrompt.id === lastExternalPrompt) return;
+    if (!externalPrompt || !ready || externalPrompt.id === lastExternalPrompt) return;
     const request = externalPrompt;
     lastExternalPrompt = request.id;
     void send(request.text).then(

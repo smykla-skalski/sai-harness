@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import { invoke } from '@tauri-apps/api/core';
   import type { AgentAvailability } from './lib/acp';
   import type { ProjectCatalog, ProjectWorktree } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
   import { getSetting, setSetting } from './lib/settings';
+
+  export type PullRequestCheck = { name: string; state: string; url: string };
+  type PullRequestChecks = { number: number; url: string; checks: PullRequestCheck[] };
 
   type Props = {
     catalog: ProjectCatalog;
@@ -37,6 +40,11 @@
       body: string,
       draft: boolean,
     ) => Promise<void>;
+    onsendchecklog: (
+      repository: string,
+      worktree: ProjectWorktree,
+      check: PullRequestCheck,
+    ) => Promise<void>;
   };
 
   let {
@@ -56,6 +64,7 @@
     oncreateworktree,
     ondeleteworktree,
     oncreatepullrequest,
+    onsendchecklog,
   }: Props = $props();
   let creatingGroup = $state(false);
   let editingGroupID = $state<string | null>(null);
@@ -86,6 +95,92 @@
   let pullRequestBusy = $state(false);
   let pullRequestError = $state('');
   let ungrouped = $derived(ungroupedRepositories(catalog));
+  let pullRequestChecks = $state<Record<string, PullRequestChecks | null>>({});
+  let checkErrors = $state<Record<string, string>>({});
+  let sendingCheck = $state<string | null>(null);
+  let checking = false;
+
+  function checkState(check: PullRequestCheck) {
+    if (
+      ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STALE'].includes(
+        check.state,
+      )
+    )
+      return 'failing';
+    if (['SUCCESS', 'EXPECTED', 'NEUTRAL', 'SKIPPED'].includes(check.state)) return 'passing';
+    return 'pending';
+  }
+
+  function hasActionsLog(url: string) {
+    return /^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+\/job\/\d+$/.test(url);
+  }
+
+  function overallState(checks: PullRequestCheck[]) {
+    if (checks.some((check) => checkState(check) === 'failing')) return 'failing';
+    if (checks.length && checks.every((check) => checkState(check) === 'passing')) return 'passing';
+    return 'pending';
+  }
+
+  function currentPullRequest(worktree: ProjectWorktree): PullRequestChecks | null {
+    if (worktree.path in pullRequestChecks) return pullRequestChecks[worktree.path];
+    return worktree.pullRequest ? { ...worktree.pullRequest, checks: [] } : null;
+  }
+
+  async function refreshChecks() {
+    if (checking) return;
+    checking = true;
+    try {
+      const entries = Object.entries(catalog.worktrees).flatMap(([repository, worktrees]) =>
+        worktrees.map((worktree) => ({ repository, worktree })),
+      );
+      const results = await Promise.allSettled(
+        entries.map(({ repository, worktree }) =>
+          invoke<PullRequestChecks | null>('pull_request_checks', {
+            repository,
+            worktree: worktree.path,
+            branch: worktree.branch,
+          }),
+        ),
+      );
+      const next: Record<string, PullRequestChecks | null> = {};
+      const errors: Record<string, string> = {};
+      results.forEach((result, index) => {
+        const path = entries[index].worktree.path;
+        if (result.status === 'fulfilled') next[path] = result.value;
+        else
+          errors[path] =
+            result.reason instanceof Error ? result.reason.message : String(result.reason);
+      });
+      pullRequestChecks = next;
+      checkErrors = errors;
+    } finally {
+      checking = false;
+    }
+  }
+
+  onMount(() => {
+    void refreshChecks();
+    const timer = setInterval(() => void refreshChecks(), 30_000);
+    return () => clearInterval(timer);
+  });
+
+  async function sendCheckLog(
+    repository: string,
+    worktree: ProjectWorktree,
+    check: PullRequestCheck,
+  ) {
+    sendingCheck = `${worktree.path}:${check.name}`;
+    try {
+      await onsendchecklog(repository, worktree, check);
+    } catch (cause) {
+      checkErrors = {
+        ...checkErrors,
+        [worktree.path]: cause instanceof Error ? cause.message : String(cause),
+      };
+    } finally {
+      sendingCheck = null;
+    }
+  }
 
   function repositoryName(path: string) {
     return (
@@ -210,6 +305,7 @@
         pullRequestDraft,
       );
       pullRequestDialog.close();
+      void refreshChecks();
     } catch (cause) {
       pullRequestError = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -223,6 +319,59 @@
     if (event.button === 0) menuWorktree = null;
   }}
 />
+{#snippet checkBadge(worktree: ProjectWorktree)}
+  {@const pr = currentPullRequest(worktree)}
+  {#if pr}
+    <a
+      class="project-worktree-pr"
+      href={pr.url}
+      onclick={(event) => {
+        event.preventDefault();
+        void invoke('open_pull_request', { url: pr.url });
+      }}
+      aria-label={`Open pull request ${pr.number}`}
+      title={`Open pull request #${pr.number}`}>#{pr.number}</a
+    >
+    {#if worktree.path in pullRequestChecks}
+      <span
+        class={`project-check-state ${overallState(pr.checks)}`}
+        aria-label={`Pull request #${pr.number} checks ${overallState(pr.checks)}`}
+        title={`Checks ${overallState(pr.checks)}`}
+      ></span>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet checkFailures(repository: string, worktree: ProjectWorktree)}
+  {@const pr = currentPullRequest(worktree)}
+  {#if pr && pr.checks.some((check) => checkState(check) === 'failing')}
+    <div class="project-check-failures">
+      {#each pr.checks.filter((check) => checkState(check) === 'failing') as check, index (index)}
+        <div class="project-check-failure">
+          {#if check.url}
+            <a
+              href={check.url}
+              onclick={(event) => {
+                event.preventDefault();
+                void invoke('open_check_url', { url: check.url });
+              }}>{check.name} ↗</a
+            >
+          {:else}<span>{check.name}</span>{/if}
+          {#if check.url}<button
+              aria-label={`Send ${check.name} ${hasActionsLog(check.url) ? 'logs' : 'link'} to agent in ${worktree.branch}`}
+              disabled={sendingCheck !== null}
+              onclick={() => void sendCheckLog(repository, worktree, check)}
+              >{hasActionsLog(check.url) ? 'Send logs' : 'Send link'}</button
+            >{/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+  {#if checkErrors[worktree.path] && pr}
+    <p class="project-check-error" role="status">{checkErrors[worktree.path]}</p>
+  {/if}
+{/snippet}
+
 <section class="projects" aria-label="Projects and repositories">
   <div class="projects-heading">
     <span class="label">PROJECTS</span>
@@ -393,17 +542,7 @@
                     onclick={() => onselect(worktree.path)}
                     ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                   >
-                  {#if worktree.pullRequest}<a
-                      class="project-worktree-pr"
-                      href={worktree.pullRequest.url}
-                      onclick={(event) => {
-                        event.preventDefault();
-                        void invoke('open_pull_request', { url: worktree.pullRequest?.url });
-                      }}
-                      aria-label={`Open pull request ${worktree.pullRequest.number}`}
-                      title={`Open pull request #${worktree.pullRequest.number}`}
-                      >#{worktree.pullRequest.number}</a
-                    >{/if}
+                  {@render checkBadge(worktree)}
                   <button
                     class="project-icon-button"
                     aria-label={`Manage worktree ${worktree.branch}`}
@@ -414,8 +553,9 @@
                     }}>⋯</button
                   >
                 </div>
+                {@render checkFailures(path, worktree)}
                 {#if menuWorktree === worktree.path}<div class="project-menu worktree-menu">
-                    {#if !worktree.pullRequest}<button
+                    {#if !currentPullRequest(worktree)}<button
                         aria-label={`Create pull request for ${worktree.branch}`}
                         onclick={() => startPullRequest(path, worktree)}
                         >Create pull request…</button
@@ -508,17 +648,7 @@
                   onclick={() => onselect(worktree.path)}
                   ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                 >
-                {#if worktree.pullRequest}<a
-                    class="project-worktree-pr"
-                    href={worktree.pullRequest.url}
-                    onclick={(event) => {
-                      event.preventDefault();
-                      void invoke('open_pull_request', { url: worktree.pullRequest?.url });
-                    }}
-                    aria-label={`Open pull request ${worktree.pullRequest.number}`}
-                    title={`Open pull request #${worktree.pullRequest.number}`}
-                    >#{worktree.pullRequest.number}</a
-                  >{/if}
+                {@render checkBadge(worktree)}
                 <button
                   class="project-icon-button"
                   aria-label={`Manage worktree ${worktree.branch}`}
@@ -529,8 +659,9 @@
                   }}>⋯</button
                 >
               </div>
+              {@render checkFailures(path, worktree)}
               {#if menuWorktree === worktree.path}<div class="project-menu worktree-menu">
-                  {#if !worktree.pullRequest}<button
+                  {#if !currentPullRequest(worktree)}<button
                       aria-label={`Create pull request for ${worktree.branch}`}
                       onclick={() => startPullRequest(path, worktree)}>Create pull request…</button
                     >{/if}
