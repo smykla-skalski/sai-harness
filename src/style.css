@@ -1291,20 +1291,6 @@ button:disabled {
   overflow: auto;
   padding: 28px max(28px, calc((100% - 740px) / 2));
 }
-.older-messages {
-  display: block;
-  margin: 0 auto 14px;
-  padding: 7px 12px;
-  border: 1px solid var(--shell-divider);
-  border-radius: 8px;
-  background: var(--sui-surface);
-  color: var(--sui-primary);
-  cursor: pointer;
-}
-.older-messages:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
 .welcome {
   display: flex;
   flex-direction: column;

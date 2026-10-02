@@ -87,6 +87,8 @@
   let visibleCount = $state(50);
   let historyLoaded = $state(true);
   let historyLoading = $state(false);
+  let historyAttempted = $state(false);
+  let showingEarlier = false;
   let expandedTools = $state<string[]>([]);
   const visibleEntries = $derived(entries.slice(-visibleCount));
   let replaying = false;
@@ -115,7 +117,11 @@
   let scroll: HTMLDivElement;
   let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
-  const isBusy = $derived(busy || running);
+  const isBusy = $derived(busy || running || historyLoading);
+
+  $effect(() => {
+    if (ready && !busy && !running && !historyLoaded && !historyAttempted) void loadHistory();
+  });
   const modelOption = $derived(
     configOptions.find(
       (option) => /model/i.test(`${option.id} ${option.name}`) && option.type === 'select',
@@ -224,17 +230,28 @@
   }
 
   async function showEarlier() {
+    if (showingEarlier || entries.length <= visibleCount) return;
+    showingEarlier = true;
     const height = scroll.scrollHeight;
     const top = scroll.scrollTop;
+    const current = generation;
     visibleCount += 50;
     await tick();
+    if (current !== generation) {
+      showingEarlier = false;
+      return;
+    }
     scroll.scrollTop = top + scroll.scrollHeight - height;
+    showingEarlier = false;
+    if (scroll.scrollHeight <= scroll.clientHeight && entries.length > visibleCount)
+      void showEarlier();
   }
 
   async function loadHistory() {
     const id = activeSessionId;
-    if (!id || historyLoading || !ready || isBusy) return;
+    if (!id || historyLoading || !ready || busy || running || historyAttempted) return;
     const current = generation;
+    historyAttempted = true;
     historyLoading = true;
     replaying = true;
     replayEntries = [];
@@ -246,6 +263,13 @@
       historyLoaded = true;
       rememberTranscript();
       void follow();
+      await tick();
+      if (
+        current === generation &&
+        scroll.scrollHeight <= scroll.clientHeight &&
+        entries.length > visibleCount
+      )
+        void showEarlier();
     } catch (cause) {
       if (current === generation) error = describe(cause);
     } finally {
@@ -310,6 +334,7 @@
     expandedTools = [];
     historyLoaded = !id;
     historyLoading = false;
+    historyAttempted = false;
     configOptions = [];
     pickerOpen = null;
     creatingSession = null;
@@ -726,29 +751,17 @@
     class="agent-conversation conversation"
     bind:this={scroll}
     aria-label={`${name} conversation`}
+    onscroll={() => {
+      if (scroll?.scrollTop <= 80 && !historyLoading) void showEarlier();
+    }}
   >
-    {#if entries.length === 0 && !connecting}
+    {#if entries.length === 0 && !connecting && !historyLoading}
       <div class="agent-welcome">
         <h1>Work with {name}</h1>
         <p>Describe the work. Sail will show messages, tools, and approvals here.</p>
       </div>
     {/if}
-    {#if thread?.sessionId && !historyLoaded}
-      <button
-        class="agent-history-button"
-        disabled={!ready || historyLoading || isBusy}
-        onclick={loadHistory}
-        >{historyLoading
-          ? 'Loading history…'
-          : entries.length
-            ? 'Load older messages'
-            : 'Load conversation history'}</button
-      >
-    {:else if entries.length > visibleCount}
-      <button class="agent-history-button" onclick={showEarlier}
-        >Show earlier messages ({entries.length - visibleCount} remaining)</button
-      >
-    {/if}
+    {#if historyLoading}<div class="agent-history-status" role="status">Loading history…</div>{/if}
     {#each visibleEntries as entry (entry.id)}
       {#if entry.type === 'tool'}
         <details
@@ -963,7 +976,7 @@
     overflow: auto;
     padding-inline: 20px;
   }
-  .agent-history-button {
+  .agent-history-status {
     display: block;
     margin: 12px auto 20px;
   }
