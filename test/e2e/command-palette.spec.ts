@@ -62,7 +62,7 @@ describe('command palette project flow', () => {
     rmSync(repository, { recursive: true, force: true });
   });
 
-  it('drills from project to worktree, agent, and existing or new session', async () => {
+  it('opens a worktree session directly and shows the pane picker when empty', async () => {
     const repoPath = realpathSync(repository);
     const worktreePath = realpathSync(worktree);
     await browser.execute(
@@ -97,6 +97,22 @@ describe('command palette project flow', () => {
             },
           ]),
         );
+        localStorage.setItem(
+          'sai-pane-layouts',
+          JSON.stringify({
+            [branch]: {
+              id: 'main',
+              agent: 'claude',
+              thread: {
+                agent: 'claude',
+                directory: branch,
+                sessionId: 'new',
+                title: 'Newest thread',
+                updated: Date.now(),
+              },
+            },
+          }),
+        );
       },
       repoPath,
       worktreePath,
@@ -113,13 +129,7 @@ describe('command palette project flow', () => {
     await expect($('[data-kind="new-worktree"]')).toBeDisplayed();
     await capture('palette-worktrees');
     await searchAndEnter('palette-feature');
-    await expect($('[data-kind="agent"]')).toBeDisplayed();
-    await capture('palette-agents');
-    await searchAndEnter('Claude');
-    await expect($('[data-kind="new-session"]')).toBeDisplayed();
-    await expect($('.palette-results')).toHaveText(expect.stringContaining('Newest thread'));
-    await capture('palette-sessions');
-    await searchAndEnter('Newest thread');
+    await expect($('.command-palette[open]')).not.toExist();
     await browser.waitUntil(
       async () =>
         (await browser.execute(() => localStorage.getItem('sai-directory'))) === worktreePath,
@@ -129,55 +139,64 @@ describe('command palette project flow', () => {
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
     await $('[data-kind="worktree"]').click();
-    await searchAndEnter('Claude');
-    await $('[data-kind="new-session"]').click();
     await browser.waitUntil(
       async () => (await browser.execute(() => localStorage.getItem('sai-directory'))) === repoPath,
     );
-    await expect($('textarea[aria-label="Message Claude"]')).toBeFocused();
+    await expect($('.pane-picker-intro h2')).toHaveText('Choose an agent');
 
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
     await searchAndEnter('palette-feature');
-    await searchAndEnter('Claude');
-    await $('[data-kind="new-session"]').click();
-    await expect($('textarea[aria-label="Message Claude"]')).toBeFocused();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Newest thread'));
 
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
-    await searchAndEnter('palette-feature');
-    await browser.keys('Backspace');
+    await expect($('[data-kind="new-worktree"]')).toBeDisplayed();
     await expect($('[data-kind="new-worktree"]')).toBeDisplayed();
     await browser.keys('Escape');
     await expect($('.command-palette[open]')).not.toExist();
   });
 
-  it('uses the worktree popup and returns to agent selection after creation', async () => {
+  it('chooses an agent in the worktree popup and opens it after creation', async () => {
     const repoPath = realpathSync(repository);
     await openPalette();
     await searchAndEnter(repoPath.split('/').at(-1)!);
     await $('[data-kind="new-worktree"]').click();
     await expect($('.worktree-dialog[open]')).toBeDisplayed();
     await capture('palette-create-worktree');
-    await expect($('.worktree-dialog')).toHaveText(
-      expect.stringContaining('Choose an agent and session after creation.'),
-    );
+    await expect($('[aria-label^="Agent for new worktree:"]')).toBeDisplayed();
     await $('.worktree-cancel').click();
     await expect($('.command-palette[open]')).toBeDisplayed();
     await expect($('[data-kind="new-worktree"]')).toBeDisplayed();
     await $('[data-kind="new-worktree"]').click();
     await expect($('.worktree-dialog[open]')).toBeDisplayed();
     await $('[aria-label^="Worktree name for"]').setValue('palette-created');
+    await $('[aria-label^="Agent for new worktree:"]').click();
+    await $('.option-menu [role="option"]:nth-child(3)').click();
     await $('.worktree-create').click();
     await expect($('.worktree-dialog[open]')).not.toExist();
-    await expect($('.command-palette[open]')).toBeDisplayed();
-    await expect($('.palette-path')).toHaveText(expect.stringContaining('palette-created'));
-    await expect($('[data-kind="agent"]')).toBeDisplayed();
-    await searchAndEnter('Claude');
-    await $('[data-kind="new-session"]').click();
+    await expect($('.command-palette[open]')).not.toExist();
     await expect($('textarea[aria-label="Message Claude"]')).toBeFocused();
     const selected = await browser.execute(() => localStorage.getItem('sai-directory'));
     expect(selected).toContain('palette-created');
+  });
+
+  it('adds an agent choice pane when the worktree only has an unsent draft', async () => {
+    const repoPath = realpathSync(repository);
+    await browser.execute((repo) => {
+      localStorage.setItem('sai-directory', repo);
+      localStorage.setItem(
+        'sai-pane-layouts',
+        JSON.stringify({ [repo]: { id: 'main', agent: 'claude', thread: null } }),
+      );
+    }, repoPath);
+    await browser.refresh();
+    await openPalette();
+    await searchAndEnter(repoPath.split('/').at(-1)!);
+    await $('[data-kind="worktree"]').click();
+    await expect($('.command-palette[open]')).not.toExist();
+    await expect($('.pane-leaf.focused [data-pane-picker]')).toBeDisplayed();
+    await expect($('.pane-leaf')).toBeElementsArrayOfSize(2);
   });
 
   it('opens the full worktree popup with Cmd+N for the current project', async () => {
@@ -187,9 +206,7 @@ describe('command palette project flow', () => {
     await expect($('.worktree-dialog')).toHaveText(
       expect.stringContaining(realpathSync(repository).split(/[\\/]/).at(-1)!),
     );
-    await expect($('.worktree-dialog')).not.toHaveText(
-      expect.stringContaining('Choose an agent and session after creation.'),
-    );
+    await expect($('[aria-label^="Agent for new worktree:"]')).toBeDisplayed();
     await $('.worktree-cancel').click();
     await expect($('.worktree-dialog[open]')).not.toExist();
     await expect($('.command-palette[open]')).not.toExist();
