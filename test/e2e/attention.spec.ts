@@ -53,16 +53,20 @@ describe('agent thread attention', () => {
     await expect(row).toBeDisplayed();
     await $('.agent-launches button').click();
     await expect(row).toHaveText(expect.stringContaining('Waiting for input'));
+    const sidebarRow = $('.project-agent-row[aria-label*="Delayed approval"]');
+    await expect(sidebarRow).toHaveText(expect.stringContaining('Needs input'));
     await expect(row.$('.thread-unread')).toBeDisplayed();
     await browser.refresh();
     await expect(row).toHaveText(expect.stringContaining('Waiting for input'));
+    await expect(sidebarRow).toHaveText(expect.stringContaining('Needs input'));
     await expect(row.$('.thread-unread')).toBeDisplayed();
 
-    await row.click();
+    await sidebarRow.click();
     await expect($('.agent-permission')).toBeDisplayed();
     await expect(row.$('.thread-unread')).not.toExist();
     await $('.agent-permission button').click();
     await expect(row).toHaveText(expect.stringContaining('done'));
+    await expect(sidebarRow).toHaveText(expect.stringContaining('Finished'));
     if (!(await browser.execute(() => document.hasFocus()))) {
       await expect(row.$('.thread-unread')).toBeDisplayed();
       await row.click();

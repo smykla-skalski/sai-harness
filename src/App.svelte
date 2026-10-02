@@ -51,6 +51,7 @@
     threadKey,
     touchRecentThread,
   } from './lib/recent-threads';
+  import { groupSidebarThreads, listSidebarOpenCodeThreads } from './lib/sidebar-agents';
   import {
     loadAttention,
     markAttentionRead,
@@ -376,7 +377,23 @@
   });
   let openCodeUsage = $state<Record<string, number>>({});
   let nativeThreads = $state<AgentThread[]>(savedNativeThreads);
+  let sidebarOpenCodeThreads = $state<AgentThread[]>(savedNativeThreads);
+  let sidebarOpenCodeOutcomes = $state<Record<string, ThreadStatus>>({});
   let threadAttention = $state<AttentionMap>(loadAttention(getSetting('sai-thread-attention')));
+  let acpActivityReady = $state(false);
+  let nativeActivityReady = $state(false);
+  let nativeUnavailableDirectories = $state<string[]>([]);
+  let sidebarThreads = $derived(groupSidebarThreads([...agentThreads, ...sidebarOpenCodeThreads]));
+  let sidebarDirectoryKey = $derived(
+    JSON.stringify([
+      ...new Set([
+        ...projectCatalog.repositories,
+        ...Object.values(projectCatalog.worktrees).flatMap((worktrees) =>
+          worktrees.map((worktree) => worktree.path),
+        ),
+      ]),
+    ]),
+  );
   let attentionRevision = 0;
   let notificationsEnabled = $state(getSetting('sai-notifications-enabled') !== 'false');
   let notificationSound = $state(getSetting('sai-notification-sound') !== 'false');
@@ -888,6 +905,8 @@
   let selection = 0;
   const paneSelections = new SvelteMap<string, number>();
   let nativeActivityGeneration = 0;
+  let sidebarInventoryGeneration = 0;
+  let sidebarInventoryTimer: ReturnType<typeof setTimeout> | undefined;
   let projectLoadGeneration = 0;
   let sessionRefresh = 0;
   let promptRefresh = 0;
@@ -1261,6 +1280,9 @@
     }
     void initialize();
     healthTimer = setInterval(() => void checkRuntime(), 5000);
+    const sidebarRefreshTimer = setInterval(() => {
+      if (client) void refreshSidebarOpenCodeThreads(client, JSON.parse(sidebarDirectoryKey));
+    }, 30_000);
     diffPollTimer = setInterval(() => {
       const visible = !window.matchMedia('(max-width: 850px)').matches || mobileView === 'details';
       if (acpAgent && agentChangesOpen && visible && !diffLoading) {
@@ -1292,6 +1314,8 @@
       clearTimeout(recoveryTimer);
       clearTimeout(inboxRefreshTimer);
       clearInterval(healthTimer);
+      clearInterval(sidebarRefreshTimer);
+      clearTimeout(sidebarInventoryTimer);
       clearInterval(diffPollTimer);
       discardLiveText();
       unlistenAgentEvents?.();
@@ -1349,6 +1373,7 @@
     clearTimeout(recoveryTimer);
     eventController?.abort();
     client = nextClient;
+    nativeActivityReady = false;
     openCodeBrowserServers.clear();
     activeBinary = info.binaryPath;
     runtimeState = 'connected';
@@ -3020,12 +3045,16 @@
       await invoke('delete_worktree', { repository, worktree: path, force: force || !!config });
       saveProjectCatalog(removeWorktree(projectCatalog, repository, path));
       const removedThreads = agentThreads.filter((thread) => thread.directory === path);
+      const removedNative = sidebarOpenCodeThreads.filter((thread) => thread.directory === path);
       agentThreads = agentThreads.filter((thread) => thread.directory !== path);
+      nativeThreads = nativeThreads.filter((thread) => thread.directory !== path);
+      sidebarOpenCodeThreads = sidebarOpenCodeThreads.filter((thread) => thread.directory !== path);
       saveAgentThreads(agentThreads);
+      setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
       forgetMissingRecentThreads();
-      for (const thread of removedThreads) {
+      for (const thread of [...removedThreads, ...removedNative]) {
         forgetThreadAttention(thread);
-        forgetRecentTranscript(thread);
+        if (thread.agent !== 'opencode') forgetRecentTranscript(thread);
       }
       delete paneLayouts[path];
       persistPaneLayouts();
@@ -3335,7 +3364,7 @@
           persistPaneLayouts();
         }
         saveProjectCatalog(replaceRepositoryPath(projectCatalog, path, report.repository));
-        const knownThreads = [...agentThreads, ...nativeThreads];
+        const knownThreads = [...agentThreads, ...nativeThreads, ...sidebarOpenCodeThreads];
         if (recentCycleKeys) {
           const selectedKey = recentCycleKeys[recentCycleIndex];
           const migratedSelected = selectedKey
@@ -3378,6 +3407,9 @@
         );
         saveAgentThreads(agentThreads);
         nativeThreads = nativeThreads.map((thread) =>
+          thread.directory === path ? { ...thread, directory: report.repository } : thread,
+        );
+        sidebarOpenCodeThreads = sidebarOpenCodeThreads.map((thread) =>
           thread.directory === path ? { ...thread, directory: report.repository } : thread,
         );
         setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
@@ -3437,6 +3469,48 @@
       setupLoading = false;
     }
   }
+
+  async function refreshSidebarOpenCodeThreads(source: OpenCodeClient, paths: string[]) {
+    const generation = ++sidebarInventoryGeneration;
+    const results = await Promise.allSettled(
+      paths.map((path) => listSidebarOpenCodeThreads(source, path)),
+    );
+    if (generation !== sidebarInventoryGeneration || disposed || source !== client) return;
+    const failed = new Set(paths.filter((_, index) => results[index]?.status === 'rejected'));
+    const retained = sidebarOpenCodeThreads.filter((thread) => failed.has(thread.directory));
+    sidebarOpenCodeThreads = [
+      ...results.flatMap((result) => (result.status === 'fulfilled' ? result.value.threads : [])),
+      ...retained,
+    ];
+    sidebarOpenCodeOutcomes = Object.assign(
+      {},
+      ...results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value.outcomes] : [],
+      ),
+      Object.fromEntries(
+        retained.flatMap((thread) => {
+          const key = threadKey(thread);
+          const outcome = sidebarOpenCodeOutcomes[key];
+          return outcome ? [[key, outcome]] : [];
+        }),
+      ),
+    );
+    updateAttentionBadge();
+    void reconcileNativeActivity();
+  }
+
+  function scheduleSidebarInventoryRefresh() {
+    clearTimeout(sidebarInventoryTimer);
+    sidebarInventoryTimer = setTimeout(() => {
+      if (client) void refreshSidebarOpenCodeThreads(client, JSON.parse(sidebarDirectoryKey));
+    }, 250);
+  }
+
+  $effect(() => {
+    const source = client;
+    const paths: string[] = JSON.parse(sidebarDirectoryKey);
+    if (source) void refreshSidebarOpenCodeThreads(source, paths);
+  });
 
   async function refreshSessions() {
     if (!client || !directory) return;
@@ -3921,6 +3995,10 @@
         thread,
         ...nativeThreads.filter((item) => threadKey(item) !== threadKey(thread)),
       ].slice(0, 100);
+      sidebarOpenCodeThreads = [
+        thread,
+        ...sidebarOpenCodeThreads.filter((item) => threadKey(item) !== threadKey(thread)),
+      ];
       setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
     }
     recentThreadKeys = touchRecentThread(recentThreadKeys, thread);
@@ -3969,7 +4047,9 @@
   }
 
   async function jumpToRecentThread(key: string) {
-    const thread = [...agentThreads, ...nativeThreads].find((item) => threadKey(item) === key);
+    const thread = [...agentThreads, ...nativeThreads, ...sidebarOpenCodeThreads].find(
+      (item) => threadKey(item) === key,
+    );
     if (
       !thread ||
       (thread.agent === 'opencode'
@@ -3990,7 +4070,7 @@
       await pending;
     }
     if (jump !== recentJumpGeneration || expectedProjectLoad !== projectLoadGeneration) return;
-    const selected = [...agentThreads, ...nativeThreads].find(
+    const selected = [...agentThreads, ...nativeThreads, ...sidebarOpenCodeThreads].find(
       (item) =>
         item.directory === directory &&
         item.agent === thread.agent &&
@@ -4754,7 +4834,7 @@
 
   function updateAttentionBadge() {
     if (!isTauri()) return;
-    const threads = new Set([...agentThreads, ...nativeThreads].map(threadKey));
+    const threads = new Set([...agentThreads, ...sidebarOpenCodeThreads].map(threadKey));
     const count = Object.entries(threadAttention).filter(
       ([key, item]) => threads.has(key) && item.status === 'waiting',
     ).length;
@@ -4762,25 +4842,39 @@
   }
 
   async function reconcileNativeActivity() {
-    if (!client || !directory) return;
+    if (!client) return;
     const source = client;
-    const path = directory;
     const generation = ++nativeActivityGeneration;
     try {
-      const [active, permissions, forms] = await Promise.all([
+      const paths: string[] = JSON.parse(sidebarDirectoryKey);
+      const [active, requests] = await Promise.all([
         source.session.active(),
-        source.permission.request.list({ location: { directory: path } }),
-        source.form.list({ location: { directory: path } }),
+        Promise.allSettled(
+          paths.map(async (path) => {
+            const [permissions, forms] = await Promise.all([
+              source.permission.request.list({ location: { directory: path } }),
+              source.form.list({ location: { directory: path } }),
+            ]);
+            return [
+              ...permissions.data.map((request) => request.sessionID),
+              ...forms.data.map((form) => form.sessionID),
+            ];
+          }),
+        ),
       ]);
-      if (generation !== nativeActivityGeneration || path !== directory) return;
+      if (generation !== nativeActivityGeneration || source !== client) return;
       activeSessionIDs = Object.keys(active);
-      const waiting = new Set([
-        ...permissions.data.map((request) => request.sessionID),
-        ...forms.data.map((form) => form.sessionID),
-      ]);
-      const stale = nativeThreads.filter(
+      const waiting = new Set(
+        requests.flatMap((result) => (result.status === 'fulfilled' ? result.value : [])),
+      );
+      const unavailable = new Set(
+        paths.filter((_, index) => requests[index]?.status === 'rejected'),
+      );
+      const known = groupSidebarThreads([...sidebarOpenCodeThreads, ...nativeThreads]);
+      const threads = Object.values(known).flat();
+      const stale = threads.filter(
         (thread) =>
-          thread.directory === path &&
+          !unavailable.has(thread.directory) &&
           !waiting.has(thread.sessionId) &&
           !active[thread.sessionId] &&
           ['working', 'waiting'].includes(threadAttention[threadKey(thread)]?.status ?? ''),
@@ -4788,22 +4882,32 @@
       const outcomes = await Promise.allSettled(
         stale.map((thread) => source.session.get({ sessionID: thread.sessionId })),
       );
-      if (generation !== nativeActivityGeneration || path !== directory) return;
-      const ended = new Map(stale.map((thread, index) => [thread.sessionId, outcomes[index]]));
-      for (const thread of nativeThreads.filter((item) => item.directory === path)) {
-        const result = ended.get(thread.sessionId);
+      if (generation !== nativeActivityGeneration || source !== client) return;
+      nativeActivityReady = true;
+      nativeUnavailableDirectories = [...unavailable];
+      const ended = new Map(stale.map((thread, index) => [threadKey(thread), outcomes[index]]));
+      for (const thread of threads) {
+        if (unavailable.has(thread.directory)) continue;
+        const result = ended.get(threadKey(thread));
         const status = waiting.has(thread.sessionId)
           ? 'waiting'
           : active[thread.sessionId]
             ? 'working'
             : result
-              ? result.status === 'rejected' || result.value.outcome === 'failed'
-                ? 'failed'
-                : 'done'
+              ? result.status === 'fulfilled'
+                ? result.value.outcome === 'failed'
+                  ? 'failed'
+                  : result.value.outcome
+                    ? 'done'
+                    : null
+                : null
               : null;
-        if (status) updateAgentThreadStatus(thread, status);
+        if (status && status !== threadAttention[threadKey(thread)]?.status)
+          updateAgentThreadStatus(thread, status);
+        else if (result && !status) forgetThreadAttention(thread);
       }
     } catch {
+      nativeActivityReady = false;
       return;
     }
   }
@@ -4837,6 +4941,7 @@
         backendActivity,
       );
       saveThreadAttention();
+      acpActivityReady = true;
       runningAgentThreads = Object.fromEntries(
         Object.entries(threadAttention)
           .filter(([, item]) => item.status === 'working' || item.status === 'waiting')
@@ -5363,6 +5468,11 @@
           ? { ...thread, title }
           : thread,
       );
+      sidebarOpenCodeThreads = sidebarOpenCodeThreads.map((thread) =>
+        thread.sessionId === renamedID && thread.directory === directory
+          ? { ...thread, title }
+          : thread,
+      );
       setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
       let nextLayout = paneLayout;
       for (const pane of leaves(paneLayout))
@@ -5399,6 +5509,9 @@
       delete usage[`${directory}:${session.id}`];
       openCodeUsage = usage;
       nativeThreads = nativeThreads.filter((thread) => thread.sessionId !== session.id);
+      sidebarOpenCodeThreads = sidebarOpenCodeThreads.filter(
+        (thread) => !(thread.sessionId === session.id && thread.directory === directory),
+      );
       setSetting('sai-recent-native-threads', JSON.stringify(nativeThreads));
       forgetMissingRecentThreads();
       let nextLayout = paneLayout;
@@ -5778,10 +5891,12 @@
             'session.execution.failed',
             'session.execution.interrupted',
           ].includes(event.type)
-        )
+        ) {
           void refreshSessions().catch((cause) => {
             error = describe(cause);
           });
+          scheduleSidebarInventoryRefresh();
+        }
         const eventSession =
           'data' in event && 'sessionID' in event.data ? event.data.sessionID : undefined;
         if (
@@ -5792,8 +5907,10 @@
             event.type === 'session.execution.interrupted')
         ) {
           ++nativeActivityGeneration;
-          for (const thread of nativeThreads.filter(
-            (item) => item.sessionId === eventSession && item.directory === directory,
+          for (const thread of sidebarOpenCodeThreads.filter(
+            (item) =>
+              item.sessionId === eventSession &&
+              (!event.location?.directory || item.directory === event.location.directory),
           ))
             updateAgentThreadStatus(
               thread,
@@ -5897,8 +6014,18 @@
           event.type === 'form.cancelled'
         ) {
           if (event.type === 'permission.asked') {
-            const thread = nativeThreads.find(
-              (item) => item.sessionId === event.data.sessionID && item.directory === directory,
+            const thread = sidebarOpenCodeThreads.find(
+              (item) =>
+                item.sessionId === event.data.sessionID &&
+                (!event.location?.directory || item.directory === event.location.directory),
+            );
+            if (thread) updateAgentThreadStatus(thread, 'waiting');
+          }
+          if (event.type === 'form.created') {
+            const thread = sidebarOpenCodeThreads.find(
+              (item) =>
+                item.sessionId === event.data.form.sessionID &&
+                (!event.location?.directory || item.directory === event.location.directory),
             );
             if (thread) updateAgentThreadStatus(thread, 'waiting');
           }
@@ -6356,6 +6483,13 @@
         disabled={runtimeState !== 'connected' &&
           !agentAvailability.some((agent) => agent.available)}
         agents={agentAvailability}
+        threads={sidebarThreads}
+        attention={threadAttention}
+        openCodeOutcomes={sidebarOpenCodeOutcomes}
+        {acpActivityReady}
+        {nativeActivityReady}
+        {nativeUnavailableDirectories}
+        selectedThread={focusedThreadKey()}
         openCodeAvailable={runtimeState === 'connected'}
         worktreeDialogRequest={paletteWorktreeRequest}
         {worktreeCreations}
@@ -6370,6 +6504,7 @@
           if (path !== directory) void loadProject(path);
         }}
         onselectdefault={(path) => void selectDefaultWorktree(path)}
+        onselectthread={(key) => void jumpToRecentThread(key)}
         onaddrepository={(groupID) => void chooseProject(groupID)}
         onaddgroup={addProjectGroup}
         onrenamegroup={renameProjectGroup}
