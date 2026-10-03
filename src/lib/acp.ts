@@ -24,6 +24,7 @@ export interface AgentMessage {
   id: string;
   type: 'user' | 'assistant' | 'thought';
   text: string;
+  created?: number;
 }
 
 export interface AgentTool {
@@ -35,6 +36,7 @@ export interface AgentTool {
   input?: unknown;
   output?: unknown;
   terminalIds: string[];
+  created?: number;
 }
 
 export type AgentEntry = AgentMessage | AgentTool;
@@ -43,6 +45,7 @@ export interface AgentToolGroup {
   id: string;
   type: 'tool-group';
   tools: AgentTool[];
+  created?: number;
 }
 
 export type AgentDisplayEntry = AgentMessage | AgentToolGroup;
@@ -58,10 +61,35 @@ export function groupAgentEntries(entries: AgentEntry[]): AgentDisplayEntry[] {
     if (last?.type === 'tool-group') {
       last.tools.push(entry);
     } else {
-      grouped.push({ id: `tool-group:${entry.id}`, type: 'tool-group', tools: [entry] });
+      grouped.push({
+        id: `tool-group:${entry.id}`,
+        type: 'tool-group',
+        tools: [entry],
+        ...(entry.created !== undefined ? { created: entry.created } : {}),
+      });
     }
   }
   return grouped;
+}
+
+export function restoreEntryTimes(history: AgentEntry[], recent: AgentEntry[]): AgentEntry[] {
+  const restored = history.slice();
+  let index = recent.length - 1;
+  for (let position = restored.length - 1; position >= 0; position--) {
+    const entry = restored[position];
+    while (index >= 0) {
+      const cached = recent[index--];
+      const matches =
+        entry.type === cached.type &&
+        (entry.type === 'tool'
+          ? cached.type === 'tool' && entry.title === cached.title
+          : cached.type !== 'tool' && entry.text.endsWith(cached.text));
+      if (!matches) continue;
+      if (cached.created !== undefined) restored[position] = { ...entry, created: cached.created };
+      break;
+    }
+  }
+  return restored;
 }
 
 export interface AgentPermission {
@@ -223,6 +251,7 @@ export function updateEntries(
 export function updateEntriesBatch(
   entries: AgentEntry[],
   updates: Record<string, unknown>[],
+  created?: number,
 ): AgentEntry[] {
   const next = entries.slice();
   const toolIndexes = updates.some(
@@ -231,7 +260,8 @@ export function updateEntriesBatch(
     ? indexTools(next)
     : undefined;
   let changed = false;
-  for (const update of updates) changed = applyEntryUpdate(next, update, toolIndexes) || changed;
+  for (const update of updates)
+    changed = applyEntryUpdate(next, update, toolIndexes, created) || changed;
   return changed ? next : entries;
 }
 
@@ -261,6 +291,7 @@ function applyEntryUpdate(
   entries: AgentEntry[],
   update: Record<string, unknown>,
   toolIndexes?: Map<string, number>,
+  created?: number,
 ): boolean {
   const type = update.sessionUpdate;
   if (
@@ -282,7 +313,12 @@ function applyEntryUpdate(
       entries[entries.length - 1] = { ...last, text: last.text + block.text };
       return true;
     }
-    entries.push({ id: crypto.randomUUID(), type: role, text: block.text });
+    entries.push({
+      id: crypto.randomUUID(),
+      type: role,
+      text: block.text,
+      ...(created !== undefined ? { created } : {}),
+    });
     return true;
   }
   if (type === 'tool_call' || type === 'tool_call_update') {
@@ -336,6 +372,9 @@ function applyEntryUpdate(
       ...(input !== undefined ? { input } : {}),
       ...(output !== undefined ? { output } : {}),
       terminalIds,
+      ...((existing?.created ?? created) !== undefined
+        ? { created: existing?.created ?? created }
+        : {}),
     };
     if (index >= 0) entries[index] = next;
     else {

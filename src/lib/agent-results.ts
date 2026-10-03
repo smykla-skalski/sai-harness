@@ -124,6 +124,32 @@ export function spawnReceiptsForSource(
   );
 }
 
+export type SpawnTimelineEntry<T> =
+  T | { type: 'spawn-response'; id: string; receipt: SpawnReceipt };
+
+export function withSpawnResponses<T>(
+  entries: T[],
+  receipts: SpawnReceipt[],
+  created: (entry: T) => number | undefined,
+): SpawnTimelineEntry<T>[] {
+  const finished = receipts
+    .filter((receipt) => receiptIsSettled(receipt.state))
+    .toSorted((a, b) => a.updated - b.updated);
+  const timeline: SpawnTimelineEntry<T>[] = [];
+  let next = 0;
+  for (const entry of entries) {
+    const time = created(entry) ?? 0;
+    while (next < finished.length && finished[next].updated < time) {
+      const receipt = finished[next++];
+      timeline.push({ type: 'spawn-response', id: `spawn:${receipt.receiptId}`, receipt });
+    }
+    timeline.push(entry);
+  }
+  for (const receipt of finished.slice(next))
+    timeline.push({ type: 'spawn-response', id: `spawn:${receipt.receiptId}`, receipt });
+  return timeline;
+}
+
 export function acpReceiptState(receipt: SpawnReceipt, activity: AgentActivity | null): SpawnState {
   if (!receipt.targetId || !receipt.turnId || !activity) return 'unavailable';
   const sessionId = receipt.targetId.slice(`acp:${receipt.provider}:`.length);

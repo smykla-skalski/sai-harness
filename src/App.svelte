@@ -12,6 +12,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
   import SpawnActivity from './SpawnActivity.svelte';
+  import SpawnResponse from './SpawnResponse.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import DiffPanel from './DiffPanel.svelte';
@@ -84,6 +85,7 @@
     forgetRecentTranscript,
     loadAgentThreads,
     saveAgentThreads,
+    updateEntriesInPlace,
     type AgentEntry,
     type AgentAvailability,
     type AgentEvent,
@@ -124,6 +126,7 @@
     receiptIsSettled,
     saveBoundedReceipt,
     spawnReceiptsForSource,
+    withSpawnResponses,
     type SpawnReceipt,
   } from './lib/agent-results';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
@@ -947,6 +950,13 @@
   let chatMessages = $derived(
     messages.filter((message) => message.type === 'user' || message.type === 'assistant'),
   );
+  const displayChatMessages = $derived(
+    withSpawnResponses(
+      chatMessages,
+      spawnReceiptsForSource(spawnReceipts, sessionID ? `opencode:${sessionID}` : null, directory),
+      (message) => message.time.created,
+    ),
+  );
   $effect(() => {
     if (!sessionID || timelineSession !== sessionID || !setup) return;
     const context = openCodeContextUsage(messages, setup.models);
@@ -1389,6 +1399,7 @@
     await resync().catch((cause) => {
       error = describe(cause);
     });
+    await reconcileOpenCodeSpawnReceipts();
     scheduleInboxRefresh();
     eventController = new AbortController();
     connecting = false;
@@ -1626,6 +1637,14 @@
     return spawnReceipts.find((item) => item.receiptId === receipt.receiptId) ?? receipt;
   }
 
+  async function reconcileOpenCodeSpawnReceipts() {
+    await Promise.all(
+      spawnReceipts
+        .filter((receipt) => receipt.provider === 'opencode' && !receiptIsSettled(receipt.state))
+        .map((receipt) => currentSpawnReceipt(receipt)),
+    );
+  }
+
   function reconcileAcpSpawnReceipt(
     receipt: SpawnReceipt,
     agentActivity: Awaited<ReturnType<typeof acp.activity>>[AgentId] | null,
@@ -1639,8 +1658,46 @@
         state,
         result: spawnOutput.get(receipt.receiptId) ?? receipt.result,
       });
+      if (state === 'completed' && !spawnOutput.has(receipt.receiptId))
+        void recoverAcpSpawnResult(receipt).catch(() => undefined);
       if (receipt.targetId && activeSpawnTargets.get(receipt.targetId) === receipt.receiptId)
         activeSpawnTargets.delete(receipt.targetId);
+    }
+  }
+
+  async function recoverAcpSpawnResult(receipt: SpawnReceipt) {
+    if (!receipt.targetId || !receipt.targetDirectory || !receipt.prompt) return;
+    const sessionId = receipt.targetId.slice(`acp:${receipt.provider}:`.length);
+    const replay: AgentEntry[] = [];
+    const unlisten = await listen<AgentEvent>('acp-event', ({ payload }) => {
+      if (payload.agent !== receipt.provider || payload.message.method !== 'session/update') return;
+      const params = payload.message.params;
+      if (params?.sessionId !== sessionId) return;
+      const update = params.update;
+      if (update && typeof update === 'object')
+        updateEntriesInPlace(replay, update as Record<string, unknown>);
+    });
+    setAgentReplay(receipt.provider, sessionId, true);
+    try {
+      await acp.connect(receipt.provider);
+      await acp.load(receipt.provider, receipt.targetDirectory, sessionId);
+      const promptIndex = replay.findLastIndex(
+        (entry) => entry.type === 'user' && entry.text.includes(receipt.prompt!),
+      );
+      if (promptIndex < 0) return;
+      const following = replay.slice(promptIndex + 1);
+      const nextUser = following.findIndex((entry) => entry.type === 'user');
+      const turn = nextUser < 0 ? following : following.slice(0, nextUser);
+      const result = turn
+        .flatMap((entry) => (entry.type === 'assistant' ? [entry.text] : []))
+        .join('\n')
+        .slice(-16_000);
+      if (result) updateSpawnReceipt(receipt.receiptId, { result });
+    } catch {
+      return;
+    } finally {
+      setAgentReplay(receipt.provider, sessionId, false);
+      unlisten();
     }
   }
 
@@ -5953,6 +6010,7 @@
           void resync().catch((cause) => {
             error = describe(cause);
           });
+          void reconcileOpenCodeSpawnReceipts();
         }
         if (
           [
@@ -6902,8 +6960,10 @@
                         >{/each}
                     </div>{/if}
                 </div>{/if}
-              {#each chatMessages as message (message.id)}
-                {#if message.type === 'user'}
+              {#each displayChatMessages as message (message.id)}
+                {#if message.type === 'spawn-response'}
+                  <SpawnResponse receipt={message.receipt} />
+                {:else if message.type === 'user'}
                   {@const attribution = coordinationMessageForText(
                     message.text,
                     coordinationMessages.filter(

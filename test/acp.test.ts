@@ -4,6 +4,7 @@ import {
   forgetRecentTranscript,
   groupAgentEntries,
   loadRecentTranscript,
+  restoreEntryTimes,
   saveRecentTranscript,
   updateEntries,
   updateEntriesBatch,
@@ -144,6 +145,23 @@ void test('batched and replayed ACP updates preserve transcript order and conten
   assert.deepEqual(normalizeEntries(replayed), normalizeEntries(expected));
   assert.deepEqual(seed, snapshot);
   assert.equal(updateEntriesBatch(seed, [{ sessionUpdate: 'unknown' }]), seed);
+  assert.equal(updateEntriesBatch([], updates, 1234)[0]?.created, 1234);
+});
+
+void test('history replay keeps recent message times for subagent order', () => {
+  const history: AgentEntry[] = [
+    { id: 'replay-old', type: 'user', text: 'Old' },
+    { id: 'replay-reply', type: 'assistant', text: 'Child done' },
+    { id: 'replay-next', type: 'user', text: 'Next task' },
+  ];
+  const recent: AgentEntry[] = [
+    { id: 'cached-reply', type: 'assistant', text: 'Child done', created: 10 },
+    { id: 'cached-next', type: 'user', text: 'Next task', created: 30 },
+  ];
+  assert.deepEqual(
+    restoreEntryTimes(history, recent).map((entry) => entry.created),
+    [undefined, 10, 30],
+  );
 });
 
 void test('recent transcript cache keeps the latest entries within a size budget', () => {

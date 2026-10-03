@@ -5,11 +5,6 @@
 
   let { receipts }: { receipts: SpawnReceipt[] } = $props();
   const active = $derived(receipts.filter((receipt) => !receiptIsSettled(receipt.state)));
-  const finished = $derived(
-    receipts
-      .filter((receipt) => receiptIsSettled(receipt.state))
-      .toSorted((a, b) => a.updated - b.updated),
-  );
 
   function label(receipt: SpawnReceipt): string {
     return receipt.provider === 'opencode'
@@ -19,21 +14,6 @@
         : 'Claude';
   }
 </script>
-
-{#each finished as receipt (receipt.receiptId)}
-  <article
-    class="message assistant-message spawn-response"
-    aria-label={`${label(receipt)} subagent response`}
-  >
-    <div class="avatar agent-avatar">↳</div>
-    <div class="message-body">
-      <div class="message-author">{label(receipt)} · subagent · {receipt.state}</div>
-      {#if receipt.result}<Markdown source={receipt.result} />{/if}
-      {#if receipt.error}<p class="spawn-error">{receipt.error}</p>{/if}
-      {#if !receipt.result && !receipt.error}<p>{receipt.state}</p>{/if}
-    </div>
-  </article>
-{/each}
 
 {#if active.length}
   <section class="spawn-activity" aria-label="Running subagents">
@@ -88,11 +68,5 @@
   .spawn-output {
     max-height: 240px;
     overflow: auto;
-  }
-  .spawn-response {
-    width: 100%;
-  }
-  .spawn-error {
-    color: var(--sui-danger);
   }
 </style>

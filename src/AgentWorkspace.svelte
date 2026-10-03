@@ -5,6 +5,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
   import SpawnActivity from './SpawnActivity.svelte';
+  import SpawnResponse from './SpawnResponse.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import { toolInput } from './lib/tool-display';
   import HarnessIcon from './HarnessIcon.svelte';
@@ -22,6 +23,7 @@
     acp,
     groupAgentEntries,
     loadRecentTranscript,
+    restoreEntryTimes,
     saveRecentTranscript,
     updateEntriesBatch,
     updateEntriesInPlace,
@@ -36,7 +38,7 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { AgentUsage } from './lib/agent-usage';
-  import type { SpawnReceipt } from './lib/agent-results';
+  import { withSpawnResponses, type SpawnReceipt } from './lib/agent-results';
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     clipboardFiles,
@@ -217,7 +219,9 @@
   let historyAttempted = $state(false);
   let showingEarlier = false;
   const visibleEntries = $derived(entries.slice(-visibleCount));
-  const displayEntries = $derived(groupAgentEntries(visibleEntries));
+  const displayEntries = $derived(
+    withSpawnResponses(groupAgentEntries(visibleEntries), spawnReceipts, (entry) => entry.created),
+  );
   const toolFailed = (tool: AgentTool) => /fail|error|reject/i.test(tool.status);
   const toolRunning = (tool: AgentTool) => /^(pending|in_progress|stopping)$/i.test(tool.status);
   let replaying = false;
@@ -342,7 +346,7 @@
     clearTimeout(updateTimer);
     updateTimer = undefined;
     if (!pendingUpdates.length) return;
-    const next = updateEntriesBatch(entries, pendingUpdates);
+    const next = updateEntriesBatch(entries, pendingUpdates, Date.now());
     pendingUpdates = [];
     entries = next;
     if (autoFollow) void follow();
@@ -401,7 +405,7 @@
     try {
       await acp.load(agent, directory, id);
       if (current !== generation) return;
-      entries = replayEntries;
+      entries = restoreEntryTimes(replayEntries, entries);
       visibleCount = 50;
       historyLoaded = true;
       rememberTranscript();
@@ -1065,7 +1069,9 @@
       </ToolActivity>
     {/snippet}
     {#each displayEntries as entry (entry.id)}
-      {#if entry.type === 'tool-group'}
+      {#if entry.type === 'spawn-response'}
+        <SpawnResponse receipt={entry.receipt} />
+      {:else if entry.type === 'tool-group'}
         {@const hookRules = blockedHookRules(entry.tools)}
         {#if hookRules.length}{@render hookNotice(hookRules)}{/if}
         {#if isBusy && (entry.id === displayEntries.at(-1)?.id || entry.tools.some(toolRunning))}

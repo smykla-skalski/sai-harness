@@ -6,6 +6,7 @@
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import Markdown from './Markdown.svelte';
   import SpawnActivity from './SpawnActivity.svelte';
+  import SpawnResponse from './SpawnResponse.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
@@ -15,7 +16,7 @@
   import { runSerialOpenCodeTurn } from './lib/opencode-turns';
   import PromptPanel from './PromptPanel.svelte';
   import type { AgentThread } from './lib/acp';
-  import type { SpawnReceipt } from './lib/agent-results';
+  import { withSpawnResponses, type SpawnReceipt } from './lib/agent-results';
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     coordinationMessageForText,
@@ -69,6 +70,11 @@
 
   let session = $state<SessionInfo | null>(null);
   let messages = $state<SessionMessageInfo[]>([]);
+  const displayMessages = $derived(
+    withSpawnResponses(messages, spawnReceipts, (message) =>
+      'time' in message ? message.time.created : undefined,
+    ),
+  );
   let cursor = $state<string | null>(null);
   let pendingPermissions = $state<PermissionRequest[]>([]);
   let pendingForms = $state<FormInfo[]>([]);
@@ -605,8 +611,10 @@
         <h1>Work with OpenCode</h1>
         <p>Describe the work. Sail will show messages, tools, and approvals here.</p>
       </div>{/if}
-    {#each messages as message (message.id)}
-      {#if message.type === 'user'}
+    {#each displayMessages as message (message.id)}
+      {#if message.type === 'spawn-response'}
+        <SpawnResponse receipt={message.receipt} />
+      {:else if message.type === 'user'}
         {@const attribution = coordinationMessageForText(message.text, coordinationMessages)}
         <article class="agent-message message user-message">
           <div class="avatar user-avatar">{attribution ? '↗' : 'You'}</div>
