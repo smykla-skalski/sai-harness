@@ -1534,7 +1534,7 @@
     setSetting('sai-agent-spawn-receipts', JSON.stringify(spawnReceipts));
   }
 
-  function updateSpawnReceipt(id: string, changes: Partial<SpawnReceipt>) {
+  function updateSpawnReceipt(id: string, changes: Partial<SpawnReceipt>, preserveUpdated = false) {
     const current = spawnReceipts.find((item) => item.receiptId === id);
     if (!current) return;
     if (
@@ -1547,7 +1547,11 @@
       Object.entries(changes).every(([key, value]) => current[key as keyof SpawnReceipt] === value)
     )
       return;
-    saveSpawnReceipt({ ...current, ...changes, updated: Date.now() });
+    saveSpawnReceipt({
+      ...current,
+      ...changes,
+      updated: preserveUpdated ? current.updated : Date.now(),
+    });
   }
 
   async function settleOpenCodeReceipt(
@@ -1692,7 +1696,7 @@
         .flatMap((entry) => (entry.type === 'assistant' ? [entry.text] : []))
         .join('\n')
         .slice(-16_000);
-      if (result) updateSpawnReceipt(receipt.receiptId, { result });
+      if (result) updateSpawnReceipt(receipt.receiptId, { result }, true);
     } catch {
       return;
     } finally {
