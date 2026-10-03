@@ -116,11 +116,11 @@ describe('ACP agent threads', () => {
     await $('.agent-launches button:nth-child(2)').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Codex'));
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
-    await $('.agent-composer textarea').setValue('Try Codex');
-    await $('.agent-actions button').click();
     await expect($('.agent-auth')).toHaveText(expect.stringContaining('Sign in with ChatGPT'));
-    await expect($('.agent-composer textarea')).toHaveValue('Try Codex');
     await $('.agent-auth button').click();
+    await expect($('.option-trigger[aria-label^="Model:"]')).toHaveText('Test model');
+    await expect($('.option-trigger[aria-label^="Effort:"]')).toHaveText('Medium');
+    await $('.agent-composer textarea').setValue('Try Codex');
     await $('.agent-actions button').click();
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(expect.stringContaining('Done: Try Codex'));

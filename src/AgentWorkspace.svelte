@@ -259,7 +259,10 @@
   $effect(() => {
     if (ready && !thread && !activeSessionId && !sessionWarmupAttempted && !ephemeral) {
       sessionWarmupAttempted = true;
-      void ensureSession('New thread').catch((cause) => (error = describe(cause)));
+      void ensureSession('New thread').catch((cause) => {
+        error = describe(cause);
+        authNeeded = /auth|login|sign.?in/i.test(error);
+      });
     }
   });
   const modelOption = $derived(
@@ -935,7 +938,10 @@
       authNeeded = false;
       if (activeSessionId) await activate(activeSessionId);
       else if (pickerOpen) await ensureSession('New thread');
-      else ready = true;
+      else {
+        ready = true;
+        sessionWarmupAttempted = false;
+      }
     } catch (cause) {
       error = describe(cause);
     } finally {
