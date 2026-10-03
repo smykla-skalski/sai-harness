@@ -314,6 +314,16 @@ describe('ACP agent threads', () => {
   });
 
   it('shows an agent shell command and its output in tool activity', async () => {
+    await browser.execute((path) => {
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [], worktrees: {} }),
+      );
+      localStorage.removeItem('sai-pane-layouts');
+      localStorage.removeItem('sail-agent-threads');
+    }, realpathSync(repository));
+    await browser.refresh();
     await $('.agent-launches button').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Activity demo');
@@ -326,7 +336,8 @@ describe('ACP agent threads', () => {
     const command = group.$('.tool-activity-command');
     await expect(command).toHaveText('npm test');
     const tools = await group.$$('.tool-activity');
-    await tools.at(-1)!.$('summary').click();
+    if ((await tools.at(-1)!.getAttribute('open')) === null)
+      await tools.at(-1)!.$('summary').click();
     await expect(group).toHaveText(expect.stringContaining('All checks passed.'));
   });
 
