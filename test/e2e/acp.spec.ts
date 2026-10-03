@@ -4,20 +4,17 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+async function selectClaudeThread(title: string) {
+  await $('.agent-menu-launch').click();
+  const search = $('[aria-label="Search command palette"]');
+  await search.setValue('Claude');
+  await browser.keys('Enter');
+  await search.setValue(title);
+  await browser.keys('Enter');
+}
+
 describe('ACP agent threads', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sail-acp-e2e-'));
-
-  async function selectClaudeThread(title: string) {
-    await browser.keys(['Meta', 'k']);
-    const search = $('[aria-label="Search command palette"]');
-    await search.setValue(repository.split('/').at(-1)!);
-    await browser.keys('Enter');
-    await $('[data-kind="worktree"]').click();
-    await search.setValue('Claude');
-    await browser.keys('Enter');
-    await search.setValue(title);
-    await browser.keys('Enter');
-  }
 
   before(() => {
     execFileSync('git', ['init', '-q', repository]);
@@ -182,6 +179,7 @@ describe('ACP agent threads', () => {
     await $('.agent-launches button:nth-child(2)').click();
     await browser.pause(1800);
     await selectClaudeThread('Delayed approval');
+    await $('.agent-permission').waitForDisplayed();
     await expect($('.agent-permission')).toHaveText(expect.stringContaining('Run test action'));
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(

@@ -6758,7 +6758,7 @@
           bind:this={chatArea}
         >
           {#if acpAgent}
-            {#key acpAgent}
+            {#key `${directory}:${acpAgent}`}
               <AgentWorkspace
                 agent={acpAgent}
                 agentName={agentAvailability.find((agent) => agent.id === acpAgent)?.name ??
