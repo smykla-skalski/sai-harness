@@ -59,6 +59,7 @@
   } from './lib/task-notification';
   import { blockedHookRules, splitKlaudiushMessage, type KlaudiushRule } from './lib/klaudiush';
   import { getSetting, removeSetting, setSetting } from './lib/settings';
+  import { recordDiagnostic, type DiagnosticEvent } from './lib/diagnostics';
 
   interface Props {
     agent: AgentId;
@@ -138,10 +139,19 @@
   });
   let queued = $state<QueuedAgentMessage[]>([]);
   let queuePaused = $state(false);
+  function diagnostic(event: DiagnosticEvent, sessionId = activeSessionId, turnId = activeTurnId) {
+    recordDiagnostic(event, {
+      agent,
+      sessionId,
+      turnId,
+      queueLength: queued.length,
+    });
+  }
   $effect(() => {
     if (isBusy || !ready || queuePaused || !queued.length) return;
     const [next, ...remaining] = queued;
     queued = remaining;
+    diagnostic('queue_dispatch_started');
     if (activeSessionId) saveQueuedAgentMessages(agent, directory, activeSessionId, queued);
     void send(next.text, next);
   });
@@ -767,6 +777,7 @@
     }
     if (!external && isBusy && (text || clipboardAttachments.length)) {
       queued = [...queued, { text, images: [...images], attachments: [...clipboardAttachments] }];
+      diagnostic('message_queued');
       if (activeSessionId) saveQueuedAgentMessages(agent, directory, activeSessionId, queued);
       draft = '';
       images = [];
@@ -789,6 +800,7 @@
     let finalStatus: ThreadStatus = 'done';
     let notifyOnDone = true;
     let keepImages = false;
+    let phase: 'session' | 'config' | 'snapshot' | 'prompt' = 'session';
     let deliverySessionId = activeSessionId;
     busy = true;
     if (activityThread) onstatus(activityThread, 'working');
@@ -810,6 +822,7 @@
         activityThread = { ...activityThread, title: text.slice(0, 60) || 'Attached files' };
       if (current !== generation && (!disposed || ephemeral)) return;
       if (activityThread) onstatus(activityThread, 'working');
+      phase = 'config';
       if (settingConfig) await settingConfig;
       if (configFailure) throw new Error(configFailure);
       if (activityThread) onactivity(activityThread);
@@ -827,16 +840,19 @@
         }
         return;
       }
-      if (!ephemeral)
+      if (!ephemeral) {
+        phase = 'snapshot';
         await invoke('record_turn_snapshot', {
           path: turnDirectory,
           thread: `acp:${turnAgent}:${id}`,
         });
+      }
       const promptText =
         ephemeral && seedContext && entries.length === 1
           ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
           : text;
       const filePaths = sentClipboard.filter((item) => !item.image).map((item) => item.path);
+      phase = 'prompt';
       const result = await acp.prompt(
         turnAgent,
         id!,
@@ -890,6 +906,7 @@
         const messages = [retry, ...following];
         saveQueuedAgentMessages(turnAgent, turnDirectory, deliverySessionId, messages);
         setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, true);
+        diagnostic('queue_paused', deliverySessionId, turnId);
         keepImages = true;
         if (current === generation && activeSessionId === deliverySessionId) {
           queued = messages;
@@ -897,6 +914,14 @@
         }
       }
       if (current === generation) {
+        recordDiagnostic('turn_failed', {
+          agent: turnAgent,
+          sessionId: deliverySessionId,
+          turnId,
+          queueLength: queued.length,
+          errorName: cause instanceof Error ? cause.name : typeof cause,
+          phase,
+        });
         error = describe(cause);
         authNeeded = /auth|login|sign.?in/i.test(error);
         if (retryQueued) {
@@ -947,6 +972,7 @@
 
   async function stop() {
     stopRequested = true;
+    diagnostic('stop_requested');
     if (!activeSessionId) return;
     const current = generation;
     const sessionId = activeSessionId;
@@ -1082,6 +1108,7 @@
     )
       return;
     event.preventDefault();
+    diagnostic('escape_cancel');
     void stop();
   }
 </script>

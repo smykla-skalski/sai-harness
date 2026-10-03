@@ -72,6 +72,8 @@ Select **Pick element** in a browser pane to highlight a page element, then clic
 
 Sail saves repositories, groups, selected sessions, drafts, and preferences to `sail/settings.json` in the OS config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, `%APPDATA%` on Windows). `mise run dev` and packaged Sail use the same file. Existing WebView settings migrate on first launch from each origin.
 
+Sail writes structured JSON line diagnostics to its app log directory: `~/Library/Logs/dev.smykla.sai-harness/sail.log` on macOS, and the OS local data directory under `dev.smykla.sai-harness/logs/sail.log` on Linux and Windows. It rotates at 2 MiB and keeps three archives (`sail.log.1` through `.3`). The log records app, frontend error, OpenCode runtime, and Claude/Codex ACP lifecycle events. It includes session and turn IDs, but excludes prompts, tool output, and agent stderr text. A running Sail app must be restarted from an updated build before these logs appear.
+
 Other tasks:
 
 ```sh

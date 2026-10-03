@@ -57,6 +57,7 @@ struct AgentEvent {
 }
 
 struct Connection {
+    agent: String,
     child: Mutex<Child>,
     #[cfg(unix)]
     watchdog: Mutex<crate::child_watchdog::ChildWatchdog>,
@@ -126,6 +127,15 @@ impl Connection {
             return Err("Agent process stopped. Reopen the thread to reconnect.".into());
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let started = Instant::now();
+        let session_id = params
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        crate::diagnostics::record(
+            "acp_request_started",
+            json!({"agent":self.agent,"method":method,"requestId":id,"sessionId":session_id}),
+        );
         let (sender, receiver) = mpsc::channel();
         self.pending
             .lock()
@@ -134,6 +144,12 @@ impl Connection {
         if let Err(error) =
             self.write(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
         {
+            crate::diagnostics::record(
+                "acp_request_write_failed",
+                json!({
+                    "agent":self.agent,"method":method,"requestId":id,"sessionId":session_id
+                }),
+            );
             self.pending
                 .lock()
                 .map_err(|cause| cause.to_string())?
@@ -141,12 +157,28 @@ impl Connection {
             return Err(error);
         }
         let response = receiver.recv_timeout(timeout).map_err(|_| {
+            crate::diagnostics::record(
+                "acp_request_timeout",
+                json!({
+                    "agent":self.agent,"method":method,"requestId":id,"sessionId":session_id,
+                    "elapsedMs":started.elapsed().as_millis()
+                }),
+            );
             self.pending
                 .lock()
                 .ok()
                 .and_then(|mut pending| pending.remove(&id));
             format!("Agent did not answer {method} in time.")
         })?;
+        crate::diagnostics::record(
+            "acp_request_finished",
+            json!({
+                "method":method,"requestId":id,"elapsedMs":started.elapsed().as_millis(),
+                "agent":self.agent,"sessionId":session_id,
+                "ok":response.get("error").is_none(),
+                "stopReason":response.pointer("/result/stopReason").and_then(Value::as_str)
+            }),
+        );
         if let Some(error) = response.get("error") {
             return Err(error
                 .get("message")
@@ -555,15 +587,23 @@ fn connect_blocking(
     let input = child.stdin.take().ok_or("Agent stdin unavailable.")?;
     let output = child.stdout.take().ok_or("Agent stdout unavailable.")?;
     if let Some(stderr) = child.stderr.take() {
+        let stderr_agent = agent.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
-                if line.is_err() {
-                    break;
+                match line {
+                    Ok(line) => crate::diagnostics::record(
+                        "agent_stderr",
+                        json!({
+                            "agent":stderr_agent,"bytes":line.len()
+                        }),
+                    ),
+                    Err(_) => break,
                 }
             }
         });
     }
     let runtime = Arc::new(Connection {
+        agent: agent.clone(),
         child: Mutex::new(child),
         #[cfg(unix)]
         watchdog: Mutex::new(watchdog),
@@ -587,8 +627,31 @@ fn connect_blocking(
         for line in BufReader::new(output).lines() {
             let Ok(line) = line else { break };
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                crate::diagnostics::record(
+                    "acp_invalid_json",
+                    json!({"agent":agent_id,"bytes":line.len()}),
+                );
                 continue;
             };
+            if let Some(update) = message.pointer("/params/update") {
+                if matches!(
+                    update.get("sessionUpdate").and_then(Value::as_str),
+                    Some("tool_call_update")
+                ) {
+                    let status = update.get("status").and_then(Value::as_str);
+                    if matches!(status, Some("completed" | "failed")) {
+                        crate::diagnostics::record(
+                            "acp_tool_finished",
+                            json!({
+                                "agent":agent_id,
+                                "sessionId":message.pointer("/params/sessionId").and_then(Value::as_str),
+                                "toolCallId":update.get("toolCallId").and_then(Value::as_str),
+                                "status":status
+                            }),
+                        );
+                    }
+                }
+            }
             if message.get("method").is_some() {
                 if let Some(method) = message.get("method").and_then(Value::as_str) {
                     if method.starts_with("terminal/") {
@@ -665,6 +728,7 @@ fn connect_blocking(
             }
         }
         reader.alive.store(false, Ordering::Release);
+        crate::diagnostics::record("agent_disconnected", json!({"agent":agent_id}));
         app.state::<crate::acp_terminal::AcpTerminalManager>()
             .stop_agent(&agent_id);
         reader.ready.notify_all();
@@ -893,6 +957,12 @@ pub async fn acp_prompt(
         prompts.finished.remove(&session_id);
         prompts.active.insert(session_id.clone(), turn_id.clone());
     }
+    crate::diagnostics::record(
+        "prompt_started",
+        json!({
+            "agent":agent,"sessionId":session_id,"turnId":turn_id
+        }),
+    );
     tauri::async_runtime::spawn_blocking(move || {
         let result = runtime.request(
             "session/prompt",
@@ -907,6 +977,11 @@ pub async fn acp_prompt(
             .map(|mut cancelled| cancelled.remove(&turn_id))
             .unwrap_or(false);
         let status = if result.is_err() { "failed" } else { "done" };
+        crate::diagnostics::record("prompt_finished", json!({
+            "agent":agent,"sessionId":session_id,"turnId":turn_id,
+            "status":status,"explicitlyCancelled":explicitly_cancelled,
+            "stopReason":result.as_ref().ok().and_then(|value| value.get("stopReason")).and_then(Value::as_str)
+        }));
         let notify = !explicitly_cancelled
             && result
                 .as_ref()
@@ -964,7 +1039,14 @@ pub fn acp_cancel(
         .active
         .get(&session_id)
         .cloned();
-    if let Some(turn_id) = turn_id.or(current_turn) {
+    let cancelled_turn = turn_id.or(current_turn);
+    crate::diagnostics::record(
+        "cancel_requested",
+        json!({
+            "agent":agent,"sessionId":session_id,"turnId":cancelled_turn
+        }),
+    );
+    if let Some(turn_id) = cancelled_turn {
         runtime
             .cancelled_prompts
             .lock()

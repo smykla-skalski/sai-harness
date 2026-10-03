@@ -69,6 +69,7 @@ pub mod browser_agent;
 #[cfg(unix)]
 mod child_watchdog;
 mod dev_servers;
+mod diagnostics;
 mod github;
 mod settings;
 mod terminal;
@@ -434,6 +435,10 @@ fn start_runtime(
     binary_path: Option<String>,
     restart: bool,
 ) -> Result<RuntimeInfo, String> {
+    diagnostics::record(
+        "runtime_start_requested",
+        serde_json::json!({"restart":restart}),
+    );
     let mut runtime = manager.0.lock().map_err(|error| error.to_string())?;
     let binary = resolve_binary(binary_path)?;
     if let Some(existing) = runtime.as_mut() {
@@ -441,6 +446,10 @@ fn start_runtime(
             && existing.binary == binary
             && existing.child.try_wait().ok().flatten().is_none()
         {
+            diagnostics::record(
+                "runtime_reused",
+                serde_json::json!({"pid":existing.child.id()}),
+            );
             return Ok(existing.info.clone());
         }
     }
@@ -451,9 +460,23 @@ fn start_runtime(
     command.process_group(0);
     let mut child = command
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "Could not start OpenCode. Check the binary path and retry.".to_string())?;
+    diagnostics::record("runtime_spawned", serde_json::json!({"pid":child.id()}));
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                match line {
+                    Ok(line) => diagnostics::record(
+                        "runtime_stderr",
+                        serde_json::json!({"bytes":line.len()}),
+                    ),
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     #[cfg(unix)]
     let watchdog = child_watchdog::ChildWatchdog::start(child.id()).map_err(|error| {
@@ -493,6 +516,13 @@ fn start_runtime(
         Ok(info) => info,
         Err(_) => {
             let exit = child.try_wait().ok().flatten();
+            diagnostics::record(
+                "runtime_start_failed",
+                serde_json::json!({
+                    "reason":if exit.is_some() {"early_exit"} else {"timeout"},
+                    "exitCode":exit.and_then(|status| status.code())
+                }),
+            );
             stop_child(&mut child);
             return Err(match exit {
                 Some(status) => format!(
@@ -516,12 +546,17 @@ fn start_runtime(
         std::thread::sleep(Duration::from_millis(200));
     }
     if !ready {
+        diagnostics::record(
+            "runtime_start_failed",
+            serde_json::json!({"reason":"api_probe"}),
+        );
         stop_child(&mut child);
         return Err(
             "OpenCode did not respond with a compatible v2 API. Check its configuration and retry."
                 .to_string(),
         );
     }
+    diagnostics::record("runtime_ready", serde_json::json!({"pid":child.id()}));
     *runtime = Some(OwnedRuntime {
         child,
         #[cfg(unix)]
@@ -1387,6 +1422,9 @@ fn local_plugin_version(path: String) -> Option<String> {
 pub fn run() {
     let builder = tauri::Builder::default()
         .setup(|_app| {
+            if let Err(error) = diagnostics::init(_app.handle()) {
+                eprintln!("Sail diagnostics unavailable: {error}");
+            }
             browser_agent::start_bridge(_app.handle())?;
             #[cfg(any(target_os = "macos", windows))]
             configure_pane_menu(_app.handle())?;
@@ -1399,6 +1437,7 @@ pub fn run() {
         .manage(browser_agent::BrowserManager::default())
         .manage(browser::CaptureStore::default())
         .invoke_handler(tauri::generate_handler![
+            diagnostics::diagnostic_event,
             settings::load_settings,
             settings::migrate_settings,
             settings::save_setting,
@@ -1492,6 +1531,7 @@ pub fn run() {
         .expect("failed to build Sail")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                diagnostics::record("app_exit", serde_json::json!({}));
                 if let Some(terminals) = app.try_state::<acp_terminal::AcpTerminalManager>() {
                     terminals.shutdown();
                 }
