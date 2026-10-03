@@ -1287,7 +1287,7 @@ fn call_bridge(params: &Value) -> Value {
     let token = std::env::var("SAIL_BROWSER_TOKEN").unwrap_or_default();
     let request = json!({
         "token":token,
-        "sessionId":params.pointer("/_meta/sessionID").and_then(Value::as_str),
+        "sessionId":mcp_session_id(params),
         "name":params.get("name").and_then(Value::as_str),
         "arguments":params.get("arguments").cloned().unwrap_or_else(|| json!({})),
     });
@@ -1306,6 +1306,13 @@ fn call_bridge(params: &Value) -> Value {
         serde_json::from_str(&line).map_err(|error| error.to_string())
     })();
     response.unwrap_or_else(|error| json!({"content":[{"type":"text","text":format!("Sail browser bridge: {error}")}],"isError":true}))
+}
+
+fn mcp_session_id(params: &Value) -> Option<&str> {
+    let meta = params.get("_meta")?;
+    meta.get("ai.opencode/sessionID")
+        .and_then(Value::as_str)
+        .or_else(|| meta.get("sessionID").and_then(Value::as_str))
 }
 
 #[cfg(test)]
@@ -1339,5 +1346,19 @@ mod skill_tests {
             call_bridge(&json!({"name":"sail_skill","arguments":{}}))["content"][0]["text"],
             SAIL_SKILL
         );
+    }
+}
+
+#[cfg(test)]
+mod mcp_session_tests {
+    use super::mcp_session_id;
+    use serde_json::json;
+
+    #[test]
+    fn accepts_opencode_and_acp_session_metadata() {
+        let opencode = json!({"_meta":{"ai.opencode/sessionID":"ses_opencode"}});
+        let acp = json!({"_meta":{"sessionID":"acp-session"}});
+        assert_eq!(mcp_session_id(&opencode), Some("ses_opencode"));
+        assert_eq!(mcp_session_id(&acp), Some("acp-session"));
     }
 }
