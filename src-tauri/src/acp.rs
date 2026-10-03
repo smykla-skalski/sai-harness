@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -56,6 +58,9 @@ struct AgentEvent {
 
 struct Connection {
     child: Mutex<Child>,
+    #[cfg(unix)]
+    watchdog: Mutex<crate::child_watchdog::ChildWatchdog>,
+    stopped: AtomicBool,
     input: Mutex<ChildStdin>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
     permissions: Mutex<HashMap<String, PendingPermission>>,
@@ -85,19 +90,26 @@ pub struct PendingPermissionInfo {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.stop_child();
     }
 }
 
 impl Connection {
-    fn terminate(&self) {
+    fn stop_child(&self) {
         if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            if self.stopped.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            stop_process(&mut child);
         }
+        #[cfg(unix)]
+        if let Ok(mut watchdog) = self.watchdog.lock() {
+            watchdog.stop();
+        }
+    }
+
+    fn terminate(&self) {
+        self.stop_child();
         self.alive.store(false, Ordering::Release);
         self.ready.notify_all();
     }
@@ -159,10 +171,44 @@ impl Connection {
     }
 }
 
+fn stop_process(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{killpg, Signal};
+        use nix::unistd::Pid;
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+    }
+    #[cfg(windows)]
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[derive(Clone, Default)]
 pub struct AgentManager(Arc<Mutex<HashMap<String, Arc<Connection>>>>);
 
 impl AgentManager {
+    pub fn shutdown(&self) {
+        let connections = self
+            .0
+            .lock()
+            .ok()
+            .map(|mut agents| {
+                agents
+                    .drain()
+                    .map(|(_, runtime)| runtime)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for runtime in connections {
+            runtime.terminate();
+        }
+    }
+
     pub fn server_roots(&self) -> Vec<u32> {
         self.0
             .lock()
@@ -290,11 +336,7 @@ impl Drop for AgentManager {
         if Arc::strong_count(&self.0) != 1 {
             return;
         }
-        if let Ok(agents) = self.0.lock() {
-            for runtime in agents.values() {
-                runtime.terminate();
-            }
-        }
+        self.shutdown();
     }
 }
 
@@ -497,12 +539,19 @@ fn connect_blocking(
     if let (Some(name), Some(binary)) = (definition.binary_env, availability.binary_path) {
         command.env(name, binary);
     }
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("Could not start {}: {error}", definition.name))?;
+    #[cfg(unix)]
+    let watchdog = crate::child_watchdog::ChildWatchdog::start(child.id()).map_err(|error| {
+        stop_process(&mut child);
+        format!("Could not start {} watchdog: {error}", definition.name)
+    })?;
     let input = child.stdin.take().ok_or("Agent stdin unavailable.")?;
     let output = child.stdout.take().ok_or("Agent stdout unavailable.")?;
     if let Some(stderr) = child.stderr.take() {
@@ -516,6 +565,9 @@ fn connect_blocking(
     }
     let runtime = Arc::new(Connection {
         child: Mutex::new(child),
+        #[cfg(unix)]
+        watchdog: Mutex::new(watchdog),
+        stopped: AtomicBool::new(false),
         input: Mutex::new(input),
         pending: Mutex::new(HashMap::new()),
         permissions: Mutex::new(HashMap::new()),

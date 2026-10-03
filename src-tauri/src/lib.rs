@@ -3,13 +3,15 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::State;
 #[cfg(any(target_os = "macos", windows))]
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
+use tauri::{Manager, State};
 
 #[cfg(any(target_os = "macos", windows))]
 fn configure_pane_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -64,6 +66,8 @@ mod acp_terminal;
 mod attention;
 mod browser;
 pub mod browser_agent;
+#[cfg(unix)]
+mod child_watchdog;
 mod dev_servers;
 mod github;
 mod settings;
@@ -158,18 +162,21 @@ fn list_picker_directory(path: Option<String>) -> Result<PickerDirectory, String
 
 struct OwnedRuntime {
     child: Child,
+    #[cfg(unix)]
+    watchdog: child_watchdog::ChildWatchdog,
     info: RuntimeInfo,
     binary: OsString,
 }
 
-fn stop_child(child: &mut Child, binary: &Path) {
-    let _ = binary;
-    #[cfg(windows)]
-    if binary.extension().is_some_and(|extension| {
-        let extension = extension.to_string_lossy();
-        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-    }) && child.try_wait().ok().flatten().is_none()
+fn stop_child(child: &mut Child) {
+    #[cfg(unix)]
     {
+        use nix::sys::signal::{killpg, Signal};
+        use nix::unistd::Pid;
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+    }
+    #[cfg(windows)]
+    if child.try_wait().ok().flatten().is_none() {
         let _ = Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .stdout(Stdio::null())
@@ -182,12 +189,21 @@ fn stop_child(child: &mut Child, binary: &Path) {
 
 impl Drop for OwnedRuntime {
     fn drop(&mut self) {
-        stop_child(&mut self.child, Path::new(&self.binary));
+        stop_child(&mut self.child);
+        #[cfg(unix)]
+        self.watchdog.stop();
     }
 }
 
 #[derive(Default)]
 struct RuntimeManager(Mutex<Option<OwnedRuntime>>);
+
+impl RuntimeManager {
+    fn shutdown(&self) {
+        let owned = self.0.lock().ok().and_then(|mut runtime| runtime.take());
+        drop(owned);
+    }
+}
 
 #[tauri::command]
 async fn browser_detected_servers(
@@ -276,8 +292,11 @@ fn version_number(output: &str) -> Option<&str> {
 }
 
 fn compatible_version(binary: &Path) -> Result<(), String> {
-    let mut child = Command::new(binary)
-        .arg("--version")
+    let mut command = Command::new(binary);
+    command.arg("--version");
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -301,7 +320,7 @@ fn compatible_version(binary: &Path) -> Result<(), String> {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
-                stop_child(&mut child, binary);
+                stop_child(&mut child);
                 return Err(
                     "OpenCode version check timed out. Choose another binary in settings."
                         .to_string(),
@@ -426,12 +445,21 @@ fn start_runtime(
         }
     }
 
-    let mut child = Command::new(&binary)
-        .args(server_args())
+    let mut command = Command::new(&binary);
+    command.args(server_args());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "Could not start OpenCode. Check the binary path and retry.".to_string())?;
+
+    #[cfg(unix)]
+    let watchdog = child_watchdog::ChildWatchdog::start(child.id()).map_err(|error| {
+        stop_child(&mut child);
+        format!("Could not start OpenCode watchdog: {error}")
+    })?;
 
     let stdout = child
         .stdout
@@ -465,7 +493,7 @@ fn start_runtime(
         Ok(info) => info,
         Err(_) => {
             let exit = child.try_wait().ok().flatten();
-            stop_child(&mut child, Path::new(&binary));
+            stop_child(&mut child);
             return Err(match exit {
                 Some(status) => format!(
                     "OpenCode exited before becoming ready ({status}). Check its configuration and retry."
@@ -488,7 +516,7 @@ fn start_runtime(
         std::thread::sleep(Duration::from_millis(200));
     }
     if !ready {
-        stop_child(&mut child, Path::new(&binary));
+        stop_child(&mut child);
         return Err(
             "OpenCode did not respond with a compatible v2 API. Check its configuration and retry."
                 .to_string(),
@@ -496,6 +524,8 @@ fn start_runtime(
     }
     *runtime = Some(OwnedRuntime {
         child,
+        #[cfg(unix)]
+        watchdog,
         info: info.clone(),
         binary,
     });
@@ -1458,8 +1488,24 @@ pub fn run() {
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
     builder
-        .run(tauri::generate_context!())
-        .expect("failed to run Sail");
+        .build(tauri::generate_context!())
+        .expect("failed to build Sail")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(terminals) = app.try_state::<acp_terminal::AcpTerminalManager>() {
+                    terminals.shutdown();
+                }
+                if let Some(terminals) = app.try_state::<terminal::TerminalManager>() {
+                    terminals.shutdown();
+                }
+                if let Some(agents) = app.try_state::<acp::AgentManager>() {
+                    agents.shutdown();
+                }
+                if let Some(runtime) = app.try_state::<RuntimeManager>() {
+                    runtime.shutdown();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1472,8 +1518,37 @@ mod tests {
         server_args, version_number, working_tree_diff,
     };
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::Command;
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_reaps_runtime_child() {
+        let mut command = Command::new("sleep");
+        command.arg("30").process_group(0);
+        let child = command.spawn().unwrap();
+        let watchdog = super::child_watchdog::ChildWatchdog::start(child.id()).unwrap();
+        let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+        let runtime = super::RuntimeManager(std::sync::Mutex::new(Some(super::OwnedRuntime {
+            child,
+            watchdog,
+            info: super::RuntimeInfo {
+                url: String::new(),
+                password: String::new(),
+                binary_path: String::new(),
+            },
+            binary: "sleep".into(),
+        })));
+
+        runtime.shutdown();
+
+        assert!(matches!(
+            nix::sys::signal::kill(pid, None),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+    }
 
     #[test]
     fn parses_registered_and_prunable_worktrees() {

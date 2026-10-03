@@ -178,15 +178,28 @@ pub struct TerminalManager(Mutex<HashMap<String, Arc<TerminalSession>>>);
 
 impl Drop for TerminalManager {
     fn drop(&mut self) {
-        if let Ok(sessions) = self.0.lock() {
-            for session in sessions.values() {
-                session.stop();
-            }
-        }
+        self.shutdown();
     }
 }
 
 impl TerminalManager {
+    pub fn shutdown(&self) {
+        let sessions = self
+            .0
+            .lock()
+            .ok()
+            .map(|mut sessions| {
+                sessions
+                    .drain()
+                    .map(|(_, session)| session)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for session in sessions {
+            session.stop();
+        }
+    }
+
     pub fn server_roots(&self) -> Vec<(PathBuf, u32)> {
         self.0
             .lock()

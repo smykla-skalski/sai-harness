@@ -7,7 +7,7 @@ use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
@@ -21,6 +21,23 @@ pub struct AcpTerminalManager {
 }
 
 impl AcpTerminalManager {
+    pub fn shutdown(&self) {
+        let terminals = self
+            .active
+            .lock()
+            .ok()
+            .map(|mut terminals| {
+                terminals
+                    .drain()
+                    .map(|(_, terminal)| terminal)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for terminal in terminals {
+            let _ = stop(&terminal);
+        }
+    }
+
     pub fn server_roots(&self) -> Vec<(PathBuf, u32)> {
         self.active
             .lock()
@@ -103,11 +120,7 @@ impl AcpTerminalManager {
 
 impl Drop for AcpTerminalManager {
     fn drop(&mut self) {
-        if let Ok(terminals) = self.active.lock() {
-            for terminal in terminals.values() {
-                let _ = stop(terminal);
-            }
-        }
+        self.shutdown();
     }
 }
 
@@ -116,6 +129,9 @@ struct AcpTerminal {
     session_id: String,
     directory: PathBuf,
     child: Mutex<Child>,
+    #[cfg(unix)]
+    watchdog: Mutex<crate::child_watchdog::ChildWatchdog>,
+    stopped: AtomicBool,
     output: Mutex<TerminalOutput>,
     changed: Condvar,
     limit: usize,
@@ -273,20 +289,26 @@ fn session(
 }
 
 fn stop(terminal: &AcpTerminal) -> Result<(), String> {
+    if terminal.stopped.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
     let mut child = terminal.child.lock().map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{killpg, Signal};
+        use nix::unistd::Pid;
+        let _ = child.try_wait();
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+        if let Ok(mut watchdog) = terminal.watchdog.lock() {
+            watchdog.stop();
+        }
+    }
+    #[cfg(windows)]
     if child
         .try_wait()
         .map_err(|error| error.to_string())?
         .is_none()
     {
-        #[cfg(unix)]
-        {
-            use nix::sys::signal::{killpg, Signal};
-            use nix::unistd::Pid;
-            killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL)
-                .map_err(|error| error.to_string())?;
-        }
-        #[cfg(windows)]
         Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .output()
@@ -343,6 +365,15 @@ pub fn handle(
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("Cannot start command: {error}"))?;
+        #[cfg(unix)]
+        let watchdog =
+            crate::child_watchdog::ChildWatchdog::start(child.id()).map_err(|error| {
+                use nix::sys::signal::{killpg, Signal};
+                use nix::unistd::Pid;
+                let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+                let _ = child.wait();
+                format!("Cannot start command watchdog: {error}")
+            })?;
         let stdout = child
             .stdout
             .take()
@@ -361,6 +392,9 @@ pub fn handle(
             session_id: params.session_id.clone(),
             directory: fallback.clone(),
             child: Mutex::new(child),
+            #[cfg(unix)]
+            watchdog: Mutex::new(watchdog),
+            stopped: AtomicBool::new(false),
             output: Mutex::new(TerminalOutput {
                 bytes: VecDeque::new(),
                 start: 0,
@@ -409,6 +443,7 @@ pub fn handle(
                 .and_then(|mut child| child.try_wait().ok())
                 .flatten();
             if let Some(status) = status {
+                let _ = stop(&waiting);
                 for _ in 0..20 {
                     if readers_done.load(Ordering::Acquire) == 2 {
                         break;
