@@ -3,7 +3,10 @@
   import { invoke } from '@tauri-apps/api/core';
   import PathPicker from './PathPicker.svelte';
   import OptionPicker from './OptionPicker.svelte';
-  import type { AgentAvailability } from './lib/acp';
+  import type { AgentAvailability, AgentThread } from './lib/acp';
+  import type { AttentionMap, ThreadStatus } from './lib/attention';
+  import { threadKey } from './lib/recent-threads';
+  import { sidebarThreadStatus } from './lib/sidebar-agents';
   import type { ProjectCatalog, ProjectWorktree, WorktreeCreation } from './lib/projects';
   import { ungroupedRepositories } from './lib/projects';
   import { getSetting, setSetting } from './lib/settings';
@@ -22,6 +25,13 @@
     directory: string;
     disabled: boolean;
     agents: AgentAvailability[];
+    threads: Record<string, AgentThread[]>;
+    attention: AttentionMap;
+    openCodeOutcomes: Record<string, ThreadStatus>;
+    acpActivityReady: boolean;
+    nativeActivityReady: boolean;
+    nativeUnavailableDirectories: string[];
+    selectedThread: string | null;
     openCodeAvailable: boolean;
     worktreeDialogRequest: { id: string; path: string; fromPalette: boolean } | null;
     worktreeCreations: WorktreeCreation[];
@@ -32,6 +42,7 @@
     onworktreecancelled: (repository: string) => void;
     onselect: (path: string) => void;
     onselectdefault: (path: string) => void;
+    onselectthread: (key: string) => void;
     onaddrepository: (groupID: string | null) => void;
     onaddgroup: (name: string) => void;
     onrenamegroup: (id: string, name: string) => void;
@@ -74,6 +85,13 @@
     directory,
     disabled,
     agents,
+    threads,
+    attention,
+    openCodeOutcomes,
+    acpActivityReady,
+    nativeActivityReady,
+    nativeUnavailableDirectories,
+    selectedThread,
     openCodeAvailable,
     worktreeDialogRequest,
     worktreeCreations,
@@ -84,6 +102,7 @@
     onworktreecancelled,
     onselect,
     onselectdefault,
+    onselectthread,
     onaddrepository,
     onaddgroup,
     onrenamegroup,
@@ -152,6 +171,31 @@
 
   function repositoryWorktreesID(path: string): string {
     return `project-worktrees-${encodeURIComponent(path)}`;
+  }
+
+  function threadStatus(thread: AgentThread): ThreadStatus | null {
+    return sidebarThreadStatus(
+      thread,
+      attention,
+      openCodeOutcomes,
+      acpActivityReady,
+      nativeActivityReady,
+      nativeUnavailableDirectories,
+    );
+  }
+
+  function statusLabel(status: ThreadStatus | null): string {
+    if (status === 'working') return 'Working';
+    if (status === 'waiting') return 'Needs input';
+    if (status === 'done') return 'Finished';
+    if (status === 'failed') return 'Failed';
+    return 'Unknown';
+  }
+
+  function providerName(thread: AgentThread): string {
+    return thread.agent === 'opencode'
+      ? 'OpenCode'
+      : (agents.find((agent) => agent.id === thread.agent)?.name ?? thread.agent);
   }
 
   function checkState(check: PullRequestCheck) {
@@ -588,6 +632,32 @@
   {/each}
 {/snippet}
 
+{#snippet agentRows(path: string)}
+  {#if threads[path]?.length}
+    <div class="project-agent-list" aria-label={`Agent threads in ${path}`}>
+      {#each threads[path] as thread (threadKey(thread))}
+        {@const key = threadKey(thread)}
+        {@const status = threadStatus(thread)}
+        <button
+          class:active={selectedThread === key}
+          class="project-agent-row"
+          aria-current={selectedThread === key ? 'page' : undefined}
+          aria-label={`${providerName(thread)}: ${thread.title}, ${statusLabel(status)}`}
+          title={`${providerName(thread)} · ${thread.title} · ${statusLabel(status)}`}
+          disabled={thread.agent === 'opencode'
+            ? !openCodeAvailable
+            : !agents.some((agent) => agent.id === thread.agent && agent.available)}
+          onclick={() => onselectthread(key)}
+        >
+          <span class="project-agent-provider">{providerName(thread)}</span>
+          <span class="project-agent-title">{thread.title}</span>
+          <span class={`project-agent-status ${status ?? 'unknown'}`}>{statusLabel(status)}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 <section class="projects" aria-label="Projects and repositories">
   <div class="projects-heading">
     <span class="label">PROJECTS</span>
@@ -748,6 +818,7 @@
                     ><span aria-hidden="true">⑂</span><span>Default</span></button
                   >
                 </div>
+                {@render agentRows(path)}
                 {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
                     class:active={worktree.path === directory}
                     class="project-worktree-row"
@@ -788,6 +859,7 @@
                         )}>⋯</button
                     >
                   </div>
+                  {@render agentRows(worktree.path)}
                   {#if worktreeDeletions[worktree.path]}<p
                       class="project-worktree-status"
                       role="status"
@@ -863,6 +935,7 @@
                   ><span aria-hidden="true">⑂</span><span>Default</span></button
                 >
               </div>
+              {@render agentRows(path)}
               {#each catalog.worktrees[path] ?? [] as worktree (worktree.path)}<div
                   class:active={worktree.path === directory}
                   class="project-worktree-row"
@@ -903,6 +976,7 @@
                       )}>⋯</button
                   >
                 </div>
+                {@render agentRows(worktree.path)}
                 {#if worktreeDeletions[worktree.path]}<p
                     class="project-worktree-status"
                     role="status"

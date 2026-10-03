@@ -105,7 +105,6 @@ describe('recent thread shortcuts', () => {
     await expect($('.agent-composer textarea')).toBeEnabled();
     await expect($('.agent-composer textarea')).toBeFocused();
     await expect($('.agent-error')).not.toExist();
-
     await browser.execute(() =>
       window.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, bubbles: true }),
@@ -138,5 +137,11 @@ describe('recent thread shortcuts', () => {
     await expect($('.agent-composer textarea')).toBeEnabled();
     await expect($('.agent-composer textarea')).toBeFocused();
     await expect($('.agent-error')).not.toExist();
+    await $('.project-agent-row[aria-label*="Thread one"]').click();
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => localStorage.getItem('sai-directory'))) === firstPath,
+    );
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Thread one'));
   });
 });

@@ -22,16 +22,16 @@ export function reconcileAttention(
   const next = { ...current };
   for (const thread of threads) {
     const previous = current[thread.key];
-    if (previous?.status !== 'working' && previous?.status !== 'waiting') continue;
     const runtime = activity[thread.agent];
     const active = runtime?.alive && runtime.active.includes(thread.sessionId);
+    if (!active && previous?.status !== 'working' && previous?.status !== 'waiting') continue;
     const waiting = active && (runtime?.waiting.includes(thread.sessionId) ?? false);
     const outcome = runtime?.finished[thread.sessionId];
     const status = waiting ? 'waiting' : active ? 'working' : (outcome?.status ?? 'failed');
     const unread = thread.viewed
       ? false
       : waiting
-        ? previous.unread || previous.status !== 'waiting'
+        ? (previous?.unread ?? false) || previous?.status !== 'waiting'
         : active
           ? false
           : outcome?.status === 'done' && outcome.notify;
