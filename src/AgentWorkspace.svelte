@@ -906,7 +906,12 @@
         const messages = [retry, ...following];
         saveQueuedAgentMessages(turnAgent, turnDirectory, deliverySessionId, messages);
         setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, true);
-        diagnostic('queue_paused', deliverySessionId, turnId);
+        recordDiagnostic('queue_paused', {
+          agent: turnAgent,
+          sessionId: deliverySessionId,
+          turnId,
+          queueLength: messages.length,
+        });
         keepImages = true;
         if (current === generation && activeSessionId === deliverySessionId) {
           queued = messages;

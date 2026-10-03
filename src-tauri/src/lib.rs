@@ -467,13 +467,15 @@ fn start_runtime(
     if let Some(mut stderr) = child.stderr.take() {
         std::thread::spawn(move || {
             let mut buffer = [0; 4096];
+            let mut total_bytes = 0u64;
             loop {
                 match stderr.read(&mut buffer) {
                     Ok(0) | Err(_) => break,
-                    Ok(bytes) => {
-                        diagnostics::record("runtime_stderr", serde_json::json!({"bytes":bytes}))
-                    }
+                    Ok(bytes) => total_bytes = total_bytes.saturating_add(bytes as u64),
                 }
+            }
+            if total_bytes > 0 {
+                diagnostics::record("runtime_stderr", serde_json::json!({"bytes":total_bytes}));
             }
         });
     }

@@ -590,14 +590,18 @@ fn connect_blocking(
         let stderr_agent = agent.clone();
         std::thread::spawn(move || {
             let mut buffer = [0; 4096];
+            let mut total_bytes = 0u64;
             loop {
                 match stderr.read(&mut buffer) {
                     Ok(0) | Err(_) => break,
-                    Ok(bytes) => crate::diagnostics::record(
-                        "agent_stderr",
-                        json!({"agent":stderr_agent,"bytes":bytes}),
-                    ),
+                    Ok(bytes) => total_bytes = total_bytes.saturating_add(bytes as u64),
                 }
+            }
+            if total_bytes > 0 {
+                crate::diagnostics::record(
+                    "agent_stderr",
+                    json!({"agent":stderr_agent,"bytes":total_bytes}),
+                );
             }
         });
     }
