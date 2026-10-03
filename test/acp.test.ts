@@ -11,6 +11,7 @@ import {
   type AgentEntry,
   type AgentThread,
 } from '../src/lib/acp.ts';
+import { toolCommand } from '../src/lib/tool-display.ts';
 
 const normalizeEntries = (entries: AgentEntry[]) =>
   entries.map((entry) => (entry.type === 'tool' ? entry : { ...entry, id: entry.type }));
@@ -163,6 +164,21 @@ void test('recent transcript cache keeps the latest entries within a size budget
       ['small'],
     );
     assert.ok((values.get('sai-agent-transcript-cache')?.length ?? 0) <= 128 * 1024);
+    saveRecentTranscript(thread, [
+      {
+        id: 'large-input',
+        type: 'tool',
+        title: 'Run command',
+        status: 'completed',
+        content: 'Done',
+        input: { command: 'x'.repeat(130_000) },
+        terminalIds: [],
+      },
+    ]);
+    const cachedTool = loadRecentTranscript(thread)[0];
+    assert.equal(cachedTool?.id, 'large-input');
+    assert.equal(cachedTool?.type === 'tool' && cachedTool.content, 'Done');
+    assert.equal(cachedTool?.type === 'tool' && toolCommand(cachedTool.input)?.length, 1024);
     saveRecentTranscript(thread, [
       {
         id: 'tool',

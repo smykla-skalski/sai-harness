@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getSetting, setSetting } from './settings.ts';
+import { toolCommand } from './tool-display.ts';
 
 export type AgentId = string;
 
@@ -156,7 +157,15 @@ export function saveRecentTranscript(thread: AgentThread, entries: AgentEntry[])
   for (const entry of entries.slice(-transcriptLimit).toReversed()) {
     const saved: AgentEntry =
       entry.type === 'tool'
-        ? { ...entry, content: entry.content.slice(0, 4096), terminalIds: [] }
+        ? {
+            ...entry,
+            content: entry.content.slice(0, 4096),
+            input:
+              JSON.stringify(entry.input ?? '').length <= 4096
+                ? entry.input
+                : { command: toolCommand(entry.input)?.slice(0, 1024) ?? '', truncated: true },
+            terminalIds: [],
+          }
         : { ...entry, text: entry.text.slice(-20000) };
     const size = encoder.encode(JSON.stringify(saved)).length + Number(recent.length > 0);
     if (size > remaining) continue;
