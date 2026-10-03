@@ -224,6 +224,33 @@ fn stop_process(child: &mut Child) {
 pub struct AgentManager(Arc<Mutex<HashMap<String, Arc<Connection>>>>);
 
 impl AgentManager {
+    pub fn interrupted_turns(&self) -> Result<Vec<crate::settings::InterruptedAgentTurn>, String> {
+        let agents = self.0.lock().map_err(|error| error.to_string())?;
+        let mut turns = Vec::new();
+        for (agent, runtime) in agents.iter() {
+            let prompts = runtime
+                .prompt_state
+                .lock()
+                .map_err(|error| error.to_string())?;
+            let directories = runtime
+                .session_directories
+                .lock()
+                .map_err(|error| error.to_string())?;
+            for (session_id, prompt) in &prompts.active {
+                if let Some(directory) = directories.get(session_id) {
+                    turns.push(crate::settings::InterruptedAgentTurn {
+                        agent: agent.clone(),
+                        session_id: session_id.clone(),
+                        directory: directory.to_string_lossy().into_owned(),
+                        turn_id: prompt.turn_id.clone(),
+                        text: prompt.text.clone(),
+                    });
+                }
+            }
+        }
+        Ok(turns)
+    }
+
     pub fn shutdown(&self) {
         let connections = self
             .0
@@ -260,6 +287,11 @@ impl AgentManager {
     }
 }
 
+#[tauri::command]
+pub fn acp_prepare_restart(app: AppHandle, manager: State<'_, AgentManager>) -> Result<(), String> {
+    crate::settings::record_interrupted_turns(&app, manager.interrupted_turns()?)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentActivity {
@@ -273,8 +305,13 @@ pub struct AgentActivity {
 
 #[derive(Default)]
 struct PromptState {
-    active: HashMap<String, String>,
+    active: HashMap<String, ActivePrompt>,
     finished: HashMap<String, PromptOutcome>,
+}
+
+struct ActivePrompt {
+    turn_id: String,
+    text: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -299,7 +336,11 @@ pub fn acp_activity(
                 .lock()
                 .map_err(|error| error.to_string())?;
             let active = prompts.active.keys().cloned().collect();
-            let active_turns = prompts.active.clone();
+            let active_turns = prompts
+                .active
+                .iter()
+                .map(|(session, prompt)| (session.clone(), prompt.turn_id.clone()))
+                .collect();
             let finished = prompts.finished.clone();
             let sessions = runtime
                 .session_directories
@@ -958,7 +999,13 @@ pub async fn acp_prompt(
             return Err("This agent thread already has an active turn.".to_string());
         }
         prompts.finished.remove(&session_id);
-        prompts.active.insert(session_id.clone(), turn_id.clone());
+        prompts.active.insert(
+            session_id.clone(),
+            ActivePrompt {
+                turn_id: turn_id.clone(),
+                text: text.clone(),
+            },
+        );
     }
     crate::diagnostics::record(
         "prompt_started",
@@ -993,7 +1040,11 @@ pub async fn acp_prompt(
                 .and_then(Value::as_str)
                 != Some("cancelled");
         let latest = if let Ok(mut prompts) = runtime.prompt_state.lock() {
-            if prompts.active.get(&session_id) == Some(&turn_id) {
+            if prompts
+                .active
+                .get(&session_id)
+                .is_some_and(|prompt| prompt.turn_id == turn_id)
+            {
                 prompts.active.remove(&session_id);
                 prompts.finished.insert(
                     session_id.clone(),
@@ -1011,6 +1062,9 @@ pub async fn acp_prompt(
             false
         };
         if latest {
+            if !runtime.stopped.load(Ordering::Acquire) {
+                let _ = crate::settings::clear_interrupted_turn(&app, &agent, &session_id, &turn_id);
+            }
             let _ = app.emit(
                 "acp-event",
                 AgentEvent {
@@ -1041,7 +1095,7 @@ pub fn acp_cancel(
         .map_err(|error| error.to_string())?
         .active
         .get(&session_id)
-        .cloned();
+        .map(|prompt| prompt.turn_id.clone());
     let cancelled_turn = turn_id.or(current_turn);
     crate::diagnostics::record(
         "cancel_requested",

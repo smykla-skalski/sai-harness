@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -8,6 +9,117 @@ type Settings = BTreeMap<String, String>;
 type Deletions = BTreeMap<String, BTreeSet<String>>;
 const DELETIONS_KEY: &str = "sai-settings-deletions";
 const MODIFIED_KEY: &str = "sai-settings-modified";
+const INTERRUPTED_TURNS_KEY: &str = "sai-interrupted-agent-turns";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptedAgentTurn {
+    pub agent: String,
+    pub session_id: String,
+    pub directory: String,
+    pub turn_id: String,
+    pub text: String,
+}
+
+fn interrupted_turns(settings: &Settings) -> Vec<InterruptedAgentTurn> {
+    settings
+        .get(INTERRUPTED_TURNS_KEY)
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_interrupted_turns(
+    settings: &mut Settings,
+    turns: &[InterruptedAgentTurn],
+) -> Result<(), String> {
+    if turns.is_empty() {
+        settings.remove(INTERRUPTED_TURNS_KEY);
+    } else {
+        settings.insert(
+            INTERRUPTED_TURNS_KEY.to_string(),
+            serde_json::to_string(turns).map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(())
+}
+
+fn merge_interrupted_turns(
+    settings: &mut Settings,
+    interrupted: Vec<InterruptedAgentTurn>,
+) -> Result<(), String> {
+    let mut turns = interrupted_turns(settings);
+    for turn in interrupted {
+        turns.retain(|saved| {
+            saved.agent != turn.agent
+                || saved.session_id != turn.session_id
+                || saved.directory != turn.directory
+        });
+        turns.push(turn);
+    }
+    write_interrupted_turns(settings, &turns)
+}
+
+fn remove_interrupted_turn(
+    settings: &mut Settings,
+    agent: &str,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<(), String> {
+    let mut turns = interrupted_turns(settings);
+    turns.retain(|turn| {
+        turn.agent != agent || turn.session_id != session_id || turn.turn_id != turn_id
+    });
+    write_interrupted_turns(settings, &turns)
+}
+
+pub fn record_interrupted_turns(
+    app: &tauri::AppHandle,
+    interrupted: Vec<InterruptedAgentTurn>,
+) -> Result<(), String> {
+    if interrupted.is_empty() {
+        return Ok(());
+    }
+    let path = settings_path(app)?;
+    let _lock = lock_settings(&path)?;
+    let mut settings = read_settings(&path)?;
+    merge_interrupted_turns(&mut settings, interrupted)?;
+    write_settings(&path, &settings)
+}
+
+pub fn clear_interrupted_turn(
+    app: &tauri::AppHandle,
+    agent: &str,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<(), String> {
+    let path = settings_path(app)?;
+    let _lock = lock_settings(&path)?;
+    let mut settings = read_settings(&path)?;
+    if !settings.contains_key(INTERRUPTED_TURNS_KEY) {
+        return Ok(());
+    }
+    remove_interrupted_turn(&mut settings, agent, session_id, turn_id)?;
+    write_settings(&path, &settings)
+}
+
+#[tauri::command]
+pub fn list_interrupted_agent_turns(
+    app: tauri::AppHandle,
+) -> Result<Vec<InterruptedAgentTurn>, String> {
+    let path = settings_path(&app)?;
+    let _lock = lock_settings(&path)?;
+    Ok(interrupted_turns(&read_settings(&path)?))
+}
+
+#[tauri::command]
+pub fn finish_interrupted_agent_turn(
+    app: tauri::AppHandle,
+    agent: String,
+    session_id: String,
+    turn_id: String,
+) -> Result<(), String> {
+    clear_interrupted_turn(&app, &agent, &session_id, &turn_id)
+}
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     #[cfg(feature = "e2e")]
@@ -481,9 +593,35 @@ pub fn save_setting(
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_legacy, lock_settings, merge_catalog, merge_threads, read_settings,
-        update_deletions, write_settings, Deletions, Settings, DELETIONS_KEY,
+        filter_legacy, interrupted_turns, lock_settings, merge_catalog, merge_interrupted_turns,
+        merge_threads, read_settings, remove_interrupted_turn, update_deletions, write_settings,
+        Deletions, InterruptedAgentTurn, Settings, DELETIONS_KEY,
     };
+
+    #[test]
+    fn interrupted_turns_replace_previous_attempt_without_losing_other_threads() {
+        let turn = |session: &str, attempt: &str| InterruptedAgentTurn {
+            agent: "claude".into(),
+            session_id: session.into(),
+            directory: "/repo".into(),
+            turn_id: attempt.into(),
+            text: "Continue the work".into(),
+        };
+        let mut settings = Settings::new();
+        merge_interrupted_turns(
+            &mut settings,
+            vec![turn("one", "old"), turn("two", "other")],
+        )
+        .unwrap();
+        merge_interrupted_turns(&mut settings, vec![turn("one", "new")]).unwrap();
+        remove_interrupted_turn(&mut settings, "claude", "one", "old").unwrap();
+        assert_eq!(
+            interrupted_turns(&settings),
+            vec![turn("two", "other"), turn("one", "new")]
+        );
+        remove_interrupted_turn(&mut settings, "claude", "one", "new").unwrap();
+        assert_eq!(interrupted_turns(&settings), vec![turn("two", "other")]);
+    }
 
     #[test]
     fn merges_projects_from_two_webview_origins() {
