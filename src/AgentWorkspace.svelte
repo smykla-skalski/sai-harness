@@ -111,6 +111,7 @@
   let ready = $state(false);
   let busy = $state(false);
   let connecting = $state(false);
+  let sessionWarmupAttempted = $state(false);
   let draft = $state('');
   let skills = $state<SkillChoice[]>([]);
   const commandUpdates: Record<string, unknown[]> = {};
@@ -254,6 +255,13 @@
   $effect(() => {
     if (ready && !busy && !running && !historyLoaded && !historyAttempted) void loadHistory();
   });
+
+  $effect(() => {
+    if (ready && !thread && !activeSessionId && !sessionWarmupAttempted && !ephemeral) {
+      sessionWarmupAttempted = true;
+      void ensureSession('New thread').catch((cause) => (error = describe(cause)));
+    }
+  });
   const modelOption = $derived(
     configOptions.find(
       (option) => /model/i.test(`${option.id} ${option.name}`) && option.type === 'select',
@@ -276,20 +284,14 @@
 
   async function focusPromptWhenReady() {
     await tick();
-    if (
-      !focusPrompt ||
-      !ready ||
-      !focused ||
-      isBusy ||
-      activeSessionId !== (thread?.sessionId ?? null)
-    )
+    if (!focusPrompt || !focused || isBusy || activeSessionId !== (thread?.sessionId ?? null))
       return;
     prompt.focus();
     onpromptfocused?.();
   }
 
   $effect(() => {
-    if (focusPrompt && ready && focused && !isBusy) void focusPromptWhenReady();
+    if (focusPrompt && focused && !isBusy) void focusPromptWhenReady();
   });
 
   $effect(() => {
@@ -488,6 +490,7 @@
           : false;
     pickerOpen = null;
     creatingSession = null;
+    sessionWarmupAttempted = false;
     settingConfig = null;
     configFailure = '';
     authNeeded = false;
@@ -1247,7 +1250,7 @@
         onkeydown={keydown}
         rows="3"
         placeholder={`Message ${name}…`}
-        disabled={!ready || !directory}></textarea>
+        disabled={!directory}></textarea>
       <SkillMenu
         id={skillMenuId}
         skills={skillMatches}

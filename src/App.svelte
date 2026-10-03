@@ -516,7 +516,7 @@
     if (retained.length !== Object.keys(agentEntrySnapshots).length)
       agentEntrySnapshots = Object.fromEntries(retained);
   });
-  let pendingOpenCodeIssue = $state<{ path: string; text: string } | null>(null);
+  let pendingOpenCodeStart = $state<{ path: string; text: string | null } | null>(null);
   const batchWaiters = new SvelteMap<
     string,
     { resolve: () => void; reject: (error: Error) => void }
@@ -2908,10 +2908,7 @@
         if (workReady) {
           newWork();
           if (issuePrompt) draft = issuePrompt;
-        } else if (issuePrompt) {
-          pendingOpenCodeIssue = { path: created.path, text: issuePrompt };
-          error = 'Complete OpenCode setup in this worktree. The issue draft will open when ready.';
-        } else error = 'Complete OpenCode setup in this worktree before starting an agent.';
+        } else pendingOpenCodeStart = { path: created.path, text: issuePrompt };
       } else if (agent) {
         if (issuePrompt)
           issuePrefills = {
@@ -2954,11 +2951,11 @@
   }
 
   $effect(() => {
-    const pending = pendingOpenCodeIssue;
+    const pending = pendingOpenCodeStart;
     if (!pending || directory !== pending.path || !workReady || switching || sending) return;
-    pendingOpenCodeIssue = null;
+    pendingOpenCodeStart = null;
     newWork();
-    draft = pending.text;
+    if (pending.text) draft = pending.text;
     error = '';
     focusPaneForTyping('main');
   });
@@ -3192,9 +3189,15 @@
 
   async function loadProject(path: string, recordRestoredThread = true) {
     const expectedSelection = selection + 1;
-    await hydrateProject(path, recordRestoredThread);
-    if (directory !== path || selection !== expectedSelection) return;
-    if (runningWorktreeSetups.has(path)) return;
+    const hydration = hydrateProject(path, recordRestoredThread);
+    if (directory !== path || selection !== expectedSelection) {
+      await hydration;
+      return;
+    }
+    if (runningWorktreeSetups.has(path)) {
+      await hydration;
+      return;
+    }
     const stored = getSetting(`sai-pending-worktree-start:${path}`);
     let recovered: PendingWorktreeStart | null = null;
     if (stored) {
@@ -3219,6 +3222,7 @@
     }
     const start = pendingWorktreeStarts.get(path) ?? recovered;
     if (!start) {
+      await hydration;
       const repository = Object.keys(projectCatalog.worktrees).find((repo) =>
         projectCatalog.worktrees[repo].some((worktree) => worktree.path === path),
       );
@@ -3234,6 +3238,7 @@
     }
     pendingWorktreeStarts.delete(path);
     finishCreatedWorktree(start);
+    await hydration;
   }
 
   async function hydrateProject(path: string, recordRestoredThread = true) {
