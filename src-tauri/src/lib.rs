@@ -1480,6 +1480,7 @@ pub fn run() {
             acp::acp_load_session,
             acp::acp_resume_session,
             acp::acp_prompt,
+            acp::acp_steer,
             acp::acp_cancel,
             acp::acp_permission,
             acp::acp_pending_permissions,

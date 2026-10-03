@@ -139,6 +139,7 @@
   });
   let queued = $state<QueuedAgentMessage[]>([]);
   let queuePaused = $state(false);
+  let steering = $state(false);
   function diagnostic(event: DiagnosticEvent, sessionId = activeSessionId, turnId = activeTurnId) {
     recordDiagnostic(event, {
       agent,
@@ -148,7 +149,7 @@
     });
   }
   $effect(() => {
-    if (isBusy || !ready || queuePaused || !queued.length) return;
+    if (isBusy || !ready || queuePaused || steering || !queued.length) return;
     const [next, ...remaining] = queued;
     queued = remaining;
     diagnostic('queue_dispatch_started');
@@ -716,6 +717,11 @@
         )
           updateSkills(data.availableCommands);
         if (data.sessionUpdate !== 'user_message_chunk' || replaying) applyUpdate(data);
+        if (
+          data.sessionUpdate === 'tool_call_update' &&
+          (data.status === 'completed' || data.status === 'failed')
+        )
+          void steerQueued();
       } else if (message.method === 'session/request_permission' && message.id != null) {
         queuePermission(message);
       }
@@ -851,19 +857,13 @@
         ephemeral && seedContext && entries.length === 1
           ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
           : text;
-      const filePaths = sentClipboard.filter((item) => !item.image).map((item) => item.path);
       phase = 'prompt';
       const result = await acp.prompt(
         turnAgent,
         id!,
-        filePaths.length
-          ? `${promptText}\n\nAttached files (read these paths):\n${filePaths.join('\n')}`
-          : promptText,
+        withAttachedFiles(promptText, sentClipboard),
         turnId,
-        [
-          ...sentImages.map((item) => item.imagePath),
-          ...sentClipboard.filter((item) => item.image).map((item) => item.path),
-        ],
+        promptImagePaths(sentImages, sentClipboard),
       );
       if (recoveredDraft && result.stopReason !== 'cancelled' && !stopRequested)
         recoveredDraft = false;
@@ -943,15 +943,7 @@
       if (external && !queuedMessage) throw cause;
     } finally {
       if (current === generation) rememberTranscript();
-      if (!keepImages)
-        sentImages.forEach(
-          (image) => void invoke('browser_remove_capture', { path: image.imagePath }),
-        );
-      if (!keepImages)
-        sentClipboard.forEach((attachment) => {
-          if (attachment.image) void invoke('browser_remove_capture', { path: attachment.path });
-          else void removeClipboardFile(attachment.path);
-        });
+      if (!keepImages) discardAttachments(sentImages, sentClipboard);
       if (activeTurnId === turnId) activeTurnId = null;
       if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
@@ -967,6 +959,77 @@
         setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, false);
       }
     }
+  }
+
+  function withAttachedFiles(text: string, attachments: QueuedAgentMessage['attachments']) {
+    const filePaths = attachments.filter((item) => !item.image).map((item) => item.path);
+    return filePaths.length
+      ? `${text}\n\nAttached files (read these paths):\n${filePaths.join('\n')}`
+      : text;
+  }
+
+  function promptImagePaths(
+    sentImages: BrowserAttachment[],
+    attachments: QueuedAgentMessage['attachments'],
+  ) {
+    return [
+      ...sentImages.map((item) => item.imagePath),
+      ...attachments.filter((item) => item.image).map((item) => item.path),
+    ];
+  }
+
+  function discardAttachments(
+    sentImages: BrowserAttachment[],
+    attachments: QueuedAgentMessage['attachments'],
+  ) {
+    sentImages.forEach((image) => void invoke('browser_remove_capture', { path: image.imagePath }));
+    attachments.forEach((attachment) => {
+      if (attachment.image) void invoke('browser_remove_capture', { path: attachment.path });
+      else void removeClipboardFile(attachment.path);
+    });
+  }
+
+  let steerBlockedTurn: string | null = null;
+
+  async function steerQueued() {
+    const sessionId = activeSessionId;
+    const turnId = activeTurnId;
+    if (steering || !busy || stopRequested || queuePaused || !queued.length) return;
+    if (!sessionId || !turnId || steerBlockedTurn === turnId) return;
+    const turnAgent = agent;
+    const current = generation;
+    const [next, ...remaining] = queued;
+    queued = remaining;
+    saveQueuedAgentMessages(turnAgent, directory, sessionId, queued);
+    steering = true;
+    const { outcome } = await acp
+      .steer(
+        turnAgent,
+        sessionId,
+        withAttachedFiles(next.text, next.attachments),
+        promptImagePaths(next.images, next.attachments),
+      )
+      .catch(() => ({ outcome: 'failed' }));
+    const live = current === generation && activeSessionId === sessionId;
+    if (outcome === 'injected' || outcome === 'startedNewTurn') {
+      discardAttachments(next.images, next.attachments);
+      if (live) {
+        flushUpdates();
+        entries = [...entries, { id: crypto.randomUUID(), type: 'user', text: next.text }];
+        void follow();
+      }
+      steering = false;
+      if (live && activeTurnId === turnId) void steerQueued();
+      return;
+    }
+    steerBlockedTurn = turnId;
+    const restored = [
+      next,
+      ...(live ? queued : queuedAgentMessages(turnAgent, directory, sessionId)),
+    ];
+    saveQueuedAgentMessages(turnAgent, directory, sessionId, restored);
+    if (live) queued = restored;
+    steering = false;
   }
 
   function retryQueue() {
@@ -1320,6 +1383,24 @@
       </article>
     {/each}
     <SpawnActivity receipts={spawnReceipts} />
+    {#if queued.length}<div class="queued-messages" role="status" aria-label="Queued messages">
+        {#each queued as message, index (index)}
+          <article class="agent-message message user-message queued-message">
+            <div class="avatar user-avatar">You</div>
+            <div class="message-body">
+              <div class="message-author">
+                You · queued{message.attachments.length || message.images.length
+                  ? ` · ${message.attachments.length + message.images.length} attachments`
+                  : ''}
+              </div>
+              <Markdown source={message.text || 'Attachments'} />
+            </div>
+          </article>
+        {/each}
+        {#if queuePaused}<Button size="sm" variant="secondary" onclick={retryQueue}
+            >Retry queue</Button
+          >{/if}
+      </div>{/if}
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}
@@ -1389,17 +1470,6 @@
         selected={skillSelected}
         choose={chooseSkill}
       />
-      {#if queued.length}<div class="queued-messages" role="status">
-          Queued: {queued.length}
-          {#if queuePaused}<Button size="sm" variant="secondary" onclick={retryQueue}
-              >Retry queue</Button
-            >{/if}
-          {#each queued as message, index (index)}<div>
-              {index + 1}. {message.text || 'Attachments'}{message.attachments.length
-                ? ` · ${message.attachments.length} files`
-                : ''}
-            </div>{/each}
-        </div>{/if}
       {#if images.length}<div class="attachments">
           {#each images as image (image.id)}<span
               >📷 {image.imagePath.split(/[\\/]/).at(-1)}
@@ -1635,6 +1705,9 @@
   .agent-tool-current-label {
     display: block;
     margin-bottom: 2px;
+  }
+  .queued-message {
+    opacity: 0.6;
   }
   .agent-busy {
     display: flex;

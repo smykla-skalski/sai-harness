@@ -39,6 +39,7 @@ fn main() {
             "acp_load_session",
             "acp_resume_session",
             "acp_prompt",
+            "acp_steer",
             "acp_cancel",
             "acp_permission",
             "acp_pending_permissions",

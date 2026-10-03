@@ -947,6 +947,34 @@ async fn restore_session(
     .map_err(|error| error.to_string())?
 }
 
+fn prompt_content(
+    captures: &crate::browser::CaptureStore,
+    text: String,
+    image_paths: Vec<String>,
+) -> Result<Vec<Value>, String> {
+    if image_paths.len() > 4 {
+        return Err("Too many prompt images".to_string());
+    }
+    let mut content = vec![json!({"type":"text","text":text})];
+    let mut total_image_bytes = 0;
+    for path in image_paths {
+        let bytes = captures.read(&path)?;
+        if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Err("Invalid prompt image".to_string());
+        }
+        total_image_bytes += bytes.len();
+        if total_image_bytes > 8 * 1024 * 1024 {
+            return Err("Prompt images exceed 8 MiB".to_string());
+        }
+        content.push(json!({
+            "type":"image",
+            "data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+            "mimeType":"image/png"
+        }));
+    }
+    Ok(content)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpPromptParams {
@@ -971,26 +999,7 @@ pub async fn acp_prompt(
         turn_id,
         image_paths,
     } = params;
-    if image_paths.len() > 4 {
-        return Err("Too many prompt images".to_string());
-    }
-    let mut content = vec![json!({"type":"text","text":text})];
-    let mut total_image_bytes = 0;
-    for path in image_paths {
-        let bytes = captures.read(&path)?;
-        if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Err("Invalid prompt image".to_string());
-        }
-        total_image_bytes += bytes.len();
-        if total_image_bytes > 8 * 1024 * 1024 {
-            return Err("Prompt images exceed 8 MiB".to_string());
-        }
-        content.push(json!({
-            "type":"image",
-            "data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
-            "mimeType":"image/png"
-        }));
-    }
+    let content = prompt_content(&captures, text, image_paths)?;
     let runtime = connection(&manager, &agent)?;
     {
         let mut prompts = runtime
@@ -1083,6 +1092,61 @@ pub async fn acp_prompt(
             );
         }
         result
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpSteerParams {
+    agent: String,
+    session_id: String,
+    text: String,
+    image_paths: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn acp_steer(
+    manager: State<'_, AgentManager>,
+    captures: State<'_, crate::browser::CaptureStore>,
+    params: AcpSteerParams,
+) -> Result<Value, String> {
+    let AcpSteerParams {
+        agent,
+        session_id,
+        text,
+        image_paths,
+    } = params;
+    let content = prompt_content(&captures, text, image_paths)?;
+    let runtime = connection(&manager, &agent)?;
+    let supported = runtime
+        .capabilities
+        .lock()
+        .map_err(|error| error.to_string())?
+        .pointer("/_meta/steering/supported")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let active = runtime
+        .prompt_state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .active
+        .contains_key(&session_id);
+    // Adapters that ignore idleBehavior would start a turn Sail does not track.
+    if !supported || !active {
+        return Ok(json!({"outcome":"promptRequired"}));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "_session/steering",
+            json!({
+                "sessionId":session_id,
+                "prompt":content,
+                "_meta":{"steering":{"idleBehavior":"promptRequired"}}
+            }),
+            Duration::from_secs(60),
+        )
     })
     .await
     .map_err(|error| error.to_string())?

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const sessions = new Map();
 const permissions = new Map();
+const activePrompts = new Map();
 const terminalRequests = new Map();
 let terminalSupport = false;
 let nextTerminalRequest = 3000;
@@ -13,6 +14,9 @@ let nextSession = 0;
 let nextPermission = 1000;
 
 function send(message) {
+  if ('result' in message || 'error' in message)
+    for (const [sessionId, promptId] of activePrompts)
+      if (promptId === message.id) activePrompts.delete(sessionId);
   process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
 }
 
@@ -140,6 +144,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
         authMethods: agent === 'codex' ? [{ id: 'chat-gpt', name: 'ChatGPT' }] : [],
+        _meta: { steering: { supported: true } },
       },
     });
   } else if (message.method === 'authenticate') {
@@ -195,8 +200,22 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     sessions.get(sessionId).config[configId] = value;
     send({ id: message.id, result: { configOptions: configOptions(sessionId) } });
+  } else if (message.method === '_session/steering') {
+    const { sessionId } = message.params;
+    if (!activePrompts.has(sessionId)) {
+      send({ id: message.id, result: { outcome: 'promptRequired' } });
+      continue;
+    }
+    const reply = {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: `Steered: ${message.params.prompt[0].text}` },
+    };
+    sessions.get(sessionId).history.push(reply);
+    update(sessionId, reply);
+    send({ id: message.id, result: { outcome: 'injected' } });
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
+    activePrompts.set(sessionId, message.id);
     const text = message.params.prompt[0].text;
     if (text === 'Prompt failure') {
       setTimeout(

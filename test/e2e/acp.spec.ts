@@ -343,6 +343,31 @@ describe('ACP agent threads', () => {
     );
   });
 
+  it('steers a queued message into the running ACP turn after a tool call', async () => {
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Activity demo');
+    await $('.agent-actions button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
+    await $('.agent-composer textarea').setValue('Steer follow-up');
+    await $('.agent-actions button').click();
+    await expect($('.agent-conversation .queued-messages')).toHaveText(
+      expect.stringContaining('Steer follow-up'),
+    );
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Steered: Steer follow-up'),
+    );
+    await expect($('.agent-busy')).toBeDisplayed();
+    await expect($('.queued-messages')).not.toExist();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('The checks passed.'),
+    );
+    await expect($('.agent-busy')).not.toBeDisplayed();
+    await expect($('.agent-conversation')).not.toHaveText(
+      expect.stringContaining('Done: Steer follow-up'),
+    );
+  });
+
   it('keeps agent messages and failures visible around grouped tool activity', async () => {
     await browser.execute((path) => {
       localStorage.setItem('sai-directory', path);
