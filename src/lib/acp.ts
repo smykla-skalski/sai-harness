@@ -20,6 +20,33 @@ export interface AgentThread {
   updated: number;
 }
 
+export interface InterruptedAgentTurn {
+  agent: AgentId;
+  sessionId: string;
+  directory: string;
+  turnId: string;
+  text: string;
+}
+
+export function loadInterruptedAgentTurns(raw: string | null): InterruptedAgentTurn[] {
+  try {
+    const value: unknown = JSON.parse(raw ?? '[]');
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (turn): turn is InterruptedAgentTurn =>
+        turn &&
+        typeof turn === 'object' &&
+        typeof turn.agent === 'string' &&
+        typeof turn.sessionId === 'string' &&
+        typeof turn.directory === 'string' &&
+        typeof turn.turnId === 'string' &&
+        typeof turn.text === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
 export interface AgentMessage {
   id: string;
   type: 'user' | 'assistant' | 'thought';
@@ -386,6 +413,27 @@ function applyEntryUpdate(
   return false;
 }
 
+const restoringSessions = new Map<string, Promise<Record<string, unknown>>>();
+
+function restoreSession(
+  method: 'acp_load_session' | 'acp_resume_session',
+  agent: AgentId,
+  cwd: string,
+  sessionId: string,
+) {
+  const key = JSON.stringify([agent, cwd, sessionId]);
+  const existing = restoringSessions.get(key);
+  if (existing) return existing;
+  const request = invoke<Record<string, unknown>>(method, { agent, cwd, sessionId });
+  restoringSessions.set(key, request);
+  void request
+    .finally(() => {
+      if (restoringSessions.get(key) === request) restoringSessions.delete(key);
+    })
+    .catch(() => undefined);
+  return request;
+}
+
 export const acp = {
   agents: () => invoke<AgentAvailability[]>('acp_agents'),
   connect: (agent: AgentId) => invoke<Record<string, unknown>>('acp_connect', { agent }),
@@ -399,9 +447,9 @@ export const acp = {
       cwd,
     }),
   load: (agent: AgentId, cwd: string, sessionId: string) =>
-    invoke<Record<string, unknown>>('acp_load_session', { agent, cwd, sessionId }),
+    restoreSession('acp_load_session', agent, cwd, sessionId),
   resume: (agent: AgentId, cwd: string, sessionId: string) =>
-    invoke<Record<string, unknown>>('acp_resume_session', { agent, cwd, sessionId }),
+    restoreSession('acp_resume_session', agent, cwd, sessionId),
   prompt: (
     agent: AgentId,
     sessionId: string,
@@ -420,6 +468,14 @@ export const acp = {
     invoke<AgentEvent['message'][]>('acp_pending_permissions', { agent, sessionId }),
   pendingInbox: () => invoke<AcpPendingInboxItem[]>('acp_pending_inbox'),
   activity: () => invoke<Record<AgentId, AgentActivity>>('acp_activity'),
+  interruptedTurns: () => invoke<InterruptedAgentTurn[]>('list_interrupted_agent_turns'),
+  finishInterruptedTurn: (turn: InterruptedAgentTurn) =>
+    invoke<void>('finish_interrupted_agent_turn', {
+      agent: turn.agent,
+      sessionId: turn.sessionId,
+      turnId: turn.turnId,
+    }),
+  prepareRestart: () => invoke<void>('acp_prepare_restart'),
   setConfig: (agent: AgentId, sessionId: string, configId: string, value: string) =>
     invoke<{ configOptions?: AgentConfigOption[] }>('acp_set_config', {
       agent,

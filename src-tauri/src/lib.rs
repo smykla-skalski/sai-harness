@@ -1443,6 +1443,8 @@ pub fn run() {
             settings::load_settings,
             settings::migrate_settings,
             settings::save_setting,
+            settings::list_interrupted_agent_turns,
+            settings::finish_interrupted_agent_turn,
             start_runtime,
             validate_repository,
             list_picker_directory,
@@ -1483,6 +1485,7 @@ pub fn run() {
             acp::acp_pending_permissions,
             acp::acp_pending_inbox,
             acp::acp_activity,
+            acp::acp_prepare_restart,
             acp::acp_set_config,
             acp::acp_authenticate,
             attention::show_attention_notification,
@@ -1534,14 +1537,17 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 diagnostics::record("app_exit", serde_json::json!({}));
+                if let Some(agents) = app.try_state::<acp::AgentManager>() {
+                    if agents.record_interrupted_turns(app).is_err() {
+                        diagnostics::record("agent_recovery_save_failed", serde_json::json!({}));
+                    }
+                    agents.shutdown();
+                }
                 if let Some(terminals) = app.try_state::<acp_terminal::AcpTerminalManager>() {
                     terminals.shutdown();
                 }
                 if let Some(terminals) = app.try_state::<terminal::TerminalManager>() {
                     terminals.shutdown();
-                }
-                if let Some(agents) = app.try_state::<acp::AgentManager>() {
-                    agents.shutdown();
                 }
                 if let Some(runtime) = app.try_state::<RuntimeManager>() {
                     runtime.shutdown();

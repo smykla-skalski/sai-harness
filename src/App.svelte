@@ -84,6 +84,7 @@
     acp,
     forgetRecentTranscript,
     loadAgentThreads,
+    loadInterruptedAgentTurns,
     saveAgentThreads,
     updateEntriesInPlace,
     type AgentEntry,
@@ -91,6 +92,7 @@
     type AgentEvent,
     type AgentId,
     type AgentThread,
+    type InterruptedAgentTurn,
   } from './lib/acp';
   import {
     connect,
@@ -170,6 +172,9 @@
 
   let dark = $state(getSetting('sai-theme') === 'dark');
   const savedAgentThreads = loadAgentThreads();
+  const startupInterruptedTurns = loadInterruptedAgentTurns(
+    getSetting('sai-interrupted-agent-turns'),
+  );
   const savedNativeThreads = loadRecentNativeThreads(getSetting('sai-recent-native-threads'));
   const savedDirectory =
     getSetting('sai-directory') ??
@@ -445,7 +450,14 @@
   let paletteInput: HTMLInputElement;
   let palettePreviousFocus: HTMLElement | null = null;
   let restorePaletteFocus = true;
-  let runningAgentThreads = $state<Record<string, boolean>>({});
+  let runningAgentThreads = $state<Record<string, boolean>>(
+    Object.fromEntries(
+      startupInterruptedTurns.map((turn) => [
+        JSON.stringify([turn.agent, turn.directory, turn.sessionId]),
+        true,
+      ]),
+    ),
+  );
   const savedPaneLayouts = loadPaneLayouts(getSetting('sai-pane-layouts'));
   let paneLayouts = $state<Record<string, Pane>>(savedPaneLayouts);
   let sideChat = $state<SideChat | null>(null);
@@ -1223,16 +1235,18 @@
           void (async () => {
             try {
               const agentActivity = await acp.activity();
-              if (
-                Object.values(agentActivity).some((agent) => agent.active.length > 0) &&
-                !(await confirmInApp(
-                  'Stop running agents?',
-                  'Closing Sail stops active agent turns and their shell commands.',
-                  'Close Sail',
-                ))
-              ) {
-                closingMain = false;
-                return;
+              if (Object.values(agentActivity).some((agent) => agent.active.length > 0)) {
+                if (
+                  !(await confirmInApp(
+                    'Close and resume agents?',
+                    'Running commands stop when Sail closes. Agent work continues when Sail reopens.',
+                    'Close Sail',
+                  ))
+                ) {
+                  closingMain = false;
+                  return;
+                }
+                await acp.prepareRestart();
               }
               await settingsCreation?.catch(() => undefined);
               const settings = await WebviewWindow.getByLabel('settings');
@@ -1290,7 +1304,7 @@
           if (disposed) unlisten();
           else {
             unlistenAgentEvents = unlisten;
-            void restoreAgentActivity();
+            void recoverInterruptedAgentTurns().then(() => restoreAgentActivity());
             scheduleInboxRefresh();
           }
           return undefined;
@@ -5036,6 +5050,89 @@
       if (generation === nativeActivityGeneration && source === client) nativeActivityReady = false;
       return;
     }
+  }
+
+  async function recoverInterruptedAgentTurns() {
+    let turns: InterruptedAgentTurn[];
+    try {
+      turns = await acp.interruptedTurns();
+    } catch (cause) {
+      error = `Could not restore interrupted agent work: ${describe(cause)}`;
+      return;
+    }
+    await Promise.all(
+      turns.map(async (turn) => {
+        let thread = agentThreads.find(
+          (item) =>
+            item.agent === turn.agent &&
+            item.sessionId === turn.sessionId &&
+            item.directory === turn.directory,
+        );
+        if (!thread) {
+          thread = {
+            agent: turn.agent,
+            sessionId: turn.sessionId,
+            directory: turn.directory,
+            title: turn.text.slice(0, 60) || 'Interrupted agent work',
+            updated: Date.now(),
+          };
+          saveAgentThread(thread);
+        }
+        const recoveredThread = thread;
+        try {
+          const info = await acp.connect(turn.agent);
+          const capabilities = info.agentCapabilities;
+          const sessionCapabilities =
+            capabilities &&
+            typeof capabilities === 'object' &&
+            'sessionCapabilities' in capabilities
+              ? capabilities.sessionCapabilities
+              : null;
+          const canResume =
+            sessionCapabilities &&
+            typeof sessionCapabilities === 'object' &&
+            'resume' in sessionCapabilities;
+          if (canResume) await acp.resume(turn.agent, turn.directory, turn.sessionId);
+          else await acp.load(turn.agent, turn.directory, turn.sessionId);
+          if (disposed) return;
+          await invoke('record_turn_snapshot', {
+            path: turn.directory,
+            thread: `acp:${turn.agent}:${turn.sessionId}`,
+          });
+          updateAgentThreadStatus(recoveredThread, 'working');
+          const prompt = [
+            'Sail closed while your previous turn was running. Continue the interrupted work in this thread.',
+            `Previous user request:\n${turn.text}`,
+            'Inspect the current worktree and transcript before rerunning tools. Keep completed changes, rerun unfinished commands, and finish the request.',
+          ].join('\n\n');
+          const continued = acp.prompt(turn.agent, turn.sessionId, prompt, turn.turnId);
+          void (async () => {
+            try {
+              const outcome = await continued;
+              await acp.finishInterruptedTurn(turn);
+              if (!disposed)
+                updateAgentThreadStatus(
+                  recoveredThread,
+                  'done',
+                  outcome.stopReason !== 'cancelled',
+                );
+            } catch (cause) {
+              if (!disposed) {
+                updateAgentThreadStatus(recoveredThread, 'failed');
+                error = `Could not continue ${recoveredThread.title}: ${describe(cause)}`;
+              }
+            }
+          })();
+          await awaitCoordinationStart(continued, async () => {
+            const state = (await acp.activity())[turn.agent];
+            return !!state?.active.includes(turn.sessionId);
+          });
+        } catch (cause) {
+          updateAgentThreadStatus(recoveredThread, 'failed');
+          error = `Could not continue ${recoveredThread.title}: ${describe(cause)}`;
+        }
+      }),
+    );
   }
 
   async function restoreAgentActivity(attempt = 0) {
