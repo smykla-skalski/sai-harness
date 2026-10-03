@@ -749,7 +749,7 @@
     entries = [...entries, { id: userEntryId, type: 'user', text }];
     void follow();
     try {
-      if (!activeSessionId)
+      if (!activeSessionId || !activityThread)
         activityThread = await ensureSession(text.slice(0, 60) || 'Attached files');
       else if (activityThread?.title === 'New thread')
         activityThread = { ...activityThread, title: text.slice(0, 60) };
