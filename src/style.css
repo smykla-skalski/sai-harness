@@ -253,6 +253,9 @@ button:disabled {
 .project-agent-list {
   padding: 0 5px 2px 44px;
 }
+.project-agent-list[hidden] {
+  display: none;
+}
 .project-agent-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

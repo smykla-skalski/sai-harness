@@ -162,6 +162,42 @@
   let sendingCheck = $state<string | null>(null);
   let checking = false;
   let collapsedRepositoryPaths = $derived(new Set(catalog.collapsedRepositories ?? []));
+  const collapsedAgentPathsSetting = 'sai-collapsed-agent-worktrees';
+  let collapsedAgentPaths = $state<string[]>(loadCollapsedAgentPaths());
+
+  function loadCollapsedAgentPaths(): string[] {
+    try {
+      const saved: unknown = JSON.parse(getSetting(collapsedAgentPathsSetting) ?? '[]');
+      return Array.isArray(saved)
+        ? saved.filter((path): path is string => typeof path === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function agentListCollapsed(path: string): boolean {
+    return collapsedAgentPaths.includes(path);
+  }
+
+  function setAgentListCollapsed(path: string, collapsed: boolean) {
+    collapsedAgentPaths = collapsed
+      ? [...collapsedAgentPaths, path]
+      : collapsedAgentPaths.filter((item) => item !== path);
+    setSetting(collapsedAgentPathsSetting, JSON.stringify(collapsedAgentPaths));
+  }
+
+  function selectAgentWorktree(path: string, select: () => void) {
+    const selected = path === directory;
+    select();
+    if (!threads[path]?.length) return;
+    if (selected) setAgentListCollapsed(path, !agentListCollapsed(path));
+    else if (agentListCollapsed(path)) setAgentListCollapsed(path, false);
+  }
+
+  function agentListID(path: string): string {
+    return `project-agents-${encodeURIComponent(path)}`;
+  }
 
   function repositoryCollapsed(path: string): boolean {
     return collapsedRepositoryPaths.has(path);
@@ -625,7 +661,12 @@
 
 {#snippet agentRows(path: string)}
   {#if threads[path]?.length}
-    <div class="project-agent-list" aria-label={`Agent threads in ${path}`}>
+    <div
+      class="project-agent-list"
+      id={agentListID(path)}
+      aria-label={`Agent threads in ${path}`}
+      hidden={agentListCollapsed(path)}
+    >
       {#each threads[path] as thread (threadKey(thread))}
         {@const key = threadKey(thread)}
         {@const status = threadStatus(thread)}
@@ -803,9 +844,13 @@
                     class="project-worktree-select project-default-worktree-select"
                     aria-label={`Open default worktree for ${repositoryName(path)}`}
                     aria-current={path === directory ? 'page' : undefined}
+                    aria-expanded={threads[path]?.length ? !agentListCollapsed(path) : undefined}
+                    aria-controls={threads[path]?.length ? agentListID(path) : undefined}
                     title={path}
                     {disabled}
-                    onclick={() => onselectdefault(path)}
+                    onclick={() => selectAgentWorktree(path, () => onselectdefault(path))}
+                    ><span aria-hidden="true"
+                      >{threads[path]?.length ? (agentListCollapsed(path) ? '▸' : '▾') : ''}</span
                     ><span aria-hidden="true">⑂</span><span>Default</span></button
                   >
                 </div>
@@ -822,13 +867,26 @@
                     <button
                       class="project-worktree-select"
                       aria-current={worktree.path === directory ? 'page' : undefined}
+                      aria-expanded={threads[worktree.path]?.length
+                        ? !agentListCollapsed(worktree.path)
+                        : undefined}
+                      aria-controls={threads[worktree.path]?.length
+                        ? agentListID(worktree.path)
+                        : undefined}
                       title={worktree.path}
                       disabled={disabled || !!worktreeDeletions[worktree.path]}
                       onmousedown={(event) => {
                         if (event.button === 2 && !worktreeDeletions[worktree.path])
                           void openMenu({ kind: 'worktree', repository: path, worktree }, event);
                       }}
-                      onclick={() => onselect(worktree.path)}
+                      onclick={() =>
+                        selectAgentWorktree(worktree.path, () => onselect(worktree.path))}
+                      ><span aria-hidden="true"
+                        >{threads[worktree.path]?.length
+                          ? agentListCollapsed(worktree.path)
+                            ? '▸'
+                            : '▾'
+                          : ''}</span
                       ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                     >
                     {#if worktreeDeletions[worktree.path]}<span
@@ -920,9 +978,13 @@
                   class="project-worktree-select project-default-worktree-select"
                   aria-label={`Open default worktree for ${repositoryName(path)}`}
                   aria-current={path === directory ? 'page' : undefined}
+                  aria-expanded={threads[path]?.length ? !agentListCollapsed(path) : undefined}
+                  aria-controls={threads[path]?.length ? agentListID(path) : undefined}
                   title={path}
                   {disabled}
-                  onclick={() => onselectdefault(path)}
+                  onclick={() => selectAgentWorktree(path, () => onselectdefault(path))}
+                  ><span aria-hidden="true"
+                    >{threads[path]?.length ? (agentListCollapsed(path) ? '▸' : '▾') : ''}</span
                   ><span aria-hidden="true">⑂</span><span>Default</span></button
                 >
               </div>
@@ -939,13 +1001,26 @@
                   <button
                     class="project-worktree-select"
                     aria-current={worktree.path === directory ? 'page' : undefined}
+                    aria-expanded={threads[worktree.path]?.length
+                      ? !agentListCollapsed(worktree.path)
+                      : undefined}
+                    aria-controls={threads[worktree.path]?.length
+                      ? agentListID(worktree.path)
+                      : undefined}
                     title={worktree.path}
                     disabled={disabled || !!worktreeDeletions[worktree.path]}
                     onmousedown={(event) => {
                       if (event.button === 2 && !worktreeDeletions[worktree.path])
                         void openMenu({ kind: 'worktree', repository: path, worktree }, event);
                     }}
-                    onclick={() => onselect(worktree.path)}
+                    onclick={() =>
+                      selectAgentWorktree(worktree.path, () => onselect(worktree.path))}
+                    ><span aria-hidden="true"
+                      >{threads[worktree.path]?.length
+                        ? agentListCollapsed(worktree.path)
+                          ? '▸'
+                          : '▾'
+                        : ''}</span
                     ><span aria-hidden="true">⑂</span><span>{worktree.branch}</span></button
                   >
                   {#if worktreeDeletions[worktree.path]}<span
