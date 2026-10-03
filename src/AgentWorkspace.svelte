@@ -58,6 +58,7 @@
     splitTaskNotifications,
   } from './lib/task-notification';
   import { blockedHookRules, splitKlaudiushMessage, type KlaudiushRule } from './lib/klaudiush';
+  import { getSetting, removeSetting, setSetting } from './lib/settings';
 
   interface Props {
     agent: AgentId;
@@ -117,7 +118,13 @@
   let ready = $state(false);
   let busy = $state(false);
   let connecting = $state(false);
+  let sessionWarmupAttempted = $state(false);
+  function failedDraftKey() {
+    return `sai-agent-failed-draft:${encodeURIComponent(directory)}:${agent}`;
+  }
   let draft = $state('');
+  let recoveredDraft = false;
+  let recoveryEligible = false;
   let skills = $state<SkillChoice[]>([]);
   const commandUpdates: Record<string, unknown[]> = {};
   let skillSelected = $state(0);
@@ -243,12 +250,14 @@
   let pickerOpen = $state<'model' | 'effort' | null>(null);
   let configPickerOpen = $state<string | null>(null);
   let creatingSession = $state<Promise<AgentThread> | null>(null);
+  const claimedSessionCreations = new WeakSet<Promise<AgentThread>>();
   let settingConfig = $state<Promise<void> | null>(null);
   let configFailure = $state('');
   let authMethods = $state<AgentAuthMethod[]>([]);
   let authNeeded = $state(false);
   let authenticating = $state(false);
   let activeSessionId: string | null = null;
+  let disposed = false;
   let stopRequested = false;
   let activeTurnId: string | null = null;
   let selectedThreadId: string | null = null;
@@ -265,6 +274,18 @@
 
   $effect(() => {
     if (ready && !busy && !running && !historyLoaded && !historyAttempted) void loadHistory();
+  });
+
+  $effect(() => {
+    if (ready && !thread && !activeSessionId && !sessionWarmupAttempted && !ephemeral) {
+      sessionWarmupAttempted = true;
+      const current = generation;
+      void ensureSession('New thread').catch((cause) => {
+        if (current !== generation || disposed) return;
+        error = describe(cause);
+        authNeeded = /auth|login|sign.?in/i.test(error);
+      });
+    }
   });
   const modelOption = $derived(
     configOptions.find(
@@ -288,20 +309,14 @@
 
   async function focusPromptWhenReady() {
     await tick();
-    if (
-      !focusPrompt ||
-      !ready ||
-      !focused ||
-      isBusy ||
-      activeSessionId !== (thread?.sessionId ?? null)
-    )
+    if (!focusPrompt || !focused || isBusy || activeSessionId !== (thread?.sessionId ?? null))
       return;
     prompt.focus();
     onpromptfocused?.();
   }
 
   $effect(() => {
-    if (focusPrompt && ready && focused && !isBusy) void focusPromptWhenReady();
+    if (focusPrompt && focused && !isBusy) void focusPromptWhenReady();
   });
 
   $effect(() => {
@@ -468,6 +483,7 @@
   async function activate(id: string | null) {
     rememberTranscript();
     const previousSessionId = activeSessionId;
+    if (id && id !== previousSessionId) recoveryEligible = false;
     const previousQueue = queued;
     const wasPaused = queuePaused;
     const current = ++generation;
@@ -500,6 +516,7 @@
           : false;
     pickerOpen = null;
     creatingSession = null;
+    sessionWarmupAttempted = false;
     settingConfig = null;
     configFailure = '';
     authNeeded = false;
@@ -573,17 +590,36 @@
     if (mounted && selectedThreadId !== id) void activate(id);
   });
 
-  async function ensureSession(title: string): Promise<AgentThread> {
+  async function ensureSession(title: string, forTurn = false): Promise<AgentThread> {
     if (activeSessionId) {
       return thread ?? { agent, sessionId: activeSessionId, directory, title, updated: Date.now() };
     }
-    if (creatingSession) return creatingSession;
+    if (creatingSession) {
+      if (forTurn) claimedSessionCreations.add(creatingSession);
+      return creatingSession;
+    }
     const current = generation;
-    creatingSession = (async () => {
-      const session = await acp.create(agent, directory);
+    const sessionAgent = agent;
+    const sessionDirectory = directory;
+    let task!: Promise<AgentThread>;
+    task = (async () => {
+      const session = await acp.create(sessionAgent, sessionDirectory);
+      const created: AgentThread = {
+        agent: sessionAgent,
+        sessionId: session.sessionId,
+        directory: sessionDirectory,
+        title,
+        updated: Date.now(),
+      };
       if (current !== generation) {
-        if (ephemeral) await acp.cancel(agent, session.sessionId, null).catch(() => {});
-        throw new Error('Agent pane closed while creating the thread.');
+        if (ephemeral) await acp.cancel(sessionAgent, session.sessionId, null).catch(() => {});
+        if (!disposed || !claimedSessionCreations.has(task))
+          throw new Error('Agent pane closed while creating the thread.');
+        await invoke('validate_repository', { path: sessionDirectory });
+        if (queued.length)
+          saveQueuedAgentMessages(sessionAgent, sessionDirectory, session.sessionId, queued);
+        onactivity(created);
+        return created;
       }
       configOptions = session.configOptions ?? [];
       if (Array.isArray(session.availableCommands)) updateSkills(session.availableCommands);
@@ -591,20 +627,16 @@
       if (queued.length) saveQueuedAgentMessages(agent, directory, session.sessionId, queued);
       if (commandUpdates[session.sessionId]) updateSkills(commandUpdates[session.sessionId]);
       selectedThreadId = session.sessionId;
-      const created: AgentThread = {
-        agent,
-        sessionId: session.sessionId,
-        directory,
-        title,
-        updated: Date.now(),
-      };
       oncreated(created);
       return created;
     })();
+    creatingSession = task;
+    if (forTurn) claimedSessionCreations.add(task);
     try {
-      return await creatingSession;
+      return await task;
     } finally {
-      creatingSession = null;
+      claimedSessionCreations.delete(task);
+      if (creatingSession === task) creatingSession = null;
     }
   }
 
@@ -622,7 +654,16 @@
   }
 
   onMount(() => {
-    let disposed = false;
+    recoveryEligible = !thread && !ephemeral;
+    if (recoveryEligible) {
+      const recovered = getSetting(failedDraftKey());
+      if (recovered !== null) {
+        removeSetting(failedDraftKey());
+        draft = recovered;
+        recoveredDraft = true;
+      }
+    }
+    window.addEventListener('sai-agent-failed-draft', restoreFailedDraft);
     let unlisten: (() => void) | undefined;
     void listen<AgentEvent>('acp-event', ({ payload }) => {
       if (disposed || payload.agent !== agent) return;
@@ -684,6 +725,12 @@
       });
     return () => {
       disposed = true;
+      window.removeEventListener('sai-agent-failed-draft', restoreFailedDraft);
+      if (recoveredDraft && !busy) {
+        const pending = getSetting(failedDraftKey());
+        if (draft.trim())
+          setSetting(failedDraftKey(), [pending, draft].filter(Boolean).join('\n\n'));
+      }
       setReplaying(false);
       rememberTranscript();
       generation++;
@@ -733,6 +780,8 @@
     const sentImages = queuedMessage?.images ?? (external ? [] : [...images]);
     const sentClipboard = queuedMessage?.attachments ?? (external ? [] : [...clipboardAttachments]);
     const turnAgent = agent;
+    const turnDirectory = directory;
+    recoveryEligible = false;
     const current = generation;
     const turnId = crypto.randomUUID();
     activeTurnId = turnId;
@@ -755,16 +804,16 @@
     entries = [...entries, { id: userEntryId, type: 'user', text }];
     void follow();
     try {
-      if (!activeSessionId)
-        activityThread = await ensureSession(text.slice(0, 60) || 'Attached files');
-      else if (activityThread?.title === 'New thread')
-        activityThread = { ...activityThread, title: text.slice(0, 60) };
-      if (current !== generation) return;
+      if (!activeSessionId || !activityThread)
+        activityThread = await ensureSession(text.slice(0, 60) || 'Attached files', true);
+      if (activityThread?.title === 'New thread')
+        activityThread = { ...activityThread, title: text.slice(0, 60) || 'Attached files' };
+      if (current !== generation && (!disposed || ephemeral)) return;
       if (activityThread) onstatus(activityThread, 'working');
       if (settingConfig) await settingConfig;
       if (configFailure) throw new Error(configFailure);
       if (activityThread) onactivity(activityThread);
-      const id = activeSessionId;
+      const id = activityThread?.sessionId ?? activeSessionId;
       deliverySessionId = id;
       if (stopRequested) {
         notifyOnDone = false;
@@ -780,8 +829,8 @@
       }
       if (!ephemeral)
         await invoke('record_turn_snapshot', {
-          path: directory,
-          thread: `acp:${agent}:${id}`,
+          path: turnDirectory,
+          thread: `acp:${turnAgent}:${id}`,
         });
       const promptText =
         ephemeral && seedContext && entries.length === 1
@@ -800,6 +849,8 @@
           ...sentClipboard.filter((item) => item.image).map((item) => item.path),
         ],
       );
+      if (recoveredDraft && result.stopReason !== 'cancelled' && !stopRequested)
+        recoveredDraft = false;
       if (result.stopReason === 'cancelled' || stopRequested) notifyOnDone = false;
       if (external && !queuedMessage && !notifyOnDone) throw new Error('Agent turn was cancelled.');
       if (current === generation && stopRequested)
@@ -811,16 +862,34 @@
       if (activityThread) onactivity({ ...activityThread, updated: Date.now() });
     } catch (cause) {
       finalStatus = 'failed';
+      if (!deliverySessionId && current !== generation && disposed && !ephemeral && !external) {
+        const recovered =
+          sentImages.length || sentClipboard.length
+            ? `${text}\n\nAttachments need to be added again before sending.`
+            : text;
+        setSetting(failedDraftKey(), recovered);
+        window.dispatchEvent(
+          new CustomEvent('sai-agent-failed-draft', {
+            detail: { key: failedDraftKey(), text: recovered },
+          }),
+        );
+      }
       const following = deliverySessionId
-        ? queuedAgentMessages(turnAgent, directory, deliverySessionId)
+        ? queuedAgentMessages(turnAgent, turnDirectory, deliverySessionId)
         : [];
       const retryQueued =
-        !!deliverySessionId && (queuedMessage !== undefined || following.length > 0);
+        !!deliverySessionId &&
+        (queuedMessage !== undefined ||
+          following.length > 0 ||
+          (current !== generation && disposed));
       if (retryQueued && deliverySessionId) {
+        if (recoveredDraft) {
+          recoveredDraft = false;
+        }
         const retry = { text, images: sentImages, attachments: sentClipboard };
         const messages = [retry, ...following];
-        saveQueuedAgentMessages(turnAgent, directory, deliverySessionId, messages);
-        setAgentQueuePaused(turnAgent, directory, deliverySessionId, true);
+        saveQueuedAgentMessages(turnAgent, turnDirectory, deliverySessionId, messages);
+        setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, true);
         keepImages = true;
         if (current === generation && activeSessionId === deliverySessionId) {
           queued = messages;
@@ -857,6 +926,7 @@
       if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
       if (
+        current === generation &&
         !external &&
         finalStatus === 'done' &&
         deliverySessionId &&
@@ -864,7 +934,7 @@
         queuePaused
       ) {
         queuePaused = false;
-        setAgentQueuePaused(agent, directory, deliverySessionId, false);
+        setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, false);
       }
     }
   }
@@ -936,6 +1006,21 @@
     });
   }
 
+  function restoreFailedDraft(event: Event) {
+    const detail = (event as CustomEvent<{ key: string; text: string }>).detail;
+    if (
+      disposed ||
+      !recoveryEligible ||
+      busy ||
+      detail.key !== failedDraftKey() ||
+      getSetting(detail.key) !== detail.text
+    )
+      return;
+    removeSetting(detail.key);
+    draft = [draft.trim(), detail.text].filter(Boolean).join('\n\n');
+    recoveredDraft = true;
+  }
+
   async function authenticate(methodId: string) {
     authenticating = true;
     error = '';
@@ -944,7 +1029,10 @@
       authNeeded = false;
       if (activeSessionId) await activate(activeSessionId);
       else if (pickerOpen) await ensureSession('New thread');
-      else ready = true;
+      else {
+        ready = true;
+        sessionWarmupAttempted = false;
+      }
     } catch (cause) {
       error = describe(cause);
     } finally {
@@ -1262,7 +1350,7 @@
         onkeydown={keydown}
         rows="3"
         placeholder={`Message ${name}…`}
-        disabled={!ready || !directory}></textarea>
+        disabled={!directory}></textarea>
       <SkillMenu
         id={skillMenuId}
         skills={skillMatches}

@@ -669,7 +669,7 @@
           </div>
         {/key}
       {:else if pane.agent}
-        {#key `${pane.id}:${pane.agent}`}
+        {#key `${directory}:${pane.id}:${pane.agent}`}
           <div class="pane-agent-content" class:changes-open={changesPanes.includes(pane.id)}>
             <AgentWorkspace
               agent={pane.agent}
