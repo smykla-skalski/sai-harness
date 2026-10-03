@@ -26,6 +26,7 @@ export type SpawnReceipt = {
   updated: number;
   result: string | null;
   error: string | null;
+  activity?: string;
 };
 
 const states = new Set<SpawnState>([
@@ -63,7 +64,8 @@ export function loadSpawnReceipts(raw: string | null): SpawnReceipt[] {
         typeof item.created === 'number' &&
         typeof item.updated === 'number' &&
         (item.result === null || typeof item.result === 'string') &&
-        (item.error === null || typeof item.error === 'string'),
+        (item.error === null || typeof item.error === 'string') &&
+        (item.activity === undefined || typeof item.activity === 'string'),
     );
     return receipts;
   } catch {
@@ -79,6 +81,7 @@ export function saveBoundedReceipt(
     ...receipt,
     result: receipt.result?.slice(-16_000) ?? null,
     error: receipt.error?.slice(0, 2_000) ?? null,
+    activity: receipt.activity?.slice(0, 200),
   };
   return [bounded, ...receipts.filter((item) => item.receiptId !== receipt.receiptId)].slice(
     0,
@@ -108,6 +111,43 @@ export function receiptForSource(
 
 export function receiptIsSettled(state: SpawnState): boolean {
   return ['completed', 'failed', 'interrupted', 'unavailable'].includes(state);
+}
+
+export function spawnReceiptsForSource(
+  receipts: SpawnReceipt[],
+  sourceId: string | null,
+  directory: string,
+): SpawnReceipt[] {
+  if (!sourceId) return [];
+  return receipts.filter(
+    (receipt) => receipt.sourceId === sourceId && receipt.sourceDirectory === directory,
+  );
+}
+
+export type SpawnTimelineEntry<T> =
+  T | { type: 'spawn-response'; id: string; receipt: SpawnReceipt };
+
+export function withSpawnResponses<T>(
+  entries: T[],
+  receipts: SpawnReceipt[],
+  created: (entry: T) => number | undefined,
+): SpawnTimelineEntry<T>[] {
+  const finished = receipts
+    .filter((receipt) => receiptIsSettled(receipt.state))
+    .toSorted((a, b) => a.updated - b.updated);
+  const timeline: SpawnTimelineEntry<T>[] = [];
+  let next = 0;
+  for (const entry of entries) {
+    const time = created(entry) ?? 0;
+    while (next < finished.length && finished[next].updated < time) {
+      const receipt = finished[next++];
+      timeline.push({ type: 'spawn-response', id: `spawn:${receipt.receiptId}`, receipt });
+    }
+    timeline.push(entry);
+  }
+  for (const receipt of finished.slice(next))
+    timeline.push({ type: 'spawn-response', id: `spawn:${receipt.receiptId}`, receipt });
+  return timeline;
 }
 
 export function acpReceiptState(receipt: SpawnReceipt, activity: AgentActivity | null): SpawnState {

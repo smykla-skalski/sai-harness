@@ -4,6 +4,8 @@
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import SpawnActivity from './SpawnActivity.svelte';
+  import SpawnResponse from './SpawnResponse.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import { toolInput } from './lib/tool-display';
   import HarnessIcon from './HarnessIcon.svelte';
@@ -21,6 +23,7 @@
     acp,
     groupAgentEntries,
     loadRecentTranscript,
+    restoreEntryTimes,
     saveRecentTranscript,
     updateEntriesBatch,
     updateEntriesInPlace,
@@ -35,6 +38,7 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { AgentUsage } from './lib/agent-usage';
+  import { withSpawnResponses, type SpawnReceipt } from './lib/agent-results';
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     clipboardFiles,
@@ -80,6 +84,7 @@
     ephemeral?: boolean;
     seedContext?: string;
     coordinationMessages?: CoordinationMessage[];
+    spawnReceipts?: SpawnReceipt[];
   }
   let {
     agent,
@@ -106,6 +111,7 @@
     ephemeral = false,
     seedContext = '',
     coordinationMessages = [],
+    spawnReceipts = [],
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -213,7 +219,9 @@
   let historyAttempted = $state(false);
   let showingEarlier = false;
   const visibleEntries = $derived(entries.slice(-visibleCount));
-  const displayEntries = $derived(groupAgentEntries(visibleEntries));
+  const displayEntries = $derived(
+    withSpawnResponses(groupAgentEntries(visibleEntries), spawnReceipts, (entry) => entry.created),
+  );
   const toolFailed = (tool: AgentTool) => /fail|error|reject/i.test(tool.status);
   const toolRunning = (tool: AgentTool) => /^(pending|in_progress|stopping)$/i.test(tool.status);
   let replaying = false;
@@ -247,6 +255,10 @@
   let generation = 0;
   let scroll: HTMLDivElement;
   let autoFollow = true;
+  const spawnRevision = $derived(spawnReceipts.map((receipt) => receipt.updated).join(','));
+  $effect(() => {
+    if (spawnRevision && autoFollow) void follow();
+  });
   let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
   const isBusy = $derived(busy || running || historyLoading);
@@ -334,7 +346,7 @@
     clearTimeout(updateTimer);
     updateTimer = undefined;
     if (!pendingUpdates.length) return;
-    const next = updateEntriesBatch(entries, pendingUpdates);
+    const next = updateEntriesBatch(entries, pendingUpdates, Date.now());
     pendingUpdates = [];
     entries = next;
     if (autoFollow) void follow();
@@ -393,7 +405,7 @@
     try {
       await acp.load(agent, directory, id);
       if (current !== generation) return;
-      entries = replayEntries;
+      entries = restoreEntryTimes(replayEntries, entries);
       visibleCount = 50;
       historyLoaded = true;
       rememberTranscript();
@@ -1057,7 +1069,9 @@
       </ToolActivity>
     {/snippet}
     {#each displayEntries as entry (entry.id)}
-      {#if entry.type === 'tool-group'}
+      {#if entry.type === 'spawn-response'}
+        <SpawnResponse receipt={entry.receipt} />
+      {:else if entry.type === 'tool-group'}
         {@const hookRules = blockedHookRules(entry.tools)}
         {#if hookRules.length}{@render hookNotice(hookRules)}{/if}
         {#if isBusy && (entry.id === displayEntries.at(-1)?.id || entry.tools.some(toolRunning))}
@@ -1185,6 +1199,7 @@
         </div>
       </article>
     {/each}
+    <SpawnActivity receipts={spawnReceipts} />
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}
