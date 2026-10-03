@@ -3851,7 +3851,48 @@
       return;
     }
     if (step.kind === 'worktrees' && entry.kind === 'worktree' && entry.directory) {
-      setPaletteStep({ kind: 'agents', repository: step.repository, directory: entry.directory });
+      paletteBusy = true;
+      paletteError = '';
+      try {
+        const target = entry.directory;
+        if (target !== directory) await loadProject(target);
+        if (target !== directory) return;
+        closeCommandPalette(false);
+        const runningThread = agentThreads
+          .filter(
+            (thread) => thread.directory === target && runningAgentThreads[agentThreadKey(thread)],
+          )
+          .toSorted((a, b) => b.updated - a.updated)[0];
+        const panes = leaves(paneLayout);
+        const savedThreadPane = panes.find((pane) => pane.id !== 'main' && pane.thread);
+        if (!acpThread && !sessionID && savedThreadPane) {
+          focusPaneForTyping(savedThreadPane.id);
+        } else if (!acpThread && !running && runningThread) {
+          focusMainPane();
+          openAgent(runningThread.agent, runningThread);
+        } else if (!acpThread && !sessionID) {
+          const emptyPane = panes.find(
+            (pane) => pane.id !== 'main' && !pane.agent && !pane.thread && !pane.kind,
+          );
+          if (emptyPane) focusPaneForTyping(emptyPane.id);
+          else if (
+            panes.length === 1 &&
+            panes[0]?.id === 'main' &&
+            !panes[0].agent &&
+            !panes[0].kind
+          )
+            await selectDefaultWorktree(target);
+          else {
+            await tick();
+            splitFocusedPane('row');
+          }
+        }
+        focusPaneForTyping(focusedPane);
+      } catch (cause) {
+        paletteError = describe(cause);
+      } finally {
+        paletteBusy = false;
+      }
       return;
     }
     if (step.kind === 'worktrees' && entry.kind === 'new-worktree') {
@@ -6500,8 +6541,6 @@
         {worktreeDeletions}
         onretryworktree={retryWorktreeCreation}
         ondismissworktree={dismissWorktreeCreation}
-        onworktreecreated={(repository, path) =>
-          reopenCommandPalette({ kind: 'agents', repository, directory: path })}
         onworktreecancelled={(repository) =>
           reopenCommandPalette({ kind: 'worktrees', repository })}
         onselect={(path) => {

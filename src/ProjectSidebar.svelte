@@ -38,7 +38,6 @@
     worktreeDeletions: Record<string, string>;
     onretryworktree: (id: string) => void;
     ondismissworktree: (id: string) => void;
-    onworktreecreated: (repository: string, path: string) => void;
     onworktreecancelled: (repository: string) => void;
     onselect: (path: string) => void;
     onselectdefault: (path: string) => void;
@@ -98,7 +97,6 @@
     worktreeDeletions,
     onretryworktree,
     ondismissworktree,
-    onworktreecreated,
     onworktreecancelled,
     onselect,
     onselectdefault,
@@ -395,9 +393,8 @@
     worktreeAgentTouched = false;
     const savedAgent = getSetting('sai-worktree-agent') ?? '';
     worktreeAgent =
-      !fromPalette &&
-      ((savedAgent === 'opencode' && openCodeAvailable) ||
-        agents.some((agent) => agent.id === savedAgent && agent.available))
+      (savedAgent === 'opencode' && openCodeAvailable) ||
+      agents.some((agent) => agent.id === savedAgent && agent.available)
         ? savedAgent
         : '';
     worktreeError = '';
@@ -459,29 +456,23 @@
       worktreeError = 'This worktree already has a pending entry. Retry or dismiss it first.';
       return;
     }
-    if (selectedIssue && !worktreeAgent) {
-      worktreeError = 'Choose an available agent to start this issue.';
+    if ((selectedIssue || worktreeFromPalette) && !worktreeAgent) {
+      worktreeError = 'Choose an available agent to start this worktree.';
       return;
     }
     worktreeError = '';
-    const fromPalette = worktreeFromPalette;
     const pending = oncreateworktree(
       path,
       worktreeName.trim(),
       worktreeDestination,
       worktreeBase.trim() || null,
-      fromPalette ? null : worktreeAgent || null,
-      fromPalette ? null : selectedIssue,
+      worktreeAgent || null,
+      selectedIssue,
     );
-    if (!fromPalette) setSetting('sai-worktree-agent', worktreeAgent);
+    setSetting('sai-worktree-agent', worktreeAgent);
     worktreeCreated = true;
     worktreeDialog.close();
-    void pending
-      .then((createdPath) => {
-        if (fromPalette) onworktreecreated(path, createdPath);
-        return undefined;
-      })
-      .catch(() => undefined);
+    void pending.catch(() => undefined);
   }
 
   function closeWorktreeDialog() {
@@ -1193,33 +1184,34 @@
           bind:value={worktreeBase}
         />
       </label>
-      {#if !worktreeFromPalette}<label
-          >Start with agent
-          <OptionPicker
-            label="Agent for new worktree"
-            value={worktreeAgent}
-            options={[
-              { value: '', name: 'Choose after creation' },
-              { value: 'opencode', name: 'OpenCode', disabled: !openCodeAvailable },
-              ...agents.map((agent) => ({
-                value: agent.id,
-                name: agent.name,
-                disabled: !agent.available,
-              })),
-            ]}
-            open={agentPickerOpen}
-            onopen={() => (agentPickerOpen = true)}
-            onclose={() => (agentPickerOpen = false)}
-            onchoose={(value) => {
-              worktreeAgent = value;
-              worktreeAgentTouched = true;
-            }}
-          />
-        </label>{:else}<p class="worktree-issue-note">
-          Choose an agent and session after creation.
-        </p>{/if}
-      {#if selectedIssue && !worktreeAgent}<p class="worktree-issue-note" role="status">
-          Choose an available agent to start this issue.
+      <label
+        >Start with agent
+        <OptionPicker
+          label="Agent for new worktree"
+          value={worktreeAgent}
+          options={[
+            { value: '', name: 'Choose after creation' },
+            { value: 'opencode', name: 'OpenCode', disabled: !openCodeAvailable },
+            ...agents.map((agent) => ({
+              value: agent.id,
+              name: agent.name,
+              disabled: !agent.available,
+            })),
+          ]}
+          open={agentPickerOpen}
+          onopen={() => (agentPickerOpen = true)}
+          onclose={() => (agentPickerOpen = false)}
+          onchoose={(value) => {
+            worktreeAgent = value;
+            worktreeAgentTouched = true;
+          }}
+        />
+      </label>
+      {#if (selectedIssue || worktreeFromPalette) && !worktreeAgent}<p
+          class="worktree-issue-note"
+          role="status"
+        >
+          Choose an available agent to start this worktree.
         </p>{/if}
       <div class="worktree-destination">
         <div>
@@ -1235,8 +1227,8 @@
         <button
           type="submit"
           class="worktree-create"
-          disabled={!worktreeName.trim() || (!!selectedIssue && !worktreeAgent)}
-          >Create worktree</button
+          disabled={!worktreeName.trim() ||
+            ((!!selectedIssue || worktreeFromPalette) && !worktreeAgent)}>Create worktree</button
         >
       </div>
     </form>{/if}
