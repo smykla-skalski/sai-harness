@@ -528,6 +528,7 @@ fn spawn(
             .and_then(|mut child| child.wait().ok())
             .map(|status| status.exit_code())
             .unwrap_or(1);
+        crate::diagnostics::record("terminal_exit", serde_json::json!({"id":&id,"code":code}));
         if let Ok(mut state) = background_output.lock() {
             state.exit_code = Some(code);
             background_changed.notify_all();

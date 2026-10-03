@@ -4,6 +4,7 @@
   "description": "Permissions for the main desktop window",
   "webviews": ["main"],
   "permissions": [
+    "allow-diagnostic-event",
     "allow-load-settings",
     "allow-migrate-settings",
     "allow-save-setting",

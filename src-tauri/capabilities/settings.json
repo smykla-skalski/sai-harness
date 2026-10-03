@@ -4,6 +4,7 @@
   "description": "Permissions for the settings window",
   "windows": ["settings"],
   "permissions": [
+    "allow-diagnostic-event",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:event:allow-emit-to",

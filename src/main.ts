@@ -2,6 +2,9 @@ import '@smykla-skalski/sui/styles.css';
 import './style.css';
 import { mount } from 'svelte';
 import { initializeSettings } from './lib/settings';
+import { installFrontendDiagnostics, recordDiagnostic } from './lib/diagnostics';
+
+installFrontendDiagnostics();
 
 async function start() {
   if (import.meta.env.MODE === 'e2e') await import('@wdio/tauri-plugin');
@@ -15,4 +18,9 @@ async function start() {
   }
 }
 
-void start();
+void start().catch((cause: unknown) => {
+  recordDiagnostic('frontend_start_failed', {
+    errorName: cause instanceof Error ? cause.name : typeof cause,
+  });
+  throw cause;
+});
