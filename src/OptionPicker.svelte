@@ -1,10 +1,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
 
   interface Choice {
     value: string;
     name: string;
     disabled?: boolean;
+    icon?: string;
   }
 
   interface Props {
@@ -36,6 +38,7 @@
   let menuPosition = $state({ left: 0, top: 0, width: 210, maxHeight: 260 });
   const optionId = `picker-${crypto.randomUUID()}`;
   const selected = $derived(options.find((option) => option.value === value)?.name ?? value);
+  const selectedIcon = $derived(options.find((option) => option.value === value)?.icon);
 
   $effect(() => {
     if (!open) return;
@@ -138,6 +141,7 @@
     onclick={onopen}
     title={`${label}: ${selected || 'Choose'}`}
   >
+    {#if selectedIcon}<HarnessIcon agent={selectedIcon} />{/if}
     <span class="option-value">{selected || label}</span>
     <svg class="option-chevron" viewBox="0 0 12 12" fill="none" aria-hidden="true">
       <path
@@ -184,7 +188,8 @@
               if (option.disabled) return;
               onchoose(option.value);
               close();
-            }}>{option.name}</button
+            }}
+            >{#if option.icon}<HarnessIcon agent={option.icon} />{/if}{option.name}</button
           >
         {/each}
       {/if}
@@ -242,7 +247,9 @@
     box-shadow: 0 8px 24px #0002;
   }
   .option-menu button {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 7px;
     width: 100%;
     padding: 8px;
     border: 0;

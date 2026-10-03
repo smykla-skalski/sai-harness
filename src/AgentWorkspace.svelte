@@ -4,6 +4,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
   import { matchingSkills, skillQuery, type SkillChoice } from './lib/skills';
@@ -989,7 +990,7 @@
 <div class="agent-workspace">
   <div class="agent-header">
     <div class="agent-heading">
-      <strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span>
+      <HarnessIcon {agent} /><strong>{name}</strong><span>{thread?.title ?? 'New thread'}</span>
     </div>
     {#if usage?.context !== undefined}<span class="agent-usage">Context {usage.context}%</span>{/if}
     {#each usage?.rates ?? [] as rate (rate.label)}<span class="agent-usage"
