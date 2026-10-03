@@ -30,6 +30,7 @@ describe('agent thread attention', () => {
       );
       localStorage.removeItem('sail-agent-threads');
       localStorage.removeItem('sai-thread-attention');
+      localStorage.removeItem('sai-collapsed-agent-worktrees');
       localStorage.removeItem('sai-pane-layouts');
       localStorage.setItem('sai-notifications-enabled', 'false');
       localStorage.setItem('sai-notification-sound', 'true');
@@ -54,6 +55,16 @@ describe('agent thread attention', () => {
     await $('.agent-launches button').click();
     await expect(row).toHaveText(expect.stringContaining('Waiting for input'));
     const sidebarRow = $('.project-agent-row[aria-label*="Delayed approval"]');
+    await expect(sidebarRow).toHaveText(expect.stringContaining('Needs input'));
+    const worktree = $('.project-default-worktree-select');
+    await expect(worktree).toHaveAttribute('aria-expanded', 'true');
+    await worktree.click();
+    await expect(worktree).toHaveAttribute('aria-expanded', 'false');
+    await expect(sidebarRow).not.toBeDisplayed();
+    await browser.refresh();
+    await expect(worktree).toHaveAttribute('aria-expanded', 'false');
+    await expect(sidebarRow).not.toBeDisplayed();
+    await worktree.click();
     await expect(sidebarRow).toHaveText(expect.stringContaining('Needs input'));
     await expect(row.$('.thread-unread')).toBeDisplayed();
     await browser.refresh();
