@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const sessions = new Map();
 const permissions = new Map();
 const activePrompts = new Map();
+const steerWaiters = new Map();
 const terminalRequests = new Map();
 let terminalSupport = false;
 let nextTerminalRequest = 3000;
@@ -210,13 +211,43 @@ for await (const line of createInterface({ input: process.stdin })) {
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: `Steered: ${message.params.prompt[0].text}` },
     };
-    sessions.get(sessionId).history.push(reply);
-    update(sessionId, reply);
     send({ id: message.id, result: { outcome: 'injected' } });
+    setTimeout(() => {
+      sessions.get(sessionId).history.push(reply);
+      update(sessionId, reply);
+      steerWaiters.get(sessionId)?.();
+    }, 200);
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
     activePrompts.set(sessionId, message.id);
     const text = message.params.prompt[0].text;
+    if (text === 'Steer demo') {
+      const finish = () => {
+        steerWaiters.delete(sessionId);
+        clearTimeout(fallback);
+        update(sessionId, {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Steer demo finished.' },
+        });
+        send({ id: message.id, result: { stopReason: 'end_turn' } });
+      };
+      const fallback = setTimeout(finish, 30_000);
+      update(sessionId, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `steer-${message.id}`,
+        title: 'Wait for steer',
+        status: 'in_progress',
+      });
+      setTimeout(() => {
+        update(sessionId, {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: `steer-${message.id}`,
+          status: 'completed',
+        });
+        steerWaiters.set(sessionId, () => setTimeout(finish, 3000));
+      }, 3000);
+      continue;
+    }
     if (text === 'Prompt failure') {
       setTimeout(
         () => send({ id: message.id, error: { code: -1, message: 'Fixture prompt failed' } }),

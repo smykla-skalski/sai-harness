@@ -289,7 +289,9 @@ describe('ACP agent threads', () => {
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-composer textarea').setValue('Queued follow-up');
     await $('.agent-actions button').click();
-    await expect($('.queued-messages')).toHaveText(expect.stringContaining('Queued follow-up'));
+    await expect($('.agent-conversation .queued-messages')).toHaveText(
+      expect.stringContaining('Queued follow-up'),
+    );
     await expect($('.agent-permission')).toBeDisplayed();
     await $('.agent-permission button').click();
     await expect($('.agent-conversation')).toHaveText(
@@ -346,7 +348,7 @@ describe('ACP agent threads', () => {
   it('steers a queued message into the running ACP turn after a tool call', async () => {
     await $('.agent-launches button').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
-    await $('.agent-composer textarea').setValue('Activity demo');
+    await $('.agent-composer textarea').setValue('Steer demo');
     await $('.agent-actions button').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
     await $('.agent-composer textarea').setValue('Steer follow-up');
@@ -354,13 +356,25 @@ describe('ACP agent threads', () => {
     await expect($('.agent-conversation .queued-messages')).toHaveText(
       expect.stringContaining('Steer follow-up'),
     );
+    await expect($('.agent-composer textarea')).toHaveValue('');
+    await expect($('.agent-composer')).not.toHaveText(expect.stringContaining('Steer follow-up'));
     await expect($('.agent-conversation')).toHaveText(
       expect.stringContaining('Steered: Steer follow-up'),
     );
     await expect($('.agent-busy')).toBeDisplayed();
     await expect($('.queued-messages')).not.toExist();
+    const steeredEntries = await browser.execute(() =>
+      [...document.querySelectorAll('.agent-conversation .user-message:not(.queued-message)')]
+        .map((element) => element.querySelector('.message-body')?.textContent ?? '')
+        .filter((text) => text.includes('Steer follow-up')),
+    );
+    expect(steeredEntries).toHaveLength(1);
+    const conversation = await $('.agent-conversation').getText();
+    expect(conversation.indexOf('Steer follow-up')).toBeLessThan(
+      conversation.indexOf('Steered: Steer follow-up'),
+    );
     await expect($('.agent-conversation')).toHaveText(
-      expect.stringContaining('The checks passed.'),
+      expect.stringContaining('Steer demo finished.'),
     );
     await expect($('.agent-busy')).not.toBeDisplayed();
     await expect($('.agent-conversation')).not.toHaveText(

@@ -1133,10 +1133,11 @@ pub async fn acp_steer(
         .map_err(|error| error.to_string())?
         .active
         .contains_key(&session_id);
-    // Adapters that ignore idleBehavior would start a turn Sail does not track.
-    if !supported || !active {
+    let steer_into_running_turn_only = supported && active;
+    if !steer_into_running_turn_only {
         return Ok(json!({"outcome":"promptRequired"}));
     }
+    let wait_as_long_as_a_turn = Duration::from_secs(60 * 60 * 3);
     tauri::async_runtime::spawn_blocking(move || {
         runtime.request(
             "_session/steering",
@@ -1145,7 +1146,7 @@ pub async fn acp_steer(
                 "prompt":content,
                 "_meta":{"steering":{"idleBehavior":"promptRequired"}}
             }),
-            Duration::from_secs(60),
+            wait_as_long_as_a_turn,
         )
     })
     .await

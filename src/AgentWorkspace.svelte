@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
@@ -699,6 +700,8 @@
         )
           commandUpdates[params.sessionId] = update.availableCommands;
       }
+      if (message.method === 'sail/prompt_finished' && typeof params?.sessionId === 'string')
+        discardSteeredAttachments(params.sessionId);
       if (!params || params.sessionId !== activeSessionId) return;
       if (message.method === 'sail/permission_resolved') {
         permissions = permissions.filter(
@@ -893,17 +896,21 @@
       const following = deliverySessionId
         ? queuedAgentMessages(turnAgent, turnDirectory, deliverySessionId)
         : [];
+      const steer =
+        deliverySessionId && inFlightSteer?.sessionId === deliverySessionId ? inFlightSteer : null;
       const retryQueued =
         !!deliverySessionId &&
         (queuedMessage !== undefined ||
           following.length > 0 ||
+          steer !== null ||
           (current !== generation && disposed));
       if (retryQueued && deliverySessionId) {
         if (recoveredDraft) {
           recoveredDraft = false;
         }
         const retry = { text, images: sentImages, attachments: sentClipboard };
-        const messages = [retry, ...following];
+        if (steer) steer.requeued = true;
+        const messages = [retry, ...(steer ? [steer.message] : []), ...following];
         saveQueuedAgentMessages(turnAgent, turnDirectory, deliverySessionId, messages);
         setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, true);
         recordDiagnostic('queue_paused', {
@@ -944,6 +951,7 @@
     } finally {
       if (current === generation) rememberTranscript();
       if (!keepImages) discardAttachments(sentImages, sentClipboard);
+      if (deliverySessionId) discardSteeredAttachments(deliverySessionId);
       if (activeTurnId === turnId) activeTurnId = null;
       if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
@@ -989,18 +997,41 @@
     });
   }
 
+  const steeredAttachments = new SvelteMap<string, QueuedAgentMessage[]>();
+  let inFlightSteer: { sessionId: string; message: QueuedAgentMessage; requeued: boolean } | null =
+    null;
   let steerBlockedTurn: string | null = null;
+
+  function discardSteeredAttachments(sessionId: string) {
+    for (const message of steeredAttachments.get(sessionId) ?? [])
+      discardAttachments(message.images, message.attachments);
+    steeredAttachments.delete(sessionId);
+  }
+
+  function toolsStillRunning() {
+    flushUpdates();
+    const turnStart = entries.findLastIndex((entry) => entry.type === 'user');
+    return entries
+      .slice(turnStart + 1)
+      .some(
+        (entry) =>
+          entry.type === 'tool' && (entry.status === 'pending' || entry.status === 'in_progress'),
+      );
+  }
 
   async function steerQueued() {
     const sessionId = activeSessionId;
-    const turnId = activeTurnId;
-    if (steering || !busy || stopRequested || queuePaused || !queued.length) return;
-    if (!sessionId || !turnId || steerBlockedTurn === turnId) return;
+    const turnKey = activeTurnId ?? sessionId;
+    if (steering || !isBusy || stopRequested || queuePaused || !queued.length) return;
+    if (!sessionId || steerBlockedTurn === turnKey || toolsStillRunning()) return;
     const turnAgent = agent;
+    const turnDirectory = directory;
     const current = generation;
     const [next, ...remaining] = queued;
     queued = remaining;
-    saveQueuedAgentMessages(turnAgent, directory, sessionId, queued);
+    saveQueuedAgentMessages(turnAgent, turnDirectory, sessionId, queued);
+    const steer = { sessionId, message: next, requeued: false };
+    inFlightSteer = steer;
     steering = true;
     const { outcome } = await acp
       .steer(
@@ -1010,26 +1041,27 @@
         promptImagePaths(next.images, next.attachments),
       )
       .catch(() => ({ outcome: 'failed' }));
-    const live = current === generation && activeSessionId === sessionId;
-    if (outcome === 'injected' || outcome === 'startedNewTurn') {
-      discardAttachments(next.images, next.attachments);
-      if (live) {
+    inFlightSteer = null;
+    const delivered = outcome === 'injected' || outcome === 'startedNewTurn';
+    const sameSession = activeSessionId === sessionId;
+    if (delivered) {
+      steeredAttachments.set(sessionId, [...(steeredAttachments.get(sessionId) ?? []), next]);
+      if (current === generation && sameSession) {
         flushUpdates();
         entries = [...entries, { id: crypto.randomUUID(), type: 'user', text: next.text }];
         void follow();
       }
-      steering = false;
-      if (live && activeTurnId === turnId) void steerQueued();
-      return;
+    } else {
+      steerBlockedTurn = turnKey;
     }
-    steerBlockedTurn = turnId;
-    const restored = [
-      next,
-      ...(live ? queued : queuedAgentMessages(turnAgent, directory, sessionId)),
-    ];
-    saveQueuedAgentMessages(turnAgent, directory, sessionId, restored);
-    if (live) queued = restored;
+    if (steer.requeued === delivered) {
+      const stored = queuedAgentMessages(turnAgent, turnDirectory, sessionId);
+      const restored = delivered ? stored.filter((message) => message !== next) : [next, ...stored];
+      saveQueuedAgentMessages(turnAgent, turnDirectory, sessionId, restored);
+      if (sameSession) queued = restored;
+    }
     steering = false;
+    if (delivered && current === generation && sameSession) void steerQueued();
   }
 
   function retryQueue() {
