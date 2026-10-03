@@ -949,7 +949,7 @@ async fn restore_session(
 
 fn prompt_content(
     captures: &crate::browser::CaptureStore,
-    text: String,
+    text: &str,
     image_paths: Vec<String>,
 ) -> Result<Vec<Value>, String> {
     if image_paths.len() > 4 {
@@ -999,7 +999,7 @@ pub async fn acp_prompt(
         turn_id,
         image_paths,
     } = params;
-    let content = prompt_content(&captures, text, image_paths)?;
+    let content = prompt_content(&captures, &text, image_paths)?;
     let runtime = connection(&manager, &agent)?;
     {
         let mut prompts = runtime
@@ -1118,7 +1118,7 @@ pub async fn acp_steer(
         text,
         image_paths,
     } = params;
-    let content = prompt_content(&captures, text, image_paths)?;
+    let content = prompt_content(&captures, &text, image_paths)?;
     let runtime = connection(&manager, &agent)?;
     let supported = runtime
         .capabilities

@@ -330,7 +330,7 @@ describe('ACP agent threads', () => {
       await tauri.window.getCurrentWindow().close();
     });
     await expect($('.confirmation-dialog')).toHaveText(
-      expect.stringContaining('Closing Sail stops active agent turns'),
+      expect.stringContaining('Running commands stop when Sail closes'),
     );
     await $('.confirmation-dialog button:first-child').click();
     await expect($('.confirmation-dialog')).not.toBeDisplayed();
