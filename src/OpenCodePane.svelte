@@ -5,6 +5,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import Markdown from './Markdown.svelte';
+  import ToolActivity from './ToolActivity.svelte';
   import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import PathPicker from './PathPicker.svelte';
@@ -627,22 +628,19 @@
             <div class="message-author">{message.agent}</div>
             {#if text}<Markdown source={text} />{/if}
             {#each message.content as part, ordinal (ordinal)}
-              {#if part.type === 'tool'}<details class="tool-card">
-                  <summary>{part.name} · {part.state.status}</summary>
-                  <pre>{part.state.status === 'streaming'
-                      ? part.state.input
-                      : JSON.stringify(part.state.input, null, 2)}</pre>
-                  {#if part.state.status === 'completed' || part.state.status === 'error'}
-                    {#each part.state.content ?? [] as item, index (index)}
-                      {#if item.type === 'text'}<pre>{item.text}</pre>{:else}<p>
-                          {item.name ?? item.uri}
-                        </p>{/if}
-                    {/each}
-                  {/if}
-                  {#if part.state.status === 'error'}<p class="message-error">
-                      {part.state.error.message}
-                    </p>{/if}
-                </details>{/if}
+              {#if part.type === 'tool'}
+                <ToolActivity
+                  title={part.name}
+                  status={part.state.status}
+                  input={part.state.input}
+                  output={part.state.status === 'completed' || part.state.status === 'error'
+                    ? (part.state.content ?? [])
+                        .map((item) => (item.type === 'text' ? item.text : (item.name ?? item.uri)))
+                        .join('\n')
+                    : ''}
+                  error={part.state.status === 'error' ? part.state.error.message : ''}
+                />
+              {/if}
             {/each}
             {#if message.retry}<p class="retry-state" role="status">
                 Retry {message.retry.attempt}: {message.retry.error.message}

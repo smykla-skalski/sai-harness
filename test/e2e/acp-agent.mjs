@@ -248,6 +248,9 @@ for await (const line of createInterface({ input: process.stdin })) {
         toolCallId: `demo-${message.id}-${name}`,
         title: name,
         status,
+        ...(name === 'Run checks' && status === 'in_progress'
+          ? { rawInput: { command: 'npm test' } }
+          : {}),
         ...(content
           ? { content: [{ type: 'content', content: { type: 'text', text: content } }] }
           : {}),

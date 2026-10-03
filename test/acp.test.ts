@@ -66,6 +66,30 @@ void test('ACP tool calls keep terminal references across updates', () => {
   assert.deepEqual(completed[0]?.type === 'tool' && completed[0].terminalIds, ['terminal-1']);
 });
 
+void test('ACP tool calls keep structured command input across updates', () => {
+  const started = updateEntries([], {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'bash-1',
+    title: 'Run checks',
+    rawInput: { command: 'npm test', timeout: 120000 },
+  });
+  const completed = updateEntries(started, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-1',
+    status: 'completed',
+  });
+  assert.deepEqual(completed[0]?.type === 'tool' && completed[0].input, {
+    command: 'npm test',
+    timeout: 120000,
+  });
+  const cleared = updateEntries(completed, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-1',
+    rawInput: null,
+  });
+  assert.equal(cleared[0]?.type === 'tool' && cleared[0].input, null);
+});
+
 void test('batched and replayed ACP updates preserve transcript order and content', () => {
   const updates = [
     { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Plan' } },

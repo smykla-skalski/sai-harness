@@ -313,6 +313,23 @@ describe('ACP agent threads', () => {
     await expect(group).toHaveText(expect.stringContaining('Could not read the first path.'));
   });
 
+  it('shows an agent shell command and its output in tool activity', async () => {
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Activity demo');
+    await $('.agent-actions button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('The checks passed.'),
+    );
+    const group = $('.agent-tool-group');
+    await group.$('summary').click();
+    const command = group.$('.tool-activity-command');
+    await expect(command).toHaveText('npm test');
+    const tools = await group.$$('.tool-activity');
+    await tools.at(-1)!.$('summary').click();
+    await expect(group).toHaveText(expect.stringContaining('All checks passed.'));
+  });
+
   it('manages the focused split thread without removing the main thread', async () => {
     await browser.execute((path) => {
       localStorage.setItem('sai-directory', path);

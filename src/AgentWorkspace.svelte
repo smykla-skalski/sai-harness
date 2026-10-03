@@ -4,6 +4,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import ToolActivity from './ToolActivity.svelte';
   import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
@@ -210,7 +211,6 @@
   let historyLoading = $state(false);
   let historyAttempted = $state(false);
   let showingEarlier = false;
-  let expandedTools = $state<string[]>([]);
   const visibleEntries = $derived(entries.slice(-visibleCount));
   const displayEntries = $derived(groupAgentEntries(visibleEntries));
   const toolFailed = (tool: AgentTool) => /fail|error|reject/i.test(tool.status);
@@ -468,7 +468,6 @@
     activeSessionId = id;
     entries = id && thread ? loadRecentTranscript(thread) : [];
     visibleCount = 50;
-    expandedTools = [];
     historyLoaded = !id;
     historyLoading = false;
     historyAttempted = false;
@@ -1044,42 +1043,17 @@
       </div>
     {/snippet}
     {#snippet toolRow(tool: AgentTool, revealed: boolean)}
-      {#if revealed}
-        <div class="agent-tool-item">
-          <div class="agent-tool-heading">
-            <span class="agent-tool-status" class:failed={toolFailed(tool)}
-              >{tool.status.replaceAll('_', ' ')}</span
-            >
-            <span>{tool.title}</span>
-          </div>
-          {#if tool.content}<pre>{tool.content}</pre>{/if}
-          {#each tool.terminalIds as terminalId (terminalId)}
-            <button onclick={() => onterminal(terminalId)}>Open terminal</button>
-          {/each}
-        </div>
-      {:else}
-        <details
-          class="agent-tool-item"
-          ontoggle={(event) => {
-            expandedTools = event.currentTarget.open
-              ? [...expandedTools, tool.id]
-              : expandedTools.filter((id) => id !== tool.id);
-          }}
-        >
-          <summary>
-            <span class="agent-tool-status" class:failed={toolFailed(tool)}
-              >{tool.status.replaceAll('_', ' ')}</span
-            >
-            <span>{tool.title}</span>
-          </summary>
-          {#if expandedTools.includes(tool.id)}
-            {#if tool.content}<pre>{tool.content}</pre>{/if}
-            {#each tool.terminalIds as terminalId (terminalId)}
-              <button onclick={() => onterminal(terminalId)}>Open terminal</button>
-            {/each}
-          {/if}
-        </details>
-      {/if}
+      <ToolActivity
+        title={tool.title}
+        status={tool.status}
+        input={tool.input}
+        output={tool.content}
+        expanded={revealed}
+      >
+        {#each tool.terminalIds as terminalId (terminalId)}
+          <button onclick={() => onterminal(terminalId)}>Open terminal</button>
+        {/each}
+      </ToolActivity>
     {/snippet}
     {#each displayEntries as entry (entry.id)}
       {#if entry.type === 'tool-group'}
@@ -1470,35 +1444,18 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .agent-tool-group > summary,
-  .agent-tool-item > summary,
-  .agent-tool-heading {
+  .agent-tool-group > summary {
     cursor: pointer;
   }
-  .agent-tool-group > summary::before,
-  .agent-tool-item > summary::before {
+  .agent-tool-group > summary::before {
     content: '▸';
     flex: 0 0 auto;
   }
-  .agent-tool-group[open] > summary::before,
-  .agent-tool-item[open] > summary::before {
+  .agent-tool-group[open] > summary::before {
     transform: rotate(90deg);
   }
   .agent-tool-list {
     padding: 0 12px 10px;
-  }
-  .agent-tool-item {
-    padding: 5px 0;
-  }
-  .agent-tool-item > summary {
-    display: flex;
-    align-items: baseline;
-    gap: 9px;
-  }
-  .agent-tool-item pre {
-    margin: 8px 0 4px;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
   .agent-tool-status,
   .agent-tool-current-label {

@@ -31,6 +31,7 @@ export interface AgentTool {
   title: string;
   status: string;
   content: string;
+  input?: unknown;
   terminalIds: string[];
 }
 
@@ -310,12 +311,14 @@ function applyEntryUpdate(
           ]),
         ]
       : (existing?.terminalIds ?? []);
+    const input = update.rawInput === undefined ? existing?.input : update.rawInput;
     const next: AgentTool = {
       id,
       type: 'tool',
       title: typeof update.title === 'string' ? update.title : (existing?.title ?? 'Tool call'),
       status: typeof update.status === 'string' ? update.status : (existing?.status ?? 'pending'),
       content,
+      ...(input !== undefined ? { input } : {}),
       terminalIds,
     };
     if (index >= 0) entries[index] = next;
