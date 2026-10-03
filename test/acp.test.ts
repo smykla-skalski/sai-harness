@@ -91,6 +91,29 @@ void test('ACP tool calls keep structured command input across updates', () => {
   assert.equal(cleared[0]?.type === 'tool' && cleared[0].input, null);
 });
 
+void test('ACP tool calls keep raw output across updates', () => {
+  const started = updateEntries([], {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'bash-2',
+    title: 'Run checks',
+    rawOutput: { stdout: 'All checks passed.' },
+  });
+  const completed = updateEntries(started, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-2',
+    status: 'completed',
+  });
+  assert.deepEqual(completed[0]?.type === 'tool' && completed[0].output, {
+    stdout: 'All checks passed.',
+  });
+  const cleared = updateEntries(completed, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-2',
+    rawOutput: null,
+  });
+  assert.equal(cleared[0]?.type === 'tool' && cleared[0].output, null);
+});
+
 void test('batched and replayed ACP updates preserve transcript order and content', () => {
   const updates = [
     { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Plan' } },
@@ -172,6 +195,7 @@ void test('recent transcript cache keeps the latest entries within a size budget
         status: 'completed',
         content: 'Done',
         input: { command: 'x'.repeat(130_000) },
+        output: { stdout: 'y'.repeat(130_000) },
         terminalIds: [],
       },
     ]);
@@ -179,6 +203,10 @@ void test('recent transcript cache keeps the latest entries within a size budget
     assert.equal(cachedTool?.id, 'large-input');
     assert.equal(cachedTool?.type === 'tool' && cachedTool.content, 'Done');
     assert.equal(cachedTool?.type === 'tool' && toolCommand(cachedTool.input)?.length, 1024);
+    assert.equal(
+      cachedTool?.type === 'tool' && cachedTool.output,
+      'Output omitted from transcript cache (too large)',
+    );
     saveRecentTranscript(thread, [
       {
         id: 'tool',

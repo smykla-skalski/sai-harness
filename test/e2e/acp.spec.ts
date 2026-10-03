@@ -293,6 +293,16 @@ describe('ACP agent threads', () => {
   });
 
   it('keeps agent messages and failures visible around grouped tool activity', async () => {
+    await browser.execute((path) => {
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [], worktrees: {} }),
+      );
+      localStorage.removeItem('sai-pane-layouts');
+      localStorage.removeItem('sail-agent-threads');
+    }, realpathSync(repository));
+    await browser.refresh();
     await $('.agent-launches button').click();
     await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
     await $('.agent-composer textarea').setValue('Activity failure demo');
@@ -309,7 +319,7 @@ describe('ACP agent threads', () => {
       expect.stringContaining('The first read failed. I’m searching another path.'),
     );
     await group.$('summary').click();
-    await expect(group.$$('.agent-tool-item')).toBeElementsArrayOfSize(2);
+    await expect(group.$$('.tool-activity')).toBeElementsArrayOfSize(2);
     await expect(group).toHaveText(expect.stringContaining('Could not read the first path.'));
   });
 

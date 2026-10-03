@@ -33,6 +33,7 @@ export interface AgentTool {
   status: string;
   content: string;
   input?: unknown;
+  output?: unknown;
   terminalIds: string[];
 }
 
@@ -164,6 +165,10 @@ export function saveRecentTranscript(thread: AgentThread, entries: AgentEntry[])
               JSON.stringify(entry.input ?? '').length <= 4096
                 ? entry.input
                 : { command: toolCommand(entry.input)?.slice(0, 1024) ?? '', truncated: true },
+            output:
+              JSON.stringify(entry.output ?? '').length <= 4096
+                ? entry.output
+                : 'Output omitted from transcript cache (too large)',
             terminalIds: [],
           }
         : { ...entry, text: entry.text.slice(-20000) };
@@ -321,6 +326,7 @@ function applyEntryUpdate(
         ]
       : (existing?.terminalIds ?? []);
     const input = update.rawInput === undefined ? existing?.input : update.rawInput;
+    const output = update.rawOutput === undefined ? existing?.output : update.rawOutput;
     const next: AgentTool = {
       id,
       type: 'tool',
@@ -328,6 +334,7 @@ function applyEntryUpdate(
       status: typeof update.status === 'string' ? update.status : (existing?.status ?? 'pending'),
       content,
       ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
       terminalIds,
     };
     if (index >= 0) entries[index] = next;

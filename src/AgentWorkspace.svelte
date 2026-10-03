@@ -5,6 +5,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
   import ToolActivity from './ToolActivity.svelte';
+  import { toolInput } from './lib/tool-display';
   import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
@@ -1047,7 +1048,7 @@
         title={tool.title}
         status={tool.status}
         input={tool.input}
-        output={tool.content}
+        output={tool.content || toolInput(tool.output)}
         expanded={revealed}
       >
         {#each tool.terminalIds as terminalId (terminalId)}
