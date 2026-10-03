@@ -11,6 +11,7 @@
   import type { BrowserAttachment } from './lib/browser-pick';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import SpawnActivity from './SpawnActivity.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import DiffPanel from './DiffPanel.svelte';
@@ -122,6 +123,7 @@
     receiptForSource,
     receiptIsSettled,
     saveBoundedReceipt,
+    spawnReceiptsForSource,
     type SpawnReceipt,
   } from './lib/agent-results';
   import { getSetting, removeSetting, setSetting, settingsError } from './lib/settings';
@@ -255,10 +257,11 @@
   let coordinationMessages = $state<CoordinationMessage[]>(
     loadCoordinationMessages(getSetting('sai-coordination-messages')),
   );
-  let spawnReceipts = loadSpawnReceipts(getSetting('sai-agent-spawn-receipts'));
+  const initialSpawnReceipts = loadSpawnReceipts(getSetting('sai-agent-spawn-receipts'));
+  let spawnReceipts = $state<SpawnReceipt[]>(initialSpawnReceipts);
   const spawnOutput = new SvelteMap<string, string>();
   const activeSpawnTargets = new SvelteMap<string, string>();
-  for (const receipt of spawnReceipts) {
+  for (const receipt of initialSpawnReceipts) {
     if (
       receipt.targetId &&
       receipt.turnId &&
@@ -5074,6 +5077,23 @@
             updateSpawnReceipt(receipt.receiptId, { result });
             spawnOutput.set(receipt.receiptId, result);
           }
+        const toolTitle =
+          update &&
+          typeof update === 'object' &&
+          'sessionUpdate' in update &&
+          (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
+          'title' in update &&
+          typeof update.title === 'string'
+            ? update.title
+            : null;
+        if (toolTitle && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
+          for (const receipt of spawnReceipts.filter(
+            (item) =>
+              item.targetId === `acp:${event.agent}:${sessionId}` &&
+              activeSpawnTargets.get(item.targetId) === item.receiptId &&
+              !receiptIsSettled(item.state),
+          ))
+            updateSpawnReceipt(receipt.receiptId, { activity: toolTitle });
         const usage = acpUsage(params?.update);
         if (usage?.rates && !replayingAgentSessions[JSON.stringify([event.agent, sessionId])])
           agentRates = { ...agentRates, [event.agent]: usage.rates };
@@ -5616,6 +5636,15 @@
     });
   }
 
+  const mainSpawnRevision = $derived(
+    spawnReceiptsForSource(spawnReceipts, sessionID ? `opencode:${sessionID}` : null, directory)
+      .map((receipt) => receipt.updated)
+      .join(','),
+  );
+  $effect(() => {
+    if (mainSpawnRevision) void tick().then(scrollToLatest);
+  });
+
   function acceptProjectedMessages(
     incoming: SessionMessageInfo[],
     observed: Record<string, number>,
@@ -5944,6 +5973,24 @@
         }
         const eventSession =
           'data' in event && 'sessionID' in event.data ? event.data.sessionID : undefined;
+        if (typeof eventSession === 'string' && event.type === 'session.text.delta') {
+          for (const receipt of spawnReceipts.filter(
+            (item) => item.targetId === `opencode:${eventSession}` && !receiptIsSettled(item.state),
+          ))
+            updateSpawnReceipt(receipt.receiptId, {
+              result: `${receipt.result ?? ''}${event.data.delta}`.slice(-16_000),
+            });
+        }
+        if (typeof eventSession === 'string' && event.type === 'session.execution.started')
+          for (const receipt of spawnReceipts.filter(
+            (item) => item.targetId === `opencode:${eventSession}` && !receiptIsSettled(item.state),
+          ))
+            updateSpawnReceipt(receipt.receiptId, { state: 'working' });
+        if (typeof eventSession === 'string' && event.type === 'session.tool.input.started')
+          for (const receipt of spawnReceipts.filter(
+            (item) => item.targetId === `opencode:${eventSession}` && !receiptIsSettled(item.state),
+          ))
+            updateSpawnReceipt(receipt.receiptId, { activity: `Using ${event.data.name}` });
         if (
           eventSession &&
           (event.type === 'session.execution.started' ||
@@ -6769,6 +6816,11 @@
                     message.target ===
                       coordinationKey(directory, `acp:${acpAgent}:${acpThread.sessionId}`),
                 )}
+                spawnReceipts={spawnReceiptsForSource(
+                  spawnReceipts,
+                  acpThread ? `acp:${acpAgent}:${acpThread.sessionId}` : null,
+                  directory,
+                )}
                 focusPrompt={promptFocusPane === 'main'}
                 picked={pickedAttachments.main}
                 prefill={issuePrefills[directory]}
@@ -6937,6 +6989,13 @@
                   </div>
                 </article>
               {/each}
+              <SpawnActivity
+                receipts={spawnReceiptsForSource(
+                  spawnReceipts,
+                  sessionID ? `opencode:${sessionID}` : null,
+                  directory,
+                )}
+              />
               {#if running && runtimeState === 'connected'}<div class="chat-working">
                   <span class="activity-spinner" aria-hidden="true"></span>
                   <span class="working-label" role="status"
@@ -7135,6 +7194,7 @@
       {client}
       {setup}
       {coordinationMessages}
+      {spawnReceipts}
       {agentUsage}
       {agentRates}
       onentries={(id, entries, sessionId, ready) =>

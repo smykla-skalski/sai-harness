@@ -26,6 +26,7 @@ export type SpawnReceipt = {
   updated: number;
   result: string | null;
   error: string | null;
+  activity?: string;
 };
 
 const states = new Set<SpawnState>([
@@ -63,7 +64,8 @@ export function loadSpawnReceipts(raw: string | null): SpawnReceipt[] {
         typeof item.created === 'number' &&
         typeof item.updated === 'number' &&
         (item.result === null || typeof item.result === 'string') &&
-        (item.error === null || typeof item.error === 'string'),
+        (item.error === null || typeof item.error === 'string') &&
+        (item.activity === undefined || typeof item.activity === 'string'),
     );
     return receipts;
   } catch {
@@ -79,6 +81,7 @@ export function saveBoundedReceipt(
     ...receipt,
     result: receipt.result?.slice(-16_000) ?? null,
     error: receipt.error?.slice(0, 2_000) ?? null,
+    activity: receipt.activity?.slice(0, 200),
   };
   return [bounded, ...receipts.filter((item) => item.receiptId !== receipt.receiptId)].slice(
     0,
@@ -108,6 +111,17 @@ export function receiptForSource(
 
 export function receiptIsSettled(state: SpawnState): boolean {
   return ['completed', 'failed', 'interrupted', 'unavailable'].includes(state);
+}
+
+export function spawnReceiptsForSource(
+  receipts: SpawnReceipt[],
+  sourceId: string | null,
+  directory: string,
+): SpawnReceipt[] {
+  if (!sourceId) return [];
+  return receipts.filter(
+    (receipt) => receipt.sourceId === sourceId && receipt.sourceDirectory === directory,
+  );
 }
 
 export function acpReceiptState(receipt: SpawnReceipt, activity: AgentActivity | null): SpawnState {

@@ -4,6 +4,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import SpawnActivity from './SpawnActivity.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import { toolInput } from './lib/tool-display';
   import HarnessIcon from './HarnessIcon.svelte';
@@ -35,6 +36,7 @@
   } from './lib/acp';
   import type { ThreadStatus } from './lib/attention';
   import type { AgentUsage } from './lib/agent-usage';
+  import type { SpawnReceipt } from './lib/agent-results';
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     clipboardFiles,
@@ -80,6 +82,7 @@
     ephemeral?: boolean;
     seedContext?: string;
     coordinationMessages?: CoordinationMessage[];
+    spawnReceipts?: SpawnReceipt[];
   }
   let {
     agent,
@@ -106,6 +109,7 @@
     ephemeral = false,
     seedContext = '',
     coordinationMessages = [],
+    spawnReceipts = [],
   }: Props = $props();
   let mounted = $state(false);
   let ready = $state(false);
@@ -247,6 +251,10 @@
   let generation = 0;
   let scroll: HTMLDivElement;
   let autoFollow = true;
+  const spawnRevision = $derived(spawnReceipts.map((receipt) => receipt.updated).join(','));
+  $effect(() => {
+    if (spawnRevision && autoFollow) void follow();
+  });
   let prompt: HTMLTextAreaElement;
   const name = $derived(agentName);
   const isBusy = $derived(busy || running || historyLoading);
@@ -1185,6 +1193,7 @@
         </div>
       </article>
     {/each}
+    <SpawnActivity receipts={spawnReceipts} />
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}

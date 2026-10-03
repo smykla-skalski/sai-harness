@@ -20,6 +20,7 @@
   import type { BrowserAttachment } from './lib/browser-pick';
   import type { DiffComment } from './lib/diff-comments';
   import { coordinationKey, type CoordinationMessage } from './lib/coordination';
+  import { spawnReceiptsForSource, type SpawnReceipt } from './lib/agent-results';
   import type { ThreadStatus } from './lib/attention';
   import type { AgentUsage, RateWindow } from './lib/agent-usage';
   import { threadKey } from './lib/recent-threads';
@@ -43,6 +44,7 @@
     client: OpenCodeClient | null;
     setup: SetupReport | null;
     coordinationMessages: CoordinationMessage[];
+    spawnReceipts: SpawnReceipt[];
     agentUsage: Record<string, AgentUsage>;
     agentRates: Record<string, RateWindow[]>;
     onentries: (
@@ -98,6 +100,7 @@
     client,
     setup,
     coordinationMessages,
+    spawnReceipts,
     agentUsage,
     agentRates,
     onentries,
@@ -331,6 +334,7 @@
   >
     <PaneTree
       {coordinationMessages}
+      {spawnReceipts}
       {agentUsage}
       {agentRates}
       pane={pane.first}
@@ -408,6 +412,7 @@
     ></div>
     <PaneTree
       {coordinationMessages}
+      {spawnReceipts}
       {agentUsage}
       {agentRates}
       pane={pane.second}
@@ -575,6 +580,11 @@
                   message.target ===
                     coordinationKey(directory, `opencode:${pane.thread.sessionId}`),
               )}
+              spawnReceipts={spawnReceiptsForSource(
+                spawnReceipts,
+                pane.thread ? `opencode:${pane.thread.sessionId}` : null,
+                directory,
+              )}
               focused={focused === pane.id}
               focusPrompt={focusPromptPane === pane.id}
               picked={pickedAttachments[pane.id]}
@@ -674,6 +684,11 @@
                   pane.thread &&
                   message.target ===
                     coordinationKey(directory, `acp:${pane.agent}:${pane.thread.sessionId}`),
+              )}
+              spawnReceipts={spawnReceiptsForSource(
+                spawnReceipts,
+                pane.thread ? `acp:${pane.agent}:${pane.thread.sessionId}` : null,
+                directory,
               )}
               running={running(pane.thread)}
               focused={focused === pane.id}

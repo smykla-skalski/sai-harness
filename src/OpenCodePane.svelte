@@ -5,6 +5,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import Markdown from './Markdown.svelte';
+  import SpawnActivity from './SpawnActivity.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
@@ -14,6 +15,7 @@
   import { runSerialOpenCodeTurn } from './lib/opencode-turns';
   import PromptPanel from './PromptPanel.svelte';
   import type { AgentThread } from './lib/acp';
+  import type { SpawnReceipt } from './lib/agent-results';
   import type { BrowserAttachment } from './lib/browser-pick';
   import {
     coordinationMessageForText,
@@ -33,6 +35,7 @@
     thread,
     setup,
     coordinationMessages = [],
+    spawnReceipts = [],
     focused,
     focusPrompt,
     picked,
@@ -50,6 +53,7 @@
     thread: AgentThread | null;
     setup: SetupReport | null;
     coordinationMessages?: CoordinationMessage[];
+    spawnReceipts?: SpawnReceipt[];
     focused: boolean;
     focusPrompt: boolean;
     picked?: BrowserAttachment;
@@ -132,6 +136,10 @@
   let lastPicked = '';
   let lastExternalPrompt = '';
   let following = true;
+  const spawnRevision = $derived(spawnReceipts.map((receipt) => receipt.updated).join(','));
+  $effect(() => {
+    if (spawnRevision && following) void follow();
+  });
   let stopRequested = false;
   const busy = $derived(sending || running);
   const contextUsage = $derived(openCodeContextUsage(messages, setup?.models ?? []));
@@ -663,6 +671,7 @@
         </div>
       </article>
     {/each}
+    <SpawnActivity receipts={spawnReceipts} />
     {#if running}<div class="agent-busy" role="status">
         OpenCode is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}
