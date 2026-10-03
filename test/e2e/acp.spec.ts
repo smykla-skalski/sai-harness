@@ -13,6 +13,19 @@ async function selectClaudeThread(title: string) {
   await browser.keys('Enter');
 }
 
+async function activeClaudeSessions(): Promise<unknown[]> {
+  return browser.execute(async () => {
+    const tauri = Reflect.get(window, '__TAURI__');
+    const activity: unknown = await tauri.core.invoke('acp_activity');
+    if (!activity || typeof activity !== 'object') throw new Error('Missing ACP activity');
+    const claude: unknown = Reflect.get(activity, 'claude');
+    if (!claude || typeof claude !== 'object') throw new Error('Missing Claude activity');
+    const active: unknown = Reflect.get(claude, 'active');
+    if (!Array.isArray(active)) throw new Error('Missing active Claude sessions');
+    return active;
+  });
+}
+
 describe('ACP agent threads', () => {
   const repository = mkdtempSync(join(tmpdir(), 'sail-acp-e2e-'));
 
@@ -288,6 +301,46 @@ describe('ACP agent threads', () => {
       expect.stringContaining('Done: Queued follow-up'),
     );
     await expect($('.queued-messages')).not.toExist();
+  });
+
+  it('keeps an active ACP turn running when closing Sail is cancelled', async () => {
+    await browser.execute((path) => {
+      localStorage.setItem('sai-directory', path);
+      localStorage.setItem(
+        'sai-project-catalog',
+        JSON.stringify({ repositories: [path], groups: [], worktrees: {} }),
+      );
+      localStorage.removeItem('sai-pane-layouts');
+      localStorage.removeItem('sail-agent-threads');
+    }, realpathSync(repository));
+    await browser.refresh();
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Keep running during close');
+    await $('.agent-actions button').click();
+    await expect($('.agent-permission')).toBeDisplayed();
+
+    const activeBefore = await activeClaudeSessions();
+    expect(activeBefore).toHaveLength(1);
+
+    await browser.execute(async () => {
+      const tauri = Reflect.get(window, '__TAURI__');
+      await tauri.window.getCurrentWindow().close();
+    });
+    await expect($('.confirmation-dialog')).toHaveText(
+      expect.stringContaining('Closing Sail stops active agent turns'),
+    );
+    await $('.confirmation-dialog button:first-child').click();
+    await expect($('.confirmation-dialog')).not.toBeDisplayed();
+    await expect($('.agent-permission')).toBeDisplayed();
+
+    const activeAfter = await activeClaudeSessions();
+    expect(activeAfter).toEqual(activeBefore);
+
+    await $('.agent-permission button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Keep running during close'),
+    );
   });
 
   it('keeps agent messages and failures visible around grouped tool activity', async () => {
