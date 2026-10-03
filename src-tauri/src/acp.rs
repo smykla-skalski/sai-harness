@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -586,18 +586,17 @@ fn connect_blocking(
     })?;
     let input = child.stdin.take().ok_or("Agent stdin unavailable.")?;
     let output = child.stdout.take().ok_or("Agent stdout unavailable.")?;
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(mut stderr) = child.stderr.take() {
         let stderr_agent = agent.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines() {
-                match line {
-                    Ok(line) => crate::diagnostics::record(
+            let mut buffer = [0; 4096];
+            loop {
+                match stderr.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(bytes) => crate::diagnostics::record(
                         "agent_stderr",
-                        json!({
-                            "agent":stderr_agent,"bytes":line.len()
-                        }),
+                        json!({"agent":stderr_agent,"bytes":bytes}),
                     ),
-                    Err(_) => break,
                 }
             }
         });

@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -464,15 +464,15 @@ fn start_runtime(
         .spawn()
         .map_err(|_| "Could not start OpenCode. Check the binary path and retry.".to_string())?;
     diagnostics::record("runtime_spawned", serde_json::json!({"pid":child.id()}));
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(mut stderr) = child.stderr.take() {
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines() {
-                match line {
-                    Ok(line) => diagnostics::record(
-                        "runtime_stderr",
-                        serde_json::json!({"bytes":line.len()}),
-                    ),
-                    Err(_) => break,
+            let mut buffer = [0; 4096];
+            loop {
+                match stderr.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(bytes) => {
+                        diagnostics::record("runtime_stderr", serde_json::json!({"bytes":bytes}))
+                    }
                 }
             }
         });
