@@ -11,6 +11,7 @@ import {
   type AgentEntry,
   type AgentThread,
 } from '../src/lib/acp.ts';
+import { toolCommand } from '../src/lib/tool-display.ts';
 
 const normalizeEntries = (entries: AgentEntry[]) =>
   entries.map((entry) => (entry.type === 'tool' ? entry : { ...entry, id: entry.type }));
@@ -64,6 +65,53 @@ void test('ACP tool calls keep terminal references across updates', () => {
     content: [{ type: 'content', content: { type: 'text', text: 'Finished' } }],
   });
   assert.deepEqual(completed[0]?.type === 'tool' && completed[0].terminalIds, ['terminal-1']);
+});
+
+void test('ACP tool calls keep structured command input across updates', () => {
+  const started = updateEntries([], {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'bash-1',
+    title: 'Run checks',
+    rawInput: { command: 'npm test', timeout: 120000 },
+  });
+  const completed = updateEntries(started, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-1',
+    status: 'completed',
+  });
+  assert.deepEqual(completed[0]?.type === 'tool' && completed[0].input, {
+    command: 'npm test',
+    timeout: 120000,
+  });
+  const cleared = updateEntries(completed, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-1',
+    rawInput: null,
+  });
+  assert.equal(cleared[0]?.type === 'tool' && cleared[0].input, null);
+});
+
+void test('ACP tool calls keep raw output across updates', () => {
+  const started = updateEntries([], {
+    sessionUpdate: 'tool_call',
+    toolCallId: 'bash-2',
+    title: 'Run checks',
+    rawOutput: { stdout: 'All checks passed.' },
+  });
+  const completed = updateEntries(started, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-2',
+    status: 'completed',
+  });
+  assert.deepEqual(completed[0]?.type === 'tool' && completed[0].output, {
+    stdout: 'All checks passed.',
+  });
+  const cleared = updateEntries(completed, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'bash-2',
+    rawOutput: null,
+  });
+  assert.equal(cleared[0]?.type === 'tool' && cleared[0].output, null);
 });
 
 void test('batched and replayed ACP updates preserve transcript order and content', () => {
@@ -139,6 +187,26 @@ void test('recent transcript cache keeps the latest entries within a size budget
       ['small'],
     );
     assert.ok((values.get('sai-agent-transcript-cache')?.length ?? 0) <= 128 * 1024);
+    saveRecentTranscript(thread, [
+      {
+        id: 'large-input',
+        type: 'tool',
+        title: 'Run command',
+        status: 'completed',
+        content: 'Done',
+        input: { command: 'x'.repeat(130_000) },
+        output: { stdout: 'y'.repeat(130_000) },
+        terminalIds: [],
+      },
+    ]);
+    const cachedTool = loadRecentTranscript(thread)[0];
+    assert.equal(cachedTool?.id, 'large-input');
+    assert.equal(cachedTool?.type === 'tool' && cachedTool.content, 'Done');
+    assert.equal(cachedTool?.type === 'tool' && toolCommand(cachedTool.input)?.length, 1024);
+    assert.equal(
+      cachedTool?.type === 'tool' && cachedTool.output,
+      'Output omitted from transcript cache (too large)',
+    );
     saveRecentTranscript(thread, [
       {
         id: 'tool',

@@ -11,6 +11,7 @@
   import type { BrowserAttachment } from './lib/browser-pick';
   import { Badge, Button } from '@smykla-skalski/sui';
   import Markdown from './Markdown.svelte';
+  import ToolActivity from './ToolActivity.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import DiffPanel from './DiffPanel.svelte';
   import HistoryPanel from './HistoryPanel.svelte';
@@ -6885,20 +6886,22 @@
                       <div class="message-author">{message.agent}</div>
                       {#if assistantText(message)}<Markdown source={assistantText(message)} />{/if}
                       {#each message.content as part, ordinal (ordinal)}
-                        {#if part.type === 'tool'}<details class="tool-card">
-                            <summary>{part.name} · {part.state.status}</summary>
-                            {#if part.state.status === 'streaming'}<pre>{part.state.input}</pre>
-                            {:else}<pre>{JSON.stringify(part.state.input, null, 2)}</pre>{/if}
-                            {#if part.state.status === 'completed' || part.state.status === 'error'}
-                              {#each part.state.content ?? [] as item, itemIndex (itemIndex)}
-                                {#if item.type === 'text'}<pre>{item.text}</pre>
-                                {:else}<p>{item.name ?? item.uri}</p>{/if}
-                              {/each}
-                            {/if}
-                            {#if part.state.status === 'error'}<p class="message-error">
-                                {part.state.error.message}
-                              </p>{/if}
-                          </details>{/if}
+                        {#if part.type === 'tool'}
+                          <ToolActivity
+                            title={part.name}
+                            status={part.state.status}
+                            input={part.state.input}
+                            output={part.state.status === 'completed' ||
+                            part.state.status === 'error'
+                              ? (part.state.content ?? [])
+                                  .map((item) =>
+                                    item.type === 'text' ? item.text : (item.name ?? item.uri),
+                                  )
+                                  .join('\n')
+                              : ''}
+                            error={part.state.status === 'error' ? part.state.error.message : ''}
+                          />
+                        {/if}
                       {/each}
                       {#if message.retry}<p class="retry-state" role="status">
                           Retry {message.retry.attempt}: {message.retry.error.message}

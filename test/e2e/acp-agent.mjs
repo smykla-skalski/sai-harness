@@ -248,9 +248,14 @@ for await (const line of createInterface({ input: process.stdin })) {
         toolCallId: `demo-${message.id}-${name}`,
         title: name,
         status,
-        ...(content
-          ? { content: [{ type: 'content', content: { type: 'text', text: content } }] }
+        ...(name === 'Run checks' && status === 'in_progress'
+          ? { rawInput: { command: 'npm test' } }
           : {}),
+        ...(name === 'Run checks' && status === 'completed'
+          ? { rawOutput: { stdout: content } }
+          : content
+            ? { content: [{ type: 'content', content: { type: 'text', text: content } }] }
+            : {}),
       });
       record({
         sessionUpdate: 'agent_message_chunk',

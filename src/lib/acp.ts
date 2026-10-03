@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getSetting, setSetting } from './settings.ts';
+import { toolCommand } from './tool-display.ts';
 
 export type AgentId = string;
 
@@ -31,6 +32,8 @@ export interface AgentTool {
   title: string;
   status: string;
   content: string;
+  input?: unknown;
+  output?: unknown;
   terminalIds: string[];
 }
 
@@ -155,7 +158,19 @@ export function saveRecentTranscript(thread: AgentThread, entries: AgentEntry[])
   for (const entry of entries.slice(-transcriptLimit).toReversed()) {
     const saved: AgentEntry =
       entry.type === 'tool'
-        ? { ...entry, content: entry.content.slice(0, 4096), terminalIds: [] }
+        ? {
+            ...entry,
+            content: entry.content.slice(0, 4096),
+            input:
+              JSON.stringify(entry.input ?? '').length <= 4096
+                ? entry.input
+                : { command: toolCommand(entry.input)?.slice(0, 1024) ?? '', truncated: true },
+            output:
+              JSON.stringify(entry.output ?? '').length <= 4096
+                ? entry.output
+                : 'Output omitted from transcript cache (too large)',
+            terminalIds: [],
+          }
         : { ...entry, text: entry.text.slice(-20000) };
     const size = encoder.encode(JSON.stringify(saved)).length + Number(recent.length > 0);
     if (size > remaining) continue;
@@ -310,12 +325,16 @@ function applyEntryUpdate(
           ]),
         ]
       : (existing?.terminalIds ?? []);
+    const input = update.rawInput === undefined ? existing?.input : update.rawInput;
+    const output = update.rawOutput === undefined ? existing?.output : update.rawOutput;
     const next: AgentTool = {
       id,
       type: 'tool',
       title: typeof update.title === 'string' ? update.title : (existing?.title ?? 'Tool call'),
       status: typeof update.status === 'string' ? update.status : (existing?.status ?? 'pending'),
       content,
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
       terminalIds,
     };
     if (index >= 0) entries[index] = next;
