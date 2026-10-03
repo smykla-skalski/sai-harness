@@ -448,7 +448,7 @@
           skills: promptSkill(skills, text)?.id
             ? [{ id: promptSkill(skills, text)!.id! }]
             : undefined,
-          delivery: queued ? 'queue' : undefined,
+          delivery: queued ? 'steer' : undefined,
           files: paths.map((path) => ({ uri: fileUri(path), name: path.split(/[\\/]/).at(-1) })),
         });
       });

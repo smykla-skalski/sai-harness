@@ -6395,7 +6395,7 @@
           skills: promptSkill(skills, text)?.id
             ? [{ id: promptSkill(skills, text)!.id! }]
             : undefined,
-          delivery: queueTurn ? 'queue' : undefined,
+          delivery: queueTurn ? 'steer' : undefined,
           files: files.map((filePath) => ({
             uri: fileUri(filePath),
             name: clipboardAttachmentNames.get(filePath) ?? filePath.split(/[\\/]/).at(-1),

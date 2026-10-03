@@ -460,6 +460,10 @@ export const acp = {
     invoke<{ stopReason: string }>('acp_prompt', {
       params: { agent, sessionId, text, turnId, imagePaths },
     }),
+  steer: (agent: AgentId, sessionId: string, text: string, imagePaths: string[] = []) =>
+    invoke<{ outcome: 'injected' | 'startedNewTurn' | 'promptRequired' | 'failed' }>('acp_steer', {
+      params: { agent, sessionId, text, imagePaths },
+    }),
   cancel: (agent: AgentId, sessionId: string, turnId: string | null) =>
     invoke<void>('acp_cancel', { agent, sessionId, turnId }),
   permission: (agent: AgentId, requestId: string | number, optionId: string | null) =>

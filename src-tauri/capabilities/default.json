@@ -42,6 +42,7 @@
     "allow-acp-load-session",
     "allow-acp-resume-session",
     "allow-acp-prompt",
+    "allow-acp-steer",
     "allow-acp-cancel",
     "allow-acp-permission",
     "allow-acp-pending-permissions",

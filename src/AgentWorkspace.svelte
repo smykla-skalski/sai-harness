@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { Badge, Button } from '@smykla-skalski/sui';
@@ -139,6 +140,7 @@
   });
   let queued = $state<QueuedAgentMessage[]>([]);
   let queuePaused = $state(false);
+  let steering = $state(false);
   function diagnostic(event: DiagnosticEvent, sessionId = activeSessionId, turnId = activeTurnId) {
     recordDiagnostic(event, {
       agent,
@@ -148,7 +150,7 @@
     });
   }
   $effect(() => {
-    if (isBusy || !ready || queuePaused || !queued.length) return;
+    if (isBusy || !ready || queuePaused || steering || !queued.length) return;
     const [next, ...remaining] = queued;
     queued = remaining;
     diagnostic('queue_dispatch_started');
@@ -679,6 +681,7 @@
       if (disposed || payload.agent !== agent) return;
       const { message } = payload;
       if (message.method === 'sail/disconnected') {
+        inFlightSteer?.finish();
         ready = false;
         busy = false;
         if (thread) onstatus(thread, 'failed');
@@ -698,6 +701,15 @@
         )
           commandUpdates[params.sessionId] = update.availableCommands;
       }
+      if (message.method === 'sail/prompt_finished' && typeof params?.sessionId === 'string') {
+        discardSteeredAttachments(params.sessionId);
+        const steer = inFlightSteer;
+        if (
+          steer?.sessionId === params.sessionId &&
+          (!steer.turnId || steer.turnId === params.turnId)
+        )
+          steer.finish();
+      }
       if (!params || params.sessionId !== activeSessionId) return;
       if (message.method === 'sail/permission_resolved') {
         permissions = permissions.filter(
@@ -716,6 +728,11 @@
         )
           updateSkills(data.availableCommands);
         if (data.sessionUpdate !== 'user_message_chunk' || replaying) applyUpdate(data);
+        if (
+          data.sessionUpdate === 'tool_call_update' &&
+          (data.status === 'completed' || data.status === 'failed')
+        )
+          void steerQueued();
       } else if (message.method === 'session/request_permission' && message.id != null) {
         queuePermission(message);
       }
@@ -851,19 +868,13 @@
         ephemeral && seedContext && entries.length === 1
           ? `Read-only context from the parent thread:\n${seedContext}\n\nSide question: ${text}`
           : text;
-      const filePaths = sentClipboard.filter((item) => !item.image).map((item) => item.path);
       phase = 'prompt';
       const result = await acp.prompt(
         turnAgent,
         id!,
-        filePaths.length
-          ? `${promptText}\n\nAttached files (read these paths):\n${filePaths.join('\n')}`
-          : promptText,
+        withAttachedFiles(promptText, sentClipboard),
         turnId,
-        [
-          ...sentImages.map((item) => item.imagePath),
-          ...sentClipboard.filter((item) => item.image).map((item) => item.path),
-        ],
+        promptImagePaths(sentImages, sentClipboard),
       );
       if (recoveredDraft && result.stopReason !== 'cancelled' && !stopRequested)
         recoveredDraft = false;
@@ -893,17 +904,21 @@
       const following = deliverySessionId
         ? queuedAgentMessages(turnAgent, turnDirectory, deliverySessionId)
         : [];
+      const steer =
+        deliverySessionId && inFlightSteer?.sessionId === deliverySessionId ? inFlightSteer : null;
       const retryQueued =
         !!deliverySessionId &&
         (queuedMessage !== undefined ||
           following.length > 0 ||
+          steer !== null ||
           (current !== generation && disposed));
       if (retryQueued && deliverySessionId) {
         if (recoveredDraft) {
           recoveredDraft = false;
         }
         const retry = { text, images: sentImages, attachments: sentClipboard };
-        const messages = [retry, ...following];
+        if (steer) steer.requeued = true;
+        const messages = [retry, ...(steer ? [steer.message] : []), ...following];
         saveQueuedAgentMessages(turnAgent, turnDirectory, deliverySessionId, messages);
         setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, true);
         recordDiagnostic('queue_paused', {
@@ -942,16 +957,11 @@
       }
       if (external && !queuedMessage) throw cause;
     } finally {
+      if (inFlightSteer?.sessionId === deliverySessionId && inFlightSteer.turnId === turnId)
+        inFlightSteer.finish();
       if (current === generation) rememberTranscript();
-      if (!keepImages)
-        sentImages.forEach(
-          (image) => void invoke('browser_remove_capture', { path: image.imagePath }),
-        );
-      if (!keepImages)
-        sentClipboard.forEach((attachment) => {
-          if (attachment.image) void invoke('browser_remove_capture', { path: attachment.path });
-          else void removeClipboardFile(attachment.path);
-        });
+      if (!keepImages) discardAttachments(sentImages, sentClipboard);
+      if (deliverySessionId) discardSteeredAttachments(deliverySessionId);
       if (activeTurnId === turnId) activeTurnId = null;
       if (activityThread) onstatus(activityThread, finalStatus, notifyOnDone);
       if (current === generation) busy = false;
@@ -967,6 +977,128 @@
         setAgentQueuePaused(turnAgent, turnDirectory, deliverySessionId, false);
       }
     }
+  }
+
+  function withAttachedFiles(text: string, attachments: QueuedAgentMessage['attachments']) {
+    const filePaths = attachments.filter((item) => !item.image).map((item) => item.path);
+    return filePaths.length
+      ? `${text}\n\nAttached files (read these paths):\n${filePaths.join('\n')}`
+      : text;
+  }
+
+  function promptImagePaths(
+    sentImages: BrowserAttachment[],
+    attachments: QueuedAgentMessage['attachments'],
+  ) {
+    return [
+      ...sentImages.map((item) => item.imagePath),
+      ...attachments.filter((item) => item.image).map((item) => item.path),
+    ];
+  }
+
+  function discardAttachments(
+    sentImages: BrowserAttachment[],
+    attachments: QueuedAgentMessage['attachments'],
+  ) {
+    sentImages.forEach((image) => void invoke('browser_remove_capture', { path: image.imagePath }));
+    attachments.forEach((attachment) => {
+      if (attachment.image) void invoke('browser_remove_capture', { path: attachment.path });
+      else void removeClipboardFile(attachment.path);
+    });
+  }
+
+  const steeredAttachments = new SvelteMap<string, QueuedAgentMessage[]>();
+  let inFlightSteer: {
+    sessionId: string;
+    turnId: string | null;
+    message: QueuedAgentMessage;
+    requeued: boolean;
+    finish: () => void;
+  } | null = null;
+  let steerBlockedTurn: string | null = null;
+
+  function discardSteeredAttachments(sessionId: string) {
+    for (const message of steeredAttachments.get(sessionId) ?? [])
+      discardAttachments(message.images, message.attachments);
+    steeredAttachments.delete(sessionId);
+  }
+
+  function toolsStillRunning() {
+    flushUpdates();
+    const turnStart = entries.findLastIndex((entry) => entry.type === 'user');
+    return entries
+      .slice(turnStart + 1)
+      .some(
+        (entry) =>
+          entry.type === 'tool' && (entry.status === 'pending' || entry.status === 'in_progress'),
+      );
+  }
+
+  async function steerQueued() {
+    const sessionId = activeSessionId;
+    const turnKey = activeTurnId ?? sessionId;
+    if (steering || !isBusy || stopRequested || queuePaused || !queued.length) return;
+    if (!sessionId || steerBlockedTurn === turnKey || toolsStillRunning()) return;
+    const turnAgent = agent;
+    const turnDirectory = directory;
+    const current = generation;
+    const [next, ...remaining] = queued;
+    const entryId = crypto.randomUUID();
+    flushUpdates();
+    entries = [...entries, { id: entryId, type: 'user', text: next.text }];
+    rememberTranscript();
+    queued = remaining;
+    saveQueuedAgentMessages(turnAgent, turnDirectory, sessionId, queued);
+    let finish!: () => void;
+    const completed = new Promise<{ outcome: 'finished' }>((resolve) => {
+      finish = () => resolve({ outcome: 'finished' });
+    });
+    const steer = { sessionId, turnId: activeTurnId, message: next, requeued: false, finish };
+    inFlightSteer = steer;
+    steering = true;
+    const request = acp
+      .steer(
+        turnAgent,
+        sessionId,
+        withAttachedFiles(next.text, next.attachments),
+        promptImagePaths(next.images, next.attachments),
+      )
+      .catch(() => ({ outcome: 'failed' as const }));
+    const { outcome } = await Promise.race([request, completed]);
+    inFlightSteer = null;
+    const delivered = outcome === 'injected' || outcome === 'startedNewTurn';
+    const sameSession = activeSessionId === sessionId;
+    if (delivered) {
+      steeredAttachments.set(sessionId, [...(steeredAttachments.get(sessionId) ?? []), next]);
+      if (current === generation && sameSession) void follow();
+    } else {
+      steerBlockedTurn = turnKey;
+      if (current === generation && sameSession) {
+        flushUpdates();
+        entries = entries.filter((entry) => entry.id !== entryId);
+        rememberTranscript();
+      } else if (!ephemeral) {
+        const origin = {
+          agent: turnAgent,
+          directory: turnDirectory,
+          sessionId,
+          title: '',
+          updated: Date.now(),
+        };
+        saveRecentTranscript(
+          origin,
+          loadRecentTranscript(origin).filter((entry) => entry.id !== entryId),
+        );
+      }
+    }
+    if (steer.requeued === delivered) {
+      const stored = queuedAgentMessages(turnAgent, turnDirectory, sessionId);
+      const restored = delivered ? stored.filter((message) => message !== next) : [next, ...stored];
+      saveQueuedAgentMessages(turnAgent, turnDirectory, sessionId, restored);
+      if (sameSession) queued = restored;
+    }
+    steering = false;
+    if (delivered && current === generation && sameSession) void steerQueued();
   }
 
   function retryQueue() {
@@ -1320,6 +1452,24 @@
       </article>
     {/each}
     <SpawnActivity receipts={spawnReceipts} />
+    {#if queued.length}<div class="queued-messages" role="status" aria-label="Queued messages">
+        {#each queued as message, index (index)}
+          <article class="agent-message message user-message queued-message">
+            <div class="avatar user-avatar">You</div>
+            <div class="message-body">
+              <div class="message-author">
+                You · queued{message.attachments.length || message.images.length
+                  ? ` · ${message.attachments.length + message.images.length} attachments`
+                  : ''}
+              </div>
+              <Markdown source={message.text || 'Attachments'} />
+            </div>
+          </article>
+        {/each}
+        {#if queuePaused}<Button size="sm" variant="secondary" onclick={retryQueue}
+            >Retry queue</Button
+          >{/if}
+      </div>{/if}
     {#if isBusy}<div class="agent-busy" role="status">
         {name} is working… <Button size="sm" variant="secondary" onclick={stop}>Stop</Button>
       </div>{/if}
@@ -1389,17 +1539,6 @@
         selected={skillSelected}
         choose={chooseSkill}
       />
-      {#if queued.length}<div class="queued-messages" role="status">
-          Queued: {queued.length}
-          {#if queuePaused}<Button size="sm" variant="secondary" onclick={retryQueue}
-              >Retry queue</Button
-            >{/if}
-          {#each queued as message, index (index)}<div>
-              {index + 1}. {message.text || 'Attachments'}{message.attachments.length
-                ? ` · ${message.attachments.length} files`
-                : ''}
-            </div>{/each}
-        </div>{/if}
       {#if images.length}<div class="attachments">
           {#each images as image (image.id)}<span
               >📷 {image.imagePath.split(/[\\/]/).at(-1)}
@@ -1635,6 +1774,9 @@
   .agent-tool-current-label {
     display: block;
     margin-bottom: 2px;
+  }
+  .queued-message {
+    opacity: 0.6;
   }
   .agent-busy {
     display: flex;

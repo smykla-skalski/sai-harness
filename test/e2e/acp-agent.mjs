@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 
 const sessions = new Map();
 const permissions = new Map();
+const activePrompts = new Map();
+const steerWaiters = new Map();
 const terminalRequests = new Map();
 let terminalSupport = false;
 let nextTerminalRequest = 3000;
@@ -13,6 +15,9 @@ let nextSession = 0;
 let nextPermission = 1000;
 
 function send(message) {
+  if ('result' in message || 'error' in message)
+    for (const [sessionId, promptId] of activePrompts)
+      if (promptId === message.id) activePrompts.delete(sessionId);
   process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
 }
 
@@ -140,6 +145,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
         authMethods: agent === 'codex' ? [{ id: 'chat-gpt', name: 'ChatGPT' }] : [],
+        _meta: { steering: { supported: true } },
       },
     });
   } else if (message.method === 'authenticate') {
@@ -195,9 +201,104 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     sessions.get(sessionId).config[configId] = value;
     send({ id: message.id, result: { configOptions: configOptions(sessionId) } });
+  } else if (message.method === '_session/steering') {
+    const { sessionId } = message.params;
+    if (!activePrompts.has(sessionId)) {
+      send({ id: message.id, result: { outcome: 'promptRequired' } });
+      continue;
+    }
+    if (sessions.get(sessionId).holdSteerResponse) continue;
+    const reply = {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: `Steered: ${message.params.prompt[0].text}` },
+    };
+    sessions.get(sessionId).history.push(reply);
+    update(sessionId, reply);
+    steerWaiters.get(sessionId)?.();
+    setTimeout(() => send({ id: message.id, result: { outcome: 'injected' } }), 200);
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
+    activePrompts.set(sessionId, message.id);
     const text = message.params.prompt[0].text;
+    if (text === 'Steer demo' || text === 'Steer parallel demo') {
+      const parallel = text === 'Steer parallel demo';
+      const finish = () => {
+        steerWaiters.delete(sessionId);
+        clearTimeout(fallback);
+        update(sessionId, {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: `${text} finished.` },
+        });
+        send({ id: message.id, result: { stopReason: 'end_turn' } });
+      };
+      const fallback = setTimeout(finish, 30_000);
+      update(sessionId, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `steer-${message.id}`,
+        title: parallel ? 'First parallel tool' : 'Wait for steer',
+        status: 'in_progress',
+      });
+      if (parallel)
+        update(sessionId, {
+          sessionUpdate: 'tool_call',
+          toolCallId: `steer-second-${message.id}`,
+          title: 'Second parallel tool',
+          status: 'in_progress',
+        });
+      setTimeout(() => {
+        update(sessionId, {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: `steer-${message.id}`,
+          status: 'completed',
+        });
+        if (parallel) {
+          update(sessionId, {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'First parallel tool finished.' },
+          });
+          setTimeout(() => {
+            update(sessionId, {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: `steer-second-${message.id}`,
+              status: 'completed',
+            });
+            steerWaiters.set(sessionId, () => setTimeout(finish, 3000));
+          }, 2000);
+        } else steerWaiters.set(sessionId, () => setTimeout(finish, 3000));
+      }, 3000);
+      continue;
+    }
+    if (text === 'Steer no-response demo') {
+      sessions.get(sessionId).holdSteerResponse = true;
+      update(sessionId, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `steer-no-response-${message.id}`,
+        title: 'Complete before steering replies',
+        status: 'in_progress',
+      });
+      setTimeout(() => {
+        update(sessionId, {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: `steer-no-response-${message.id}`,
+          status: 'completed',
+        });
+        setTimeout(() => {
+          sessions.get(sessionId).holdSteerResponse = false;
+          send({ id: message.id, result: { stopReason: 'end_turn' } });
+        }, 1000);
+      }, 1500);
+      continue;
+    }
+    if (text === 'Steer no-response follow-up') {
+      const reply = {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Done: Steer no-response follow-up' },
+      };
+      sessions.get(sessionId).history.push(reply);
+      update(sessionId, reply);
+      send({ id: message.id, result: { stopReason: 'end_turn' } });
+      continue;
+    }
     if (text === 'Prompt failure') {
       setTimeout(
         () => send({ id: message.id, error: { code: -1, message: 'Fixture prompt failed' } }),

@@ -947,30 +947,11 @@ async fn restore_session(
     .map_err(|error| error.to_string())?
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpPromptParams {
-    agent: String,
-    session_id: String,
-    text: String,
-    turn_id: String,
+fn prompt_content(
+    captures: &crate::browser::CaptureStore,
+    text: &str,
     image_paths: Vec<String>,
-}
-
-#[tauri::command]
-pub async fn acp_prompt(
-    app: AppHandle,
-    manager: State<'_, AgentManager>,
-    captures: State<'_, crate::browser::CaptureStore>,
-    params: AcpPromptParams,
-) -> Result<Value, String> {
-    let AcpPromptParams {
-        agent,
-        session_id,
-        text,
-        turn_id,
-        image_paths,
-    } = params;
+) -> Result<Vec<Value>, String> {
     if image_paths.len() > 4 {
         return Err("Too many prompt images".to_string());
     }
@@ -991,6 +972,51 @@ pub async fn acp_prompt(
             "mimeType":"image/png"
         }));
     }
+    Ok(content)
+}
+
+async fn prepare_prompt_content(
+    app: &AppHandle,
+    text: &str,
+    image_paths: Vec<String>,
+) -> Result<Vec<Value>, String> {
+    let app = app.clone();
+    let text = text.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        prompt_content(
+            &app.state::<crate::browser::CaptureStore>(),
+            &text,
+            image_paths,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpPromptParams {
+    agent: String,
+    session_id: String,
+    text: String,
+    turn_id: String,
+    image_paths: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn acp_prompt(
+    app: AppHandle,
+    manager: State<'_, AgentManager>,
+    params: AcpPromptParams,
+) -> Result<Value, String> {
+    let AcpPromptParams {
+        agent,
+        session_id,
+        text,
+        turn_id,
+        image_paths,
+    } = params;
+    let content = prepare_prompt_content(&app, &text, image_paths).await?;
     let runtime = connection(&manager, &agent)?;
     {
         let mut prompts = runtime
@@ -1083,6 +1109,62 @@ pub async fn acp_prompt(
             );
         }
         result
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpSteerParams {
+    agent: String,
+    session_id: String,
+    text: String,
+    image_paths: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn acp_steer(
+    app: AppHandle,
+    manager: State<'_, AgentManager>,
+    params: AcpSteerParams,
+) -> Result<Value, String> {
+    let AcpSteerParams {
+        agent,
+        session_id,
+        text,
+        image_paths,
+    } = params;
+    let runtime = connection(&manager, &agent)?;
+    let supported = runtime
+        .capabilities
+        .lock()
+        .map_err(|error| error.to_string())?
+        .pointer("/_meta/steering/supported")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let active = runtime
+        .prompt_state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .active
+        .contains_key(&session_id);
+    let steer_into_running_turn_only = supported && active;
+    if !steer_into_running_turn_only {
+        return Ok(json!({"outcome":"promptRequired"}));
+    }
+    let content = prepare_prompt_content(&app, &text, image_paths).await?;
+    let wait_as_long_as_a_turn = Duration::from_secs(60 * 60 * 3);
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime.request(
+            "_session/steering",
+            json!({
+                "sessionId":session_id,
+                "prompt":content,
+                "_meta":{"steering":{"idleBehavior":"promptRequired"}}
+            }),
+            wait_as_long_as_a_turn,
+        )
     })
     .await
     .map_err(|error| error.to_string())?
