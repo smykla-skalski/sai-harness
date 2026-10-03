@@ -9,6 +9,7 @@
   import PlanPanel from './PlanPanel.svelte';
   import HistoryPanel from './HistoryPanel.svelte';
   import EmptyPanePicker from './EmptyPanePicker.svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
   import TerminalPane from './TerminalPane.svelte';
   import AgentTerminalPane from './AgentTerminalPane.svelte';
   import BrowserPane from './BrowserPane.svelte';
@@ -496,6 +497,7 @@
     >
       {#if pane.id !== 'main'}
         <div class="pane-heading">
+          {#if pane.agent}<HarnessIcon agent={pane.agent} size={14} />{/if}
           <span
             >{pane.kind === 'terminal'
               ? pane.owner
@@ -514,6 +516,7 @@
         </div>
       {:else if canClose}
         <div class="pane-heading">
+          {#if pane.agent}<HarnessIcon agent={pane.agent} size={14} />{/if}
           <span
             >{pane.kind === 'terminal'
               ? pane.owner

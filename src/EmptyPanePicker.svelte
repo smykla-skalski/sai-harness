@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
   import type { AgentAvailability, AgentId } from './lib/acp';
 
   let {
@@ -143,7 +144,9 @@
           disabled={!agent.available}
           onclick={() => onselect(agent.id)}
         >
-          <span class="pane-picker-choice-icon" aria-hidden="true">✦</span>
+          <span class="pane-picker-choice-icon" aria-hidden="true"
+            ><HarnessIcon agent={agent.id} size={20} /></span
+          >
           <span
             ><strong>{agent.name}</strong><small
               >{agent.available ? 'New conversation' : (agent.reason ?? 'Unavailable')}</small

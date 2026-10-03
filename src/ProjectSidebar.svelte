@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import PathPicker from './PathPicker.svelte';
   import OptionPicker from './OptionPicker.svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
   import type { AgentAvailability, AgentThread } from './lib/acp';
   import type { AttentionMap, ThreadStatus } from './lib/attention';
   import { threadKey } from './lib/recent-threads';
@@ -640,7 +641,9 @@
             : !agents.some((agent) => agent.id === thread.agent && agent.available)}
           onclick={() => onselectthread(key)}
         >
-          <span class="project-agent-provider">{providerName(thread)}</span>
+          <span class="project-agent-provider"
+            ><HarnessIcon agent={thread.agent} size={13} />{providerName(thread)}</span
+          >
           <span class="project-agent-title">{thread.title}</span>
           <span class={`project-agent-status ${status ?? 'unknown'}`}>{statusLabel(status)}</span>
         </button>
@@ -1191,10 +1194,11 @@
           value={worktreeAgent}
           options={[
             { value: '', name: 'Choose after creation' },
-            { value: 'opencode', name: 'OpenCode', disabled: !openCodeAvailable },
+            { value: 'opencode', name: 'OpenCode', icon: 'opencode', disabled: !openCodeAvailable },
             ...agents.map((agent) => ({
               value: agent.id,
               name: agent.name,
+              icon: agent.id,
               disabled: !agent.available,
             })),
           ]}

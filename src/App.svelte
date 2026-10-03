@@ -18,6 +18,7 @@
   import ProjectSidebar from './ProjectSidebar.svelte';
   import type { GitHubIssue, PullRequestCheck } from './ProjectSidebar.svelte';
   import AgentWorkspace from './AgentWorkspace.svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
   import { matchingSkills, promptSkill, type SkillChoice } from './lib/skills';
@@ -6640,14 +6641,16 @@
                 variant="ghost"
                 disabled={!agent.available}
                 title={agent.reason ?? `New ${agent.name} thread`}
-                onclick={() => openAgent(agent.id)}>+ {agent.name}</Button
+                onclick={() => openAgent(agent.id)}
+                >+ <HarnessIcon agent={agent.id} /> {agent.name}</Button
               >
             {/each}
             <Button
               size="sm"
               variant="ghost"
               onclick={newWork}
-              disabled={!workReady || switching || sending}>+ OpenCode</Button
+              disabled={!workReady || switching || sending}
+              title="New OpenCode thread">+ <HarnessIcon agent="opencode" /> OpenCode</Button
             >
           </div>{/if}
         {#if directory}<button
@@ -6796,7 +6799,7 @@
           {:else}
             <div class="agent-header">
               <div class="agent-heading">
-                <strong>OpenCode</strong><span
+                <HarnessIcon agent="opencode" /><strong>OpenCode</strong><span
                   >{currentSession?.title ??
                     (newSessionMode === 'work' ? 'New work' : 'New thread')}</span
                 >
@@ -6841,7 +6844,8 @@
                   {#if directory && !workReady}<div class="welcome-agents">
                       {#each agentAvailability.filter((agent) => agent.available) as agent (agent.id)}<Button
                           variant="secondary"
-                          onclick={() => openAgent(agent.id)}>Start with {agent.name}</Button
+                          onclick={() => openAgent(agent.id)}
+                          >Start with <HarnessIcon agent={agent.id} /> {agent.name}</Button
                         >{/each}
                     </div>{/if}
                 </div>{/if}
@@ -7297,6 +7301,7 @@
         disabled={entry.disabled || paletteBusy}
         onclick={() => void choosePaletteEntry(entry)}
       >
+        {#if entry.agent}<HarnessIcon agent={entry.agent} />{/if}
         <span><strong>{entry.label}</strong><small>{entry.detail}</small></span>
         <span class="palette-kind"
           >{entry.kind === 'project'

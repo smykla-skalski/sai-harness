@@ -5,6 +5,7 @@
   import { Badge, Button } from '@smykla-skalski/sui';
   import type { FormInfo, PermissionRequest } from '@opencode/client';
   import Markdown from './Markdown.svelte';
+  import HarnessIcon from './HarnessIcon.svelte';
   import OptionPicker from './OptionPicker.svelte';
   import PathPicker from './PathPicker.svelte';
   import SkillMenu from './SkillMenu.svelte';
@@ -573,7 +574,9 @@
 <div class="agent-workspace opencode-pane">
   <div class="agent-header">
     <div class="agent-heading">
-      <strong>OpenCode</strong><span>{session?.title ?? thread?.title ?? 'New thread'}</span>
+      <HarnessIcon agent="opencode" /><strong>OpenCode</strong><span
+        >{session?.title ?? thread?.title ?? 'New thread'}</span
+      >
     </div>
     {#if contextUsage !== undefined}<span class="agent-usage">Context {contextUsage}%</span>{/if}
     <Badge tone={busy ? 'warning' : inputReady ? 'success' : 'neutral'}
@@ -791,7 +794,7 @@
     align-items: baseline;
     gap: 12px;
   }
-  .opencode-pane .agent-heading span {
+  .opencode-pane .agent-heading > span:not(.harness-icon) {
     overflow: hidden;
     opacity: 0.65;
     text-overflow: ellipsis;
