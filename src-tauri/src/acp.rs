@@ -975,6 +975,24 @@ fn prompt_content(
     Ok(content)
 }
 
+async fn prepare_prompt_content(
+    app: &AppHandle,
+    text: &str,
+    image_paths: Vec<String>,
+) -> Result<Vec<Value>, String> {
+    let app = app.clone();
+    let text = text.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        prompt_content(
+            &app.state::<crate::browser::CaptureStore>(),
+            &text,
+            image_paths,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpPromptParams {
@@ -989,7 +1007,6 @@ pub struct AcpPromptParams {
 pub async fn acp_prompt(
     app: AppHandle,
     manager: State<'_, AgentManager>,
-    captures: State<'_, crate::browser::CaptureStore>,
     params: AcpPromptParams,
 ) -> Result<Value, String> {
     let AcpPromptParams {
@@ -999,7 +1016,7 @@ pub async fn acp_prompt(
         turn_id,
         image_paths,
     } = params;
-    let content = prompt_content(&captures, &text, image_paths)?;
+    let content = prepare_prompt_content(&app, &text, image_paths).await?;
     let runtime = connection(&manager, &agent)?;
     {
         let mut prompts = runtime
@@ -1108,8 +1125,8 @@ pub struct AcpSteerParams {
 
 #[tauri::command]
 pub async fn acp_steer(
+    app: AppHandle,
     manager: State<'_, AgentManager>,
-    captures: State<'_, crate::browser::CaptureStore>,
     params: AcpSteerParams,
 ) -> Result<Value, String> {
     let AcpSteerParams {
@@ -1118,7 +1135,6 @@ pub async fn acp_steer(
         text,
         image_paths,
     } = params;
-    let content = prompt_content(&captures, &text, image_paths)?;
     let runtime = connection(&manager, &agent)?;
     let supported = runtime
         .capabilities
@@ -1137,6 +1153,7 @@ pub async fn acp_steer(
     if !steer_into_running_turn_only {
         return Ok(json!({"outcome":"promptRequired"}));
     }
+    let content = prepare_prompt_content(&app, &text, image_paths).await?;
     let wait_as_long_as_a_turn = Duration::from_secs(60 * 60 * 3);
     tauri::async_runtime::spawn_blocking(move || {
         runtime.request(

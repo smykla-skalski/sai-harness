@@ -382,6 +382,61 @@ describe('ACP agent threads', () => {
     );
   });
 
+  it('waits for both parallel tools before steering once', async () => {
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Steer parallel demo');
+    await $('.agent-actions button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
+    await $('.agent-composer textarea').setValue('Steer parallel follow-up');
+    await $('.agent-actions button').click();
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('First parallel tool finished.'),
+    );
+    await browser.pause(500);
+    await expect($('.agent-conversation .queued-messages')).toHaveText(
+      expect.stringContaining('Steer parallel follow-up'),
+    );
+    await expect($('.agent-conversation')).not.toHaveText(
+      expect.stringContaining('Steered: Steer parallel follow-up'),
+    );
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Steered: Steer parallel follow-up'),
+    );
+    await expect($('.queued-messages')).not.toExist();
+    const conversation = await $('.agent-conversation').getText();
+    expect(conversation.match(/Steered: Steer parallel follow-up/g)).toHaveLength(1);
+    expect(conversation.indexOf('Steer parallel follow-up')).toBeLessThan(
+      conversation.indexOf('Steered: Steer parallel follow-up'),
+    );
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Steer parallel demo finished.'),
+    );
+  });
+
+  it('sends a queued message when the prompt finishes before steering replies', async () => {
+    await $('.agent-launches button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Ready'));
+    await $('.agent-composer textarea').setValue('Steer no-response demo');
+    await $('.agent-actions button').click();
+    await expect($('.agent-header')).toHaveText(expect.stringContaining('Working'));
+    await $('.agent-composer textarea').setValue('Steer no-response follow-up');
+    await $('.agent-actions button').click();
+    await expect($('.agent-conversation .queued-messages')).toHaveText(
+      expect.stringContaining('Steer no-response follow-up'),
+    );
+    await expect($('.agent-conversation')).toHaveText(
+      expect.stringContaining('Done: Steer no-response follow-up'),
+    );
+    await expect($('.queued-messages')).not.toExist();
+    const entries = await browser.execute(() =>
+      [...document.querySelectorAll('.agent-conversation .user-message:not(.queued-message)')]
+        .map((element) => element.querySelector('.message-body')?.textContent ?? '')
+        .filter((text) => text.includes('Steer no-response follow-up')),
+    );
+    expect(entries).toHaveLength(1);
+  });
+
   it('keeps agent messages and failures visible around grouped tool activity', async () => {
     await browser.execute((path) => {
       localStorage.setItem('sai-directory', path);

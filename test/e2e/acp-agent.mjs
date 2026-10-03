@@ -207,27 +207,27 @@ for await (const line of createInterface({ input: process.stdin })) {
       send({ id: message.id, result: { outcome: 'promptRequired' } });
       continue;
     }
+    if (sessions.get(sessionId).holdSteerResponse) continue;
     const reply = {
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: `Steered: ${message.params.prompt[0].text}` },
     };
-    send({ id: message.id, result: { outcome: 'injected' } });
-    setTimeout(() => {
-      sessions.get(sessionId).history.push(reply);
-      update(sessionId, reply);
-      steerWaiters.get(sessionId)?.();
-    }, 200);
+    sessions.get(sessionId).history.push(reply);
+    update(sessionId, reply);
+    steerWaiters.get(sessionId)?.();
+    setTimeout(() => send({ id: message.id, result: { outcome: 'injected' } }), 200);
   } else if (message.method === 'session/prompt') {
     const { sessionId } = message.params;
     activePrompts.set(sessionId, message.id);
     const text = message.params.prompt[0].text;
-    if (text === 'Steer demo') {
+    if (text === 'Steer demo' || text === 'Steer parallel demo') {
+      const parallel = text === 'Steer parallel demo';
       const finish = () => {
         steerWaiters.delete(sessionId);
         clearTimeout(fallback);
         update(sessionId, {
           sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: 'Steer demo finished.' },
+          content: { type: 'text', text: `${text} finished.` },
         });
         send({ id: message.id, result: { stopReason: 'end_turn' } });
       };
@@ -235,17 +235,68 @@ for await (const line of createInterface({ input: process.stdin })) {
       update(sessionId, {
         sessionUpdate: 'tool_call',
         toolCallId: `steer-${message.id}`,
-        title: 'Wait for steer',
+        title: parallel ? 'First parallel tool' : 'Wait for steer',
         status: 'in_progress',
       });
+      if (parallel)
+        update(sessionId, {
+          sessionUpdate: 'tool_call',
+          toolCallId: `steer-second-${message.id}`,
+          title: 'Second parallel tool',
+          status: 'in_progress',
+        });
       setTimeout(() => {
         update(sessionId, {
           sessionUpdate: 'tool_call_update',
           toolCallId: `steer-${message.id}`,
           status: 'completed',
         });
-        steerWaiters.set(sessionId, () => setTimeout(finish, 3000));
+        if (parallel) {
+          update(sessionId, {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'First parallel tool finished.' },
+          });
+          setTimeout(() => {
+            update(sessionId, {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: `steer-second-${message.id}`,
+              status: 'completed',
+            });
+            steerWaiters.set(sessionId, () => setTimeout(finish, 3000));
+          }, 2000);
+        } else steerWaiters.set(sessionId, () => setTimeout(finish, 3000));
       }, 3000);
+      continue;
+    }
+    if (text === 'Steer no-response demo') {
+      sessions.get(sessionId).holdSteerResponse = true;
+      update(sessionId, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `steer-no-response-${message.id}`,
+        title: 'Complete before steering replies',
+        status: 'in_progress',
+      });
+      setTimeout(() => {
+        update(sessionId, {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: `steer-no-response-${message.id}`,
+          status: 'completed',
+        });
+        setTimeout(() => {
+          sessions.get(sessionId).holdSteerResponse = false;
+          send({ id: message.id, result: { stopReason: 'end_turn' } });
+        }, 1000);
+      }, 1500);
+      continue;
+    }
+    if (text === 'Steer no-response follow-up') {
+      const reply = {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Done: Steer no-response follow-up' },
+      };
+      sessions.get(sessionId).history.push(reply);
+      update(sessionId, reply);
+      send({ id: message.id, result: { stopReason: 'end_turn' } });
       continue;
     }
     if (text === 'Prompt failure') {

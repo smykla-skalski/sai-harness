@@ -681,6 +681,7 @@
       if (disposed || payload.agent !== agent) return;
       const { message } = payload;
       if (message.method === 'sail/disconnected') {
+        inFlightSteer?.finish();
         ready = false;
         busy = false;
         if (thread) onstatus(thread, 'failed');
@@ -700,8 +701,15 @@
         )
           commandUpdates[params.sessionId] = update.availableCommands;
       }
-      if (message.method === 'sail/prompt_finished' && typeof params?.sessionId === 'string')
+      if (message.method === 'sail/prompt_finished' && typeof params?.sessionId === 'string') {
         discardSteeredAttachments(params.sessionId);
+        const steer = inFlightSteer;
+        if (
+          steer?.sessionId === params.sessionId &&
+          (!steer.turnId || steer.turnId === params.turnId)
+        )
+          steer.finish();
+      }
       if (!params || params.sessionId !== activeSessionId) return;
       if (message.method === 'sail/permission_resolved') {
         permissions = permissions.filter(
@@ -949,6 +957,8 @@
       }
       if (external && !queuedMessage) throw cause;
     } finally {
+      if (inFlightSteer?.sessionId === deliverySessionId && inFlightSteer.turnId === turnId)
+        inFlightSteer.finish();
       if (current === generation) rememberTranscript();
       if (!keepImages) discardAttachments(sentImages, sentClipboard);
       if (deliverySessionId) discardSteeredAttachments(deliverySessionId);
@@ -998,8 +1008,13 @@
   }
 
   const steeredAttachments = new SvelteMap<string, QueuedAgentMessage[]>();
-  let inFlightSteer: { sessionId: string; message: QueuedAgentMessage; requeued: boolean } | null =
-    null;
+  let inFlightSteer: {
+    sessionId: string;
+    turnId: string | null;
+    message: QueuedAgentMessage;
+    requeued: boolean;
+    finish: () => void;
+  } | null = null;
   let steerBlockedTurn: string | null = null;
 
   function discardSteeredAttachments(sessionId: string) {
@@ -1028,31 +1043,53 @@
     const turnDirectory = directory;
     const current = generation;
     const [next, ...remaining] = queued;
+    const entryId = crypto.randomUUID();
+    flushUpdates();
+    entries = [...entries, { id: entryId, type: 'user', text: next.text }];
+    rememberTranscript();
     queued = remaining;
     saveQueuedAgentMessages(turnAgent, turnDirectory, sessionId, queued);
-    const steer = { sessionId, message: next, requeued: false };
+    let finish!: () => void;
+    const completed = new Promise<{ outcome: 'finished' }>((resolve) => {
+      finish = () => resolve({ outcome: 'finished' });
+    });
+    const steer = { sessionId, turnId: activeTurnId, message: next, requeued: false, finish };
     inFlightSteer = steer;
     steering = true;
-    const { outcome } = await acp
+    const request = acp
       .steer(
         turnAgent,
         sessionId,
         withAttachedFiles(next.text, next.attachments),
         promptImagePaths(next.images, next.attachments),
       )
-      .catch(() => ({ outcome: 'failed' }));
+      .catch(() => ({ outcome: 'failed' as const }));
+    const { outcome } = await Promise.race([request, completed]);
     inFlightSteer = null;
     const delivered = outcome === 'injected' || outcome === 'startedNewTurn';
     const sameSession = activeSessionId === sessionId;
     if (delivered) {
       steeredAttachments.set(sessionId, [...(steeredAttachments.get(sessionId) ?? []), next]);
-      if (current === generation && sameSession) {
-        flushUpdates();
-        entries = [...entries, { id: crypto.randomUUID(), type: 'user', text: next.text }];
-        void follow();
-      }
+      if (current === generation && sameSession) void follow();
     } else {
       steerBlockedTurn = turnKey;
+      if (current === generation && sameSession) {
+        flushUpdates();
+        entries = entries.filter((entry) => entry.id !== entryId);
+        rememberTranscript();
+      } else if (!ephemeral) {
+        const origin = {
+          agent: turnAgent,
+          directory: turnDirectory,
+          sessionId,
+          title: '',
+          updated: Date.now(),
+        };
+        saveRecentTranscript(
+          origin,
+          loadRecentTranscript(origin).filter((entry) => entry.id !== entryId),
+        );
+      }
     }
     if (steer.requeued === delivered) {
       const stored = queuedAgentMessages(turnAgent, turnDirectory, sessionId);
