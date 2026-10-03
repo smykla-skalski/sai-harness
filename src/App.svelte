@@ -1222,13 +1222,25 @@
           closingMain = true;
           void (async () => {
             try {
+              const agentActivity = await acp.activity();
+              if (
+                Object.values(agentActivity).some((agent) => agent.active.length > 0) &&
+                !(await confirmInApp(
+                  'Stop running agents?',
+                  'Closing Sail stops active agent turns and their shell commands.',
+                  'Close Sail',
+                ))
+              ) {
+                closingMain = false;
+                return;
+              }
               await settingsCreation?.catch(() => undefined);
               const settings = await WebviewWindow.getByLabel('settings');
               if (settings) await settings.destroy();
               await getCurrentWindow().destroy();
             } catch (cause) {
               closingMain = false;
-              error = `Could not close settings: ${describe(cause)}`;
+              error = `Could not close Sail: ${describe(cause)}`;
             }
           })();
         })
