@@ -5105,7 +5105,7 @@
             `Previous user request:\n${turn.text}`,
             'Inspect the current worktree and transcript before rerunning tools. Keep completed changes, rerun unfinished commands, and finish the request.',
           ].join('\n\n');
-          const continued = acp.prompt(turn.agent, turn.sessionId, prompt, crypto.randomUUID());
+          const continued = acp.prompt(turn.agent, turn.sessionId, prompt, turn.turnId);
           void (async () => {
             try {
               const outcome = await continued;

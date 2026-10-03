@@ -224,9 +224,8 @@ fn stop_process(child: &mut Child) {
 pub struct AgentManager(Arc<Mutex<HashMap<String, Arc<Connection>>>>);
 
 impl AgentManager {
-    pub fn interrupted_turns(&self) -> Result<Vec<crate::settings::InterruptedAgentTurn>, String> {
+    pub fn record_interrupted_turns(&self, app: &AppHandle) -> Result<(), String> {
         let agents = self.0.lock().map_err(|error| error.to_string())?;
-        let mut turns = Vec::new();
         for (agent, runtime) in agents.iter() {
             let prompts = runtime
                 .prompt_state
@@ -236,6 +235,7 @@ impl AgentManager {
                 .session_directories
                 .lock()
                 .map_err(|error| error.to_string())?;
+            let mut turns = Vec::new();
             for (session_id, prompt) in &prompts.active {
                 if let Some(directory) = directories.get(session_id) {
                     turns.push(crate::settings::InterruptedAgentTurn {
@@ -247,8 +247,10 @@ impl AgentManager {
                     });
                 }
             }
+            drop(directories);
+            crate::settings::record_interrupted_turns(app, turns)?;
         }
-        Ok(turns)
+        Ok(())
     }
 
     pub fn shutdown(&self) {
@@ -289,7 +291,7 @@ impl AgentManager {
 
 #[tauri::command]
 pub fn acp_prepare_restart(app: AppHandle, manager: State<'_, AgentManager>) -> Result<(), String> {
-    crate::settings::record_interrupted_turns(&app, manager.interrupted_turns()?)
+    manager.record_interrupted_turns(&app)
 }
 
 #[derive(Serialize)]
@@ -1045,6 +1047,14 @@ pub async fn acp_prompt(
                 .get(&session_id)
                 .is_some_and(|prompt| prompt.turn_id == turn_id)
             {
+                if !runtime.stopped.load(Ordering::Acquire) {
+                    let _ = crate::settings::clear_interrupted_turn(
+                        &app,
+                        &agent,
+                        &session_id,
+                        &turn_id,
+                    );
+                }
                 prompts.active.remove(&session_id);
                 prompts.finished.insert(
                     session_id.clone(),
@@ -1062,9 +1072,6 @@ pub async fn acp_prompt(
             false
         };
         if latest {
-            if !runtime.stopped.load(Ordering::Acquire) {
-                let _ = crate::settings::clear_interrupted_turn(&app, &agent, &session_id, &turn_id);
-            }
             let _ = app.emit(
                 "acp-event",
                 AgentEvent {

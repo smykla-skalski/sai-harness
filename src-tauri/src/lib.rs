@@ -1538,11 +1538,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 diagnostics::record("app_exit", serde_json::json!({}));
                 if let Some(agents) = app.try_state::<acp::AgentManager>() {
-                    if agents
-                        .interrupted_turns()
-                        .and_then(|turns| settings::record_interrupted_turns(app, turns))
-                        .is_err()
-                    {
+                    if agents.record_interrupted_turns(app).is_err() {
                         diagnostics::record("agent_recovery_save_failed", serde_json::json!({}));
                     }
                     agents.shutdown();
